@@ -39,22 +39,24 @@ class CyberSpinner:
     def __init__(self):
         self._stop_event = threading.Event()
         self._thread = None
-        # إطارات أنميشن متحركة وانسيابية (Spinner Frames)
         self.frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def _spin(self):
-        # 🛡️ درع الأمان: ننتظر 0.2 ثانية لتسمح للمحرك الرئيسي بإنهاء طباعة فواصل الخطوات (Step Lines)
+        # 🛡️ درع الأمان: ننتظر 0.2 ثانية لتسمح للمحرك الرئيسي بإنهاء طباعة فواصل الخطوات
         time.sleep(0.2)
-
         idx = 0
+        # 📌 [تكتيك الصدمات] - حفظ موقع الكرسر الحالي بذاكرة الطرفية فوراً عند البدء
+        sys.stdout.write("\033[s")
+        sys.stdout.flush()
+
         while not self._stop_event.is_set():
-            frame = self.frames[idx % len(self.frames)]
             padding_left, _ = get_layout_margin()
-            # طباعة الأنميشن مع تنظيف السطر بقوة \033[K والرجوع للبداية \r
-            sys.stdout.write(f"\r{padding_left}\033[1;37;45m {frame} Examining... \033[0m \033[90mProcessing context payload...\033[0m\033[K")
+            frame = self.frames[idx % len(self.frames)]
+            # 🛡️ السحر هنا: استدعاء الموقع المحفوظ (u) + تنظيف السطر بالكامل (K)
+            sys.stdout.write(f"\033[u\033[K{padding_left}\033[1;37;45m {frame} Examining... \033[0m \033[90mProcessing context payload...\033[0m")
             sys.stdout.flush()
             idx += 1
-            time.sleep(0.08) # سرعة دوران فريمات الأنميشن
+            time.sleep(0.08)
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -67,8 +69,8 @@ class CyberSpinner:
         if self._thread:
             self._stop_event.set()
             self._thread.join(timeout=1.0)
-            # كنس وتنظيف السطر بالكامل فور انتهاء التفكير لترك الساحة لشلال المخرجات
-            sys.stdout.write("\r\033[K")
+            # تنظيف نهائي مطلق للسطر عند التوقف لترك المكان صافي
+            sys.stdout.write("\033[u\033[K")
             sys.stdout.flush()
             self._thread = None
 
