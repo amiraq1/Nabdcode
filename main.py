@@ -7,6 +7,10 @@ import textwrap
 import threading
 import time
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.formatted_text import ANSI
+
 from engine.state import RuntimeState
 from engine.loop import ExecutionLoop
 from engine.tool_registry import registry
@@ -263,10 +267,16 @@ def main():
     )
     state.messages.append({"role": "system", "content": base_inst})
 
-    # حلقة الإدخال التقليدية الصافية مع شارات ممتلئة (ANSI Badges)
+    # 🛡️ حقن درع الحماية من اللمس العشوائي بداخل الشاشة المستقلة
+    input_session = PromptSession(
+        history=InMemoryHistory(),
+        mouse_support=True
+    )
+
+    # حلقة الإدخال المصفحة ضد تداخل اللمسات والأسهم
     while True:
         try:
-            user_input = input("\n\033[1;37;45m USER \033[0m ").strip()
+            user_input = input_session.prompt(ANSI("\n\033[1;37;45m USER \033[0m ")).strip()
         except (KeyboardInterrupt, EOFError):
             print("\nExiting...")
             break
