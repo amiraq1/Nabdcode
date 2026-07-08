@@ -202,8 +202,7 @@ class ProviderRouter:
 
                 self._record_failure(provider)
                 bus.emit("llm_provider_failure", {"provider": provider.name, "error": str(exc)[:60]})
-                err_msg = str(exc).replace('\n', ' ')[:50]
-                print(f"\r\033[K\033[1;33m [FAILOVER] Provider '{provider.name}' failed ({err_msg}). Switching to next provider...\033[0m")
+                bus.emit("llm_provider_failover", {"provider": provider.name, "error": str(exc)[:60]})
 
                 errors.append(
                     f"{provider.name}: {exc}"
