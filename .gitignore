@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.env
+*.env
+core/config.py
+*secret*
+*.log
+*.gguf
+*.db
+*.db-shm
+*.db-wal
+logs/
+sessions/
+brain/
+.cache/
