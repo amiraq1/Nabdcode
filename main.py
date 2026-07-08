@@ -2,6 +2,7 @@ import os
 import sys
 import atexit
 import shutil
+import signal
 import textwrap
 
 import threading
@@ -257,6 +258,17 @@ def main():
     state = RuntimeState(session_id=session_mgr.session_id, max_steps=50)
     wire_raw_events(metrics)
 
+    # 🛡️ تسجيل معالجات الإنهاء الآمن
+    def _shutdown_handler(signum, frame):
+        print(f"\n\033[1;37;41m SHUTDOWN \033[0m Signal {signum} received. Saving state and exiting gracefully...")
+        session_mgr.messages = state.get_messages()
+        session_mgr.save()
+        memory_mgr.close()
+        logger.shutdown()
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+    signal.signal(signal.SIGHUP, _shutdown_handler)
+
     if deleted:
         print(f"[INFO] Cleaned {deleted} old session(s).")
     print(f"[+] Session Initialized: {session_mgr.session_id}")
@@ -267,7 +279,7 @@ def main():
         "Never use Arabic characters or any other RTL language in your thoughts, plans, or responses. \n"
         "Keep all terminal outputs in clean, standard English."
     )
-    state.messages.append({"role": "system", "content": base_inst})
+    state.append_message({"role": "system", "content": base_inst})
 
     # 🛡️ حقن درع الحماية من اللمس العشوائي بداخل الشاشة المستقلة
     input_session = PromptSession(
@@ -290,8 +302,8 @@ def main():
             break
 
         if user_input.lower() == "clear":
-            state.messages = [{"role": "system", "content": base_inst}]
-            state.step_count = 0
+            state.set_messages([{"role": "system", "content": base_inst}])
+            state.reset_step_count()
             print("[+] Local session memory cleared.")
             continue
 
@@ -313,12 +325,12 @@ def main():
         try:
             engine.run(user_input)
 
-            session_mgr.messages = state.messages
+            session_mgr.messages = state.get_messages()
             session_mgr.save()
 
             # طباعة الرد النهائي للوكيل مباشرة على الشاشة المستمرة بالمحاذاة الموحدة
-            last_msg = state.messages[-1]
-            if last_msg.get("role") == "assistant":
+            last_msg = state.get_last_message()
+            if last_msg and last_msg.get("role") == "assistant":
                 print(f"\n{padding_left}\033[1;37;42m AGENT \033[0m")
                 for line in last_msg.get('content', '').splitlines():
                     print(f"{padding_left}{line}")

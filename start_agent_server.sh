@@ -13,7 +13,7 @@ YELLOW="\033[1;33m"
 RED="\033[0;31m"
 NC="\033[0m"
 
-MODEL_PATH="${MODEL_PATH:-$HOME/smart-agent/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf}"
+MODEL_PATH="${MODEL_PATH:-$HOME/smart-agent/models/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf}"
 
 # Default: look in CMake build path first
 LLAMA_SERVER="${LLAMA_SERVER:-$HOME/llama.cpp/build/bin/llama-server}"

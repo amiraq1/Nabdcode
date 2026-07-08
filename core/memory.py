@@ -64,13 +64,38 @@ class MemoryManager:
         self.deleted_counter = 0
 
         # 1. Persistent connection pool (thread-safe)
-        self.conn = sqlite3.connect(
-            self.db_path,
-            check_same_thread=False,
-            isolation_level=None,
-        )
-        self.conn.row_factory = sqlite3.Row
-        self._init_db()
+        # Retry with corruption recovery
+        self.conn = None
+        try:
+            self.conn = sqlite3.connect(
+                self.db_path,
+                check_same_thread=False,
+                isolation_level=None,
+            )
+            self.conn.row_factory = sqlite3.Row
+            self._init_db()
+        except (sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
+            # Corruption recovery: rename corrupt DB, recreate from scratch
+            corrupt_path = self.db_path.with_suffix(".db.corrupt")
+            import warnings
+            warnings.warn(
+                f"Database corruption detected at {self.db_path}: {exc}. "
+                f"Renaming to {corrupt_path} and recreating."
+            )
+            if self.db_path.exists():
+                self.db_path.rename(corrupt_path)
+            # Also clean up WAL/SHM files
+            for suffix in ("-wal", "-shm"):
+                extra = self.db_path.with_name(self.db_path.name + suffix)
+                if extra.exists():
+                    extra.unlink(missing_ok=True)
+            self.conn = sqlite3.connect(
+                self.db_path,
+                check_same_thread=False,
+                isolation_level=None,
+            )
+            self.conn.row_factory = sqlite3.Row
+            self._init_db()
 
     def _init_db(self):
         """Initialize database with WAL, tables, indexes, and triggers for auto-sync."""

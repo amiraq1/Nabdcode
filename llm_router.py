@@ -85,11 +85,23 @@ class ProviderRouter:
 
     FAILURE_LIMIT = 3
 
-    COOLDOWN_SECONDS = 30
+    BASE_COOLDOWN = 15
+
+    MAX_COOLDOWN = 600
 
     def __init__(self, providers: list[ProviderState]):
 
         self.providers = providers
+
+    # --------------------------------------------------------
+
+    def _cooldown_duration(self, consecutive_failures: int) -> float:
+        """
+        Exponential backoff: 15, 30, 60, 120, 240, ... capped at MAX_COOLDOWN.
+        Resets on successful recovery.
+        """
+        duration = self.BASE_COOLDOWN * (2 ** (consecutive_failures - self.FAILURE_LIMIT))
+        return min(duration, self.MAX_COOLDOWN)
 
     # --------------------------------------------------------
 
@@ -148,7 +160,7 @@ class ProviderRouter:
 
             provider.cooldown_until = (
                 time.time()
-                + self.COOLDOWN_SECONDS
+                + self._cooldown_duration(provider.failures)
             )
 
     # --------------------------------------------------------

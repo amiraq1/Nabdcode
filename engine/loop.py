@@ -56,7 +56,7 @@ class ExecutionLoop:
         Starts the autonomous execution loop.
         """
 
-        self.state.messages.append(
+        self.state.append_message(
             {
                 "role": "user",
                 "content": user_prompt,
@@ -96,7 +96,7 @@ class ExecutionLoop:
                 )
 
                 response = self.llm_provider(
-                    self.state.messages
+                    self.state.get_messages()
                 )
 
                 elapsed = time.perf_counter() - started
@@ -106,7 +106,7 @@ class ExecutionLoop:
                         "LLM returned an empty response."
                     )
 
-                self.state.messages.append(
+                self.state.append_message(
                     {
                         "role": "assistant",
                         "content": response,
@@ -157,7 +157,7 @@ class ExecutionLoop:
                             "Do not wrap inside ```.\n\n"
                             "Return valid JSON only."
                         )
-                        self.state.messages.append(
+                        self.state.append_message(
                             {
                                 "role": "system",
                                 "content": correction_prompt,
@@ -199,7 +199,7 @@ class ExecutionLoop:
                     repeated += 1
                     if repeated >= 1 or tool_call == last_command:
                         bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count})
-                        self.state.messages.append({
+                        self.state.append_message({
                             "role": "system",
                             "content": f"STOP! You have already executed '{tool_name}' with these exact arguments recently. Do NOT repeat failed commands or oscillate between them. Try a different strategy or inspect files directly."
                         })
@@ -221,7 +221,7 @@ class ExecutionLoop:
                     if not is_safe_command(command):
                         bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count})
                         bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count})
-                        self.state.messages.append(
+                        self.state.append_message(
                             {
                                 "role": "system",
                                 "content": "Your shell command violated security policy. Generate a safer alternative.",
@@ -272,7 +272,7 @@ class ExecutionLoop:
                         "Please analyze the error and fix your command or strategy."
                     )
 
-                self.state.messages.append(
+                self.state.append_message(
                     {
                         "role": "user",
                         "content": feedback,

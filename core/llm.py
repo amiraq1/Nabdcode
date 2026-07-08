@@ -52,14 +52,14 @@ class OpenRouterClient:
         config: OpenRouterConfig | None = None,
     ):
 
-        self.api_key = api_key or os.getenv("NVIDIA_API_KEY", "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")
+        self.api_key = api_key or os.getenv("NVIDIA_API_KEY")
         self.model = model or DEFAULT_MODEL
         self.config = config or OpenRouterConfig()
 
     @property
     def headers(self) -> dict[str, str]:
         if not self.api_key:
-            self.api_key = os.getenv("NVIDIA_API_KEY", "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")
+            self.api_key = os.getenv("NVIDIA_API_KEY")
         if not self.api_key:
             raise AuthenticationError(
                 "NVIDIA_API_KEY environment variable is missing."
