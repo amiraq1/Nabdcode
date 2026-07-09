@@ -55,6 +55,7 @@ from engine.ui_theme import (
     todo_block as ui_todo_block,
     map_tool_to_badge,
     think_line,
+    status_chip as ui_status_chip,
     dim,
     fg,
     P,
@@ -76,6 +77,13 @@ class Renderer:
         # UI theme state
         self._think_t0: float | None = None
         self._token_count: int = 0
+        # Live status chip (○ Examining... 12.3k)
+        self._status_alive: bool = False
+        self._status_verb: str = "Examining"
+        self._status_last_draw: float = 0.0
+        self._status_min_interval: float = 0.15  # ~6 fps throttle
+        # Expand state for ctrl+o
+        self._collapsed_data: list[list[str]] = []  # each entry = full output lines
 
     # ── Legacy methods (preserved for wire_events backward compat) ─────────
 
@@ -190,8 +198,65 @@ class Renderer:
             sys.stdout.flush()
 
     # ══════════════════════════════════════════════════════════════════════
-    # UI Theme methods (Cursor-style badges, collapse, thought, TODOS)
+    # Status chip — live \r-based line (○ Examining... 12.3k)
     # ══════════════════════════════════════════════════════════════════════
+
+    def status_start(self, verb: str = "Examining") -> None:
+        """Begin a live status chip that updates in-place via \\r."""
+        with self._lock:
+            self._status_alive = True
+            self._status_verb = verb
+            self._token_count = 0
+            self._status_last_draw = 0.0
+        self._status_draw()
+
+    def status_tick(self, n: int = 1) -> None:
+        """Increment token count and redraw the status chip."""
+        with self._lock:
+            self._token_count += n
+        self._status_draw()
+
+    def status_end(self) -> None:
+        """Wipe the status chip line completely. Call before thought_end."""
+        with self._lock:
+            if not self._status_alive:
+                return
+            self._status_alive = False
+        sys.stdout.write(_ERASE_LINE)
+        sys.stdout.flush()
+
+    def _status_draw(self) -> None:
+        """Atomically rewrite the status chip line."""
+        with self._lock:
+            if not self._status_alive:
+                return
+            now = time.time()
+            if now - self._status_last_draw < self._status_min_interval:
+                return
+            self._status_last_draw = now
+            verb = self._status_verb
+            count = self._token_count
+        chip = ui_status_chip(verb, count)
+        sys.stdout.write(f"{_ERASE_LINE}{_INDENT}{chip}")
+        sys.stdout.flush()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Expand state — store collapsed output for ctrl+o
+    # ══════════════════════════════════════════════════════════════════════
+
+    def store_collapsed(self, lines: list[str]) -> None:
+        """Store a snapshot of full output lines for expand."""
+        with self._lock:
+            self._collapsed_data.append(list(lines))
+            if len(self._collapsed_data) > 32:
+                self._collapsed_data.pop(0)
+
+    def expand_last(self) -> str | None:
+        """Return the last stored collapsed block as a plain string, or None."""
+        with self._lock:
+            if not self._collapsed_data:
+                return None
+            return "\n".join(self._collapsed_data[-1])
 
     def tool_start(self, tool: str, args: dict) -> None:
         """Emit a badge + path header at the start of a tool call.
@@ -238,6 +303,7 @@ class Renderer:
         # Collapsed output path
         if not lines:
             return
+        self.store_collapsed(lines)
         show = lines[:6]
         for l in show:
             self._lines_append(f"{tree_prefix()}{dim(l)}")

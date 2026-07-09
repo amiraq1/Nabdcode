@@ -13,7 +13,7 @@ import termios
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
-from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.formatted_text import ANSI, HTML
 
 from engine.state import RuntimeState
 from engine.loop import ExecutionLoop, ToolRequiredError
@@ -93,12 +93,14 @@ def wire_events(ctx: AppContext) -> None:
     def _on_llm_started(p: dict) -> None:
         nonlocal _streaming
         _streaming = False
+        renderer.status_start("Examining")
         renderer.thought_start()
 
     def _on_llm_token(p: dict) -> None:
         nonlocal _streaming
         if not _streaming:
             _streaming = True
+            renderer.status_end()
             renderer.think_end()
         renderer.stream_chunk(p.get("token", ""))
 
@@ -318,9 +320,44 @@ def main() -> None:
     )
     state.append_message({"role": "system", "content": base_inst})
 
+    plan_mode: bool = False
+
+    from prompt_toolkit.key_binding import KeyBindings
+
+    def _bottom_toolbar() -> str:
+        if plan_mode:
+            return (
+                f"\033[38;2;250;204;21mplan mode\033[0m "
+                f"\033[2m[shift+tab]\033[0m  "
+                f"\033[2m? for shortcuts\033[0m"
+            )
+        return (
+            f"\033[38;2;167;139;250m» accept edits on\033[0m "
+            f"\033[2m[shift+tab]\033[0m  "
+            f"\033[2m? for shortcuts\033[0m"
+        )
+
+    bindings = KeyBindings()
+
+    @bindings.add("c-o")
+    def _on_ctrl_o(event) -> None:
+        """Expand the last collapsed output block."""
+        expanded = ctx.renderer.expand_last()
+        if expanded:
+            sys.stdout.write(f"\r{'─' * 40}\n")
+            for line in expanded.splitlines():
+                sys.stdout.write(f"  {line}\n")
+            sys.stdout.flush()
+
+    @bindings.add("s-tab")
+    def _on_shift_tab(event) -> None:
+        nonlocal plan_mode
+        plan_mode = not plan_mode
+
     input_session = PromptSession(
         history=InMemoryHistory(),
         mouse_support=False,
+        key_bindings=bindings,
     )
 
     # Flush any setup output before first prompt
@@ -329,7 +366,9 @@ def main() -> None:
     while True:
         try:
             user_input = input_session.prompt(
-                ANSI("\033[36m❯ \033[0m")
+                ANSI("\033[36m❯ \033[0m"),
+                bottom_toolbar=_bottom_toolbar,
+                placeholder=HTML('<style fg="#555">Ask your question...</style>'),
             ).strip()
         except (KeyboardInterrupt, EOFError):
             break
