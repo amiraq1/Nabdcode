@@ -1,14 +1,14 @@
 import json
 import uuid
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
 class SessionManager:
     def __init__(self, root: Path):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
-        self.session_id = f"sess_{uuid.uuid4().hex[:8]}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        self.session_id = f"sess_{uuid.uuid4().hex[:8]}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
         self.messages: List[Dict[str, Any]] = []
         self.file_path = self.root / f"{self.session_id}.json"
 
@@ -16,7 +16,7 @@ class SessionManager:
         try:
             data = {
                 "session_id": self.session_id,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
                 "messages": self.messages
             }
             with open(self.file_path, "w", encoding="utf-8") as f:

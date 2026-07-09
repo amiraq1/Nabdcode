@@ -11,8 +11,39 @@ from engine.state import RuntimeState
 from core.parser import extract_command, extract_json_from_response, validate_tool_call, ToolCall
 from core.security import is_safe_command
 from core.utils import truncate
+from core.evidence import EvidenceLog, VerifierError
 
 from llm_router import execute_agent_with_memory
+
+
+# ── Capability classifier — does the prompt require tool use? ──────────────
+
+_CHITCHAT: Final[set[str]] = {
+    "hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
+    "yes", "no", "exit", "quit", "clear", "bye", "goodbye",
+}
+
+
+def _prompt_requires_investigation(text: str) -> bool:
+    """Return True if this prompt asks for real work, not chitchat.
+
+    Decision is based on length and known chitchat patterns,
+    not a fragile keyword list.  Any prompt ≥5 words that isn't
+    a recognised greeting / command is treated as substantive.
+    """
+    lower = text.lower().strip()
+    if not lower:
+        return False
+    if lower in _CHITCHAT:
+        return False
+    # "list files", "show me", "what's in", etc. all pass
+    # because they have multiple words and aren't chitchat.
+    return True
+
+
+class ToolRequiredError(RuntimeError):
+    """Raised when the agent answered without using required tools."""
+    pass
 
 
 class ExecutionLoop:
@@ -52,6 +83,7 @@ class ExecutionLoop:
         self.llm_provider = llm_provider or execute_agent_with_memory
         self.max_output_len = max_output_len
         self._recent_calls: deque[ToolCall] = deque(maxlen=16)
+        self.evidence_log = EvidenceLog()
 
     def run(self, user_prompt: str) -> None:
         """
@@ -76,6 +108,7 @@ class ExecutionLoop:
 
         last_command = None
         repeated = 0
+        interrupted = False
 
         try:
 
@@ -182,6 +215,23 @@ class ExecutionLoop:
 
                 if tool_call is None:
                     bus.emit("ui_no_tool_call", {"step": self.state.step_count})
+
+                    # Verification stage: run the Verifier before returning.
+                    # Catches: missing evidence, failed evidence, type mismatch.
+                    require_tools = _prompt_requires_investigation(user_prompt)
+                    try:
+                        self.evidence_log.verify(require_tools=require_tools)
+                    except VerifierError as verr:
+                        self.state.update_status("ERROR")
+                        bus.emit(
+                            "loop_error",
+                            {
+                                "step": self.state.step_count,
+                                "error": str(verr),
+                            },
+                        )
+                        raise ToolRequiredError(str(verr))
+
                     self.state.update_status("COMPLETED")
 
                     bus.emit(
@@ -248,6 +298,23 @@ class ExecutionLoop:
                 )
 
                 #
+                # Evidence — every successful tool call gets a traceable ID
+                #
+
+                cmd_summary = (
+                    tool_args.get("command")
+                    or tool_args.get("path")
+                    or tool_args.get("query")
+                    or str(tool_args)[:60]
+                )
+                self.evidence_log.record(
+                    tool=tool_name,
+                    command_or_path=cmd_summary,
+                    success=getattr(result, "success", False),
+                    output_snippet=getattr(result, "output", "") or getattr(result, "stderr", ""),
+                )
+
+                #
                 # Feedback
                 #
 
@@ -294,6 +361,7 @@ class ExecutionLoop:
         except KeyboardInterrupt:
 
             self.state.update_status("PAUSED")
+            interrupted = True
 
             bus.emit(
                 "loop_interrupted",
@@ -316,24 +384,25 @@ class ExecutionLoop:
 
         finally:
 
-            if (
-                self.state.status == "RUNNING"
-                and not self.state.is_loop_safe()
-            ):
+            if not interrupted:
+                if (
+                    self.state.status == "RUNNING"
+                    and not self.state.is_loop_safe()
+                ):
 
-                self.state.update_status("PAUSED")
+                    self.state.update_status("PAUSED")
+
+                    bus.emit(
+                        "loop_max_steps_reached",
+                        {
+                            "max_steps": self.state.max_steps,
+                        },
+                    )
 
                 bus.emit(
-                    "loop_max_steps_reached",
+                    "loop_finished",
                     {
-                        "max_steps": self.state.max_steps,
+                        "status": self.state.status,
+                        "steps": self.state.step_count,
                     },
                 )
-
-            bus.emit(
-                "loop_finished",
-                {
-                    "status": self.state.status,
-                    "steps": self.state.step_count,
-                },
-            )

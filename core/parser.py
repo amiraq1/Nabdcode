@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,24 @@ BASH_PATTERN = re.compile(
     r"```(?:bash|sh)?\s*(.*?)\s*```",
     re.DOTALL | re.IGNORECASE,
 )
+
+# ── Normalization ───────────────────────────────────────────────────────────
+
+_COMMAND_MAX_LENGTH: int = 4096
+
+
+def normalize(text: str) -> str:
+    """
+    Normalize user-facing input:
+      - NFKC (Unicode homoglyph prevention)
+      - Strip ASCII control characters except \n, \t
+    Returns the normalized string.  Non-strings are returned as-is.
+    """
+    if not isinstance(text, str):
+        return text
+    normalized = unicodedata.normalize("NFKC", text)
+    return "".join(ch for ch in normalized if ch == "\n" or ch == "\t" or not unicodedata.category(ch).startswith("C"))
+
 
 # ---------------------------------------------------------------------
 # Models
@@ -55,6 +74,11 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         },
         "optional": {
             "timeout": int,
+        },
+        "constraints": {
+            "command": {
+                "max_length": 4096,
+            },
         },
     },
     "web_search": {
@@ -102,8 +126,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 
 def _validate_path(path: str) -> bool:
     try:
-        resolved = (WORKSPACE_ROOT / path).resolve()
-        resolved.relative_to(WORKSPACE_ROOT)
+        workspace_root = Path.cwd().resolve()
+        resolved = (workspace_root / path).resolve()
+        resolved.relative_to(workspace_root)
         return True
     except Exception:
         return False
@@ -190,6 +215,20 @@ def validate_tool_call(payload: Any) -> ValidationResult:
                 f"Argument '{key}' must be {typ.__name__}.",
             )
 
+    # ── Constraints (max_length, etc.) ──────────────────────────────────────
+    constraints = schema.get("constraints", {})
+    for arg_key, constraint_set in constraints.items():
+        if arg_key in args:
+            if "max_length" in constraint_set:
+                max_len = constraint_set["max_length"]
+                val = args[arg_key]
+                if isinstance(val, str) and len(val) > max_len:
+                    return ValidationResult(
+                        False,
+                        None,
+                        f"Argument '{arg_key}' exceeds maximum length ({len(val)} > {max_len}).",
+                    )
+
     if tool == "file_system":
         action = args.get("action")
         valid_actions = schema["actions"]
@@ -214,26 +253,6 @@ def validate_tool_call(payload: Any) -> ValidationResult:
                 False,
                 None,
                 "Path escapes workspace.",
-            )
-
-    if tool == "search_memory":
-        if "query" not in args:
-            return ValidationResult(
-                False,
-                None,
-                "Missing required argument: 'query' is required for search_memory.",
-            )
-        if not isinstance(args.get("query"), str):
-            return ValidationResult(
-                False,
-                None,
-                "Schema Error: 'query' must be a string.",
-            )
-        if "limit" in args and not isinstance(args.get("limit"), int):
-            return ValidationResult(
-                False,
-                None,
-                "Schema Error: 'limit' must be an integer.",
             )
 
     return ValidationResult(
@@ -313,6 +332,7 @@ def extract_json_from_response(text: str) -> str | None:
     """
     if not text or not text.strip():
         return None
+    text = normalize(text)
     match = JSON_PATTERN.search(text)
     if match:
         return match.group(1).strip()
@@ -336,6 +356,8 @@ def extract_command(text: str) -> ToolCall | None:
     """
     if not text or not text.strip():
         return None
+
+    text = normalize(text)
 
     parsers = (
         _parse_json,

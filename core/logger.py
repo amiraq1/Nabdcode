@@ -1,13 +1,13 @@
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 class Logger:
     def __init__(self, log_dir: Path):
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self.log_file = self.log_dir / f"session_{timestamp}.log"
         
         self._logger = logging.getLogger(f"AmmarAgent_{timestamp}")

@@ -314,11 +314,12 @@ class MemoryManager:
 
         # 3. Boost memories related to the current file
         if current_file:
+            escaped_file = current_file.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             with self.lock:
                 cursor = self.conn.cursor()
                 cursor.execute(
-                    "SELECT * FROM memory_logs WHERE content LIKE ? OR metadata LIKE ? ORDER BY timestamp DESC LIMIT ?",
-                    (f"%{current_file}%", f"%{current_file}%", limit),
+                    "SELECT * FROM memory_logs WHERE content LIKE ? ESCAPE '\\' OR metadata LIKE ? ESCAPE '\\' ORDER BY timestamp DESC LIMIT ?",
+                    (f"%{escaped_file}%", f"%{escaped_file}%", limit),
                 )
                 for row in cursor.fetchall():
                     item = self._row_to_dict(row)

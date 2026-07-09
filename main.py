@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import sys
-import atexit
 import signal
 import termios
 
@@ -17,16 +16,10 @@ from prompt_toolkit.formatted_text import ANSI
 
 from engine.state import RuntimeState
 from engine.loop import ExecutionLoop
-from engine.tool_registry import registry
 from engine.events import bus
 from engine.renderer import Renderer
-from tools import ShellTool, FileSystemTool, WebSearchTool, SearchMemoryTool
-from core.constants import SYSTEM_PROMPT
-from core.session import SessionManager
-from core.logger import Logger
-from core.metrics import MetricsEngine
-from core.config import AgentConfig
-from core.memory import MemoryManager
+from core.app_context import AppContext
+from core.constants import TODO_DISCIPLINE
 
 
 # ── Tool output summariser ─────────────────────────────────────────────────
@@ -65,7 +58,7 @@ def _summarise_tool(tool: str, args: dict, result) -> tuple[str, str, str]:
         query = str(args.get("query", ""))[:40]
         if getattr(result, "success", False):
             out = (getattr(result, "stdout", "") or "").strip()
-            count = out.count("[")  # each result starts with [N]
+            count = out.count("[")
             return ("SEARCH", f'"{query}" ({count} results)', "cyan")
         return ("SEARCH", f'"{query}" — failed', "red")
 
@@ -82,20 +75,20 @@ def _summarise_tool(tool: str, args: dict, result) -> tuple[str, str, str]:
 
 # ── Event Wiring ───────────────────────────────────────────────────────────
 
-def wire_events(renderer: Renderer, metrics: MetricsEngine) -> None:
+def wire_events(ctx: AppContext) -> None:
     """Subscribe all event handlers. Every output goes through renderer."""
+    renderer = ctx.renderer
+    metrics = ctx.metrics
+    todo_manager = ctx.todo_manager
 
     _last_tool_args: dict = {}
 
     def _on_llm_started(p: dict) -> None:
-        renderer.badge_line("THINK", "thinking...", "dim")
-        renderer.spinner_start()
-        renderer.flush()
+        renderer.think_start("thinking")
 
     def _on_llm_completed(p: dict) -> None:
-        renderer.spinner_stop()
+        renderer.think_end()
         metrics.record_api_call(duration=p.get("duration", 1.0))
-        renderer.flush()
 
     def _on_tool_started(p: dict) -> None:
         nonlocal _last_tool_args
@@ -111,11 +104,18 @@ def wire_events(renderer: Renderer, metrics: MetricsEngine) -> None:
         renderer.badge_line(badge, msg, color)
         renderer.flush()
 
+        # Render TODO list when the todo_write tool completes
+        if tool == "todo_write" and todo_manager is not None:
+            renderer.render_todos(todo_manager.all())
+            renderer.flush()
+
     def _on_max_steps(p: dict) -> None:
+        renderer.think_end()
         renderer.badge_line("PAUSED", "Max steps reached, continuing...", "yellow")
         renderer.flush()
 
     def _on_loop_error(p: dict) -> None:
+        renderer.think_end()
         renderer.badge_line("ERROR", f"Engine: {p.get('error', 'unknown')}", "red")
         renderer.flush()
 
@@ -167,33 +167,7 @@ def wire_events(renderer: Renderer, metrics: MetricsEngine) -> None:
 
 # ── System Setup ───────────────────────────────────────────────────────────
 
-def setup_system() -> tuple[SessionManager, Logger, MetricsEngine, AgentConfig,
-                             MemoryManager, Renderer]:
-    config = AgentConfig()
-    session_mgr = SessionManager(root=config.session_dir)
-    logger = Logger(log_dir=config.log_dir)
-    metrics = MetricsEngine()
-    memory_mgr = MemoryManager(db_path=os.path.join(config.root_dir,
-                                                    "workspace_memory.db"))
-    renderer = Renderer()
-
-    for tool_cls in [ShellTool, FileSystemTool, WebSearchTool, SearchMemoryTool]:
-        tool = (
-            tool_cls(workspace=config.root_dir)
-            if tool_cls is FileSystemTool
-            else SearchMemoryTool(memory_manager=memory_mgr)
-            if tool_cls is SearchMemoryTool
-            else tool_cls()
-        )
-        try:
-            registry.register(tool)
-        except ValueError:
-            pass
-
-    atexit.register(renderer.shutdown)
-    atexit.register(logger.shutdown)
-    atexit.register(memory_mgr.close)
-    return session_mgr, logger, metrics, config, memory_mgr, renderer
+# setup_system migrated to core/app_context.py: AppContext.build()
 
 
 # ── Main Loop ──────────────────────────────────────────────────────────────
@@ -208,25 +182,46 @@ def main() -> None:
     except Exception:
         pass
 
-    session_mgr, logger, metrics, config, memory_mgr, renderer = setup_system()
-    deleted = session_mgr.enforce_retention_policy(config.max_sessions)
+    ctx = AppContext.build()
+    deleted = ctx.session_manager.enforce_retention_policy(ctx.config.max_sessions)
 
-    state = RuntimeState(session_id=session_mgr.session_id, max_steps=50)
-    wire_events(renderer, metrics)
+    state = RuntimeState(session_id=ctx.session_manager.session_id, max_steps=50)
+    wire_events(ctx)
 
     # Graceful shutdown
     def _shutdown_handler(signum: int, frame: object) -> None:
-        renderer.shutdown()
-        session_mgr.messages = state.get_messages()
-        session_mgr.save()
-        memory_mgr.close()
-        logger.shutdown()
+        ctx.renderer.shutdown()
+        ctx.session_manager.messages = state.get_messages()
+        ctx.session_manager.save()
+        ctx.memory_manager.close()
+        ctx.logger.shutdown()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGHUP, _shutdown_handler)
 
-    base_inst = SYSTEM_PROMPT
+    base_inst = (
+        "You are an advanced Autonomous Agent running on a Linux environment.\n"
+        "CRITICAL RULE: You must respond ONLY and exclusively in English.\n"
+        "Keep all terminal outputs in clean, standard English.\n"
+        "\n"
+        "If a task requires filesystem inspection, code analysis, shell execution, or memory retrieval, "
+        "you MUST use the appropriate tool.\n"
+        "\n"
+        "Never infer or invent project names, files, architectures, test frameworks, or statistics.\n"
+        "\n"
+        "If a required tool fails, explicitly report the failure and stop.\n"
+        "\n"
+        "Producing fabricated analysis is considered a failed task.\n"
+        "\n"
+        "Every factual statement must be backed by either:\n"
+        "- a tool result,\n"
+        "- a file that was actually read,\n"
+        "- or previous verified memory.\n"
+        "\n"
+        "Otherwise respond: \"I don't have sufficient evidence.\""
+        + TODO_DISCIPLINE
+    )
     state.append_message({"role": "system", "content": base_inst})
 
     input_session = PromptSession(
@@ -235,12 +230,12 @@ def main() -> None:
     )
 
     # Flush any setup output before first prompt
-    renderer.flush()
+    ctx.renderer.flush()
 
     while True:
         try:
             user_input = input_session.prompt(
-                ANSI("\n\033[36m❯ \033[0m")
+                ANSI("\033[36m❯ \033[0m")
             ).strip()
         except (KeyboardInterrupt, EOFError):
             break
@@ -252,12 +247,20 @@ def main() -> None:
             break
 
         if user_input.lower() == "clear":
+            # Replace the prompt line with a background-highlighted version
+            sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ clear\033[0m\n")
+            sys.stdout.flush()
             state.set_messages([{"role": "system", "content": base_inst}])
             state.reset_step_count()
             continue
 
+        # Replace the prompt_toolkit line with a background-highlighted version
+        # so the user's input is visually distinct from the agent response.
+        sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {user_input}\033[0m\n")
+        sys.stdout.flush()
+
         state.reset_step_count()
-        engine = ExecutionLoop(state=state, max_output_len=config.max_output)
+        engine = ExecutionLoop(state=state, max_output_len=ctx.config.max_output)
 
         fd = sys.stdin.fileno()
         old_termios = None
@@ -268,12 +271,11 @@ def main() -> None:
             termios.tcsetattr(fd, termios.TCSANOW, new)
             engine.run(user_input)
         except KeyboardInterrupt:
-            renderer.raw("")
-            renderer.flush()
+            ctx.renderer.think_end()
+            ctx.renderer.flush()
         except Exception as exc:
-            renderer.badge_line("ERROR", str(exc)[:80], "red")
-            renderer.flush()
-            logger.error(f"Execution failed: {exc}")
+            # Error already rendered by _on_loop_error via event bus
+            ctx.logger.error(f"Execution failed: {exc}")
         finally:
             if old_termios is not None:
                 termios.tcsetattr(fd, termios.TCSANOW, old_termios)
@@ -283,15 +285,15 @@ def main() -> None:
                 pass
 
         # Save session
-        session_mgr.messages = state.get_messages()
-        session_mgr.save()
+        ctx.session_manager.messages = state.get_messages()
+        ctx.session_manager.save()
 
         # Print assistant response — no badge, just content
         last_msg = state.get_last_message()
         if last_msg and last_msg.get("role") == "assistant":
             for line in last_msg.get("content", "").splitlines():
-                renderer.raw(line)
-            renderer.flush()
+                ctx.renderer.agent_text(line)
+            ctx.renderer.flush()
 
 
 if __name__ == "__main__":

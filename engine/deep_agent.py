@@ -6,11 +6,46 @@ Zero LangChain overhead. Stateful, self-critiquing, and integrated with EventBus
 from __future__ import annotations
 
 import json
+import re
+import sys
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, List
 
 from engine.events import bus
 from engine.state import RuntimeState
+from engine.dispatcher import Dispatcher
+from core.parser import extract_command
+from tools.models import ToolResult
+
+
+def extract_json_array(raw_output: str) -> List[Any]:
+    """Robust JSON Array extractor resilient against Llama-3/70B thinking blocks and markdown fences."""
+    if not raw_output or not isinstance(raw_output, str):
+        return []
+
+    text = raw_output.strip()
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    text = re.sub(r"```\s*", "", text)
+
+    match = re.search(r"\[[\s\S]*\]", text)
+    if match:
+        candidate = match.group(0)
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    return []
 
 
 @dataclass(slots=True)
@@ -68,12 +103,14 @@ class NativeDeepAgent:
         max_iterations: int = 3,
         hitl_callback: Callable[[str], bool] | None = None,
         clarify_callback: Callable[[str, list[str]], str] | None = None,
+        dispatcher: Dispatcher | None = None,
     ) -> None:
         self.runtime_state = runtime_state
         self.llm = llm_client
         self.max_iterations = max_iterations
         self.hitl_callback = hitl_callback
         self.clarify_callback = clarify_callback
+        self.dispatcher = dispatcher or Dispatcher(runtime_state)
 
     def _detect_ambiguity(self, state: DeepAgentState) -> tuple[bool, str, list[str]]:
         """Detect ambiguous branching or missing architectural constraints requiring Interactive Steering."""
@@ -107,21 +144,24 @@ class NativeDeepAgent:
             prompt = (
                 f"You are an expert autonomous planner. Deconstruct the following goal into a precise sequence of independent, actionable steps.\n"
                 f"Goal: {state.task}\n\n"
-                "Return ONLY a JSON array of concise string steps, e.g. [\"Inspect directory structure\", \"Audit core security files\", \"Synthesize audit report\"]."
+                "Return ONLY a valid JSON array of strings. No thinking, no explanation, no markdown."
             )
             messages = [
-                {"role": "system", "content": "You are a structured task planning node. Output valid JSON arrays only."},
+                {"role": "system", "content": "You are a structured task planning node. Output valid JSON arrays only. No markdown or preamble."},
                 {"role": "user", "content": prompt},
             ]
-            try:
-                response = self.llm(messages)
-                parsed = json.loads(response.strip())
-                if isinstance(parsed, list) and all(isinstance(s, str) for s in parsed):
-                    state.plan = parsed
-                else:
-                    state.plan = [state.task]
-            except Exception:
-                state.plan = [state.task]
+            for attempt in range(1, 4):
+                try:
+                    response = self.llm(messages)
+                    parsed = extract_json_array(response)
+                    if parsed and all(isinstance(s, str) for s in parsed):
+                        sys.stdout.write("\r\033[K")
+                        sys.stdout.flush()
+                        state.plan = [s.strip() for s in parsed if s.strip()]
+                        return state
+                except Exception:
+                    time.sleep(0.4)
+            state.plan = [state.task]
         else:
             state.plan = [f"Execute task: {state.task}"]
 
@@ -137,19 +177,23 @@ class NativeDeepAgent:
                 f"Completed Steps: {json.dumps(state.past_steps)}\n"
                 f"Observations & Findings: {json.dumps(state.observations)}\n"
                 f"Review Critique: {state.critique}\n\n"
-                "Generate an updated or remaining sequential plan as a JSON array of strings."
+                "Return ONLY a valid JSON array of remaining string steps. No thinking, no explanation, no markdown."
             )
             messages = [
-                {"role": "system", "content": "You are an adaptive replanning node. Output valid JSON arrays only."},
+                {"role": "system", "content": "You are an adaptive replanning node. Output valid JSON arrays only. No markdown or preamble."},
                 {"role": "user", "content": prompt},
             ]
-            try:
-                response = self.llm(messages)
-                parsed = json.loads(response.strip())
-                if isinstance(parsed, list) and all(isinstance(s, str) for s in parsed):
-                    state.plan = parsed
-            except Exception:
-                pass
+            for attempt in range(1, 4):
+                try:
+                    response = self.llm(messages)
+                    parsed = extract_json_array(response)
+                    if parsed and all(isinstance(s, str) for s in parsed):
+                        sys.stdout.write("\r\033[K")
+                        sys.stdout.flush()
+                        state.plan = [s.strip() for s in parsed if s.strip()]
+                        return state
+                except Exception:
+                    time.sleep(0.4)
 
         return state
 
@@ -159,8 +203,12 @@ class NativeDeepAgent:
         return any(kw in step.lower() for kw in dangerous_keywords)
 
     def execute_node(self, state: DeepAgentState) -> DeepAgentState:
-        """EXEC Node: execute plan steps sequentially & collect observations via Sub-agents."""
+        """EXEC Node: execute plan steps sequentially via LLM -> tool dispatch -> observation."""
         bus.emit("deep_exec", {"steps": state.plan, "iteration": state.iteration})
+
+        if not self.llm:
+            state.errors.append("NO_LLM")
+            return state
 
         for idx, step in enumerate(state.plan):
             if self._is_sensitive_action(step) or state.critique:
@@ -170,17 +218,83 @@ class NativeDeepAgent:
                     state.errors.append("USER_REJECTION")
                     return state
 
-            # Assign specialized Sub-agent worker based on step nature
             worker_tag = "[SEC]" if any(k in step.lower() for k in ("security", "audit", "vuln", "patch")) else "[FS]"
             bus.emit("deep_exec_step", {"step_idx": idx + 1, "total": len(state.plan), "step": step, "worker": worker_tag})
 
-            result_msg = f"Delegated to {worker_tag} worker: {step} -> Success."
+            # Build context from this plan step, past observations, and tool schemas
+            tool_schemas = self._tool_schemas_summary()
+            exec_prompt = (
+                f"You are executing plan step {idx+1}/{len(state.plan)} for the goal: {state.task}\n"
+                f"Current step: {step}\n\n"
+                f"Available tools: {tool_schemas}\n\n"
+                f"Use exactly ONE tool to accomplish this step. "
+                f"Return ONLY a valid JSON tool call wrapped in ```json ... ```. No explanation."
+            )
+            messages = [
+                {"role": "system", "content": "You are a precise tool-calling agent. Output one JSON tool call per step."},
+                {"role": "user", "content": exec_prompt},
+            ]
+
+            result = None
+            for attempt in range(3):
+                try:
+                    response = self.llm(messages)
+                except Exception as exc:
+                    state.errors.append(f"LLM_ERROR: {exc}")
+                    continue
+
+                tool_call = extract_command(response)
+                if tool_call is None:
+                    state.errors.append(f"PARSE_FAILURE: LLM did not produce a tool call for step '{step[:60]}'")
+                    continue
+
+                try:
+                    result = self.dispatcher.dispatch(tool_call.tool, tool_call.args)
+                    if result is None:
+                        result = ToolResult(success=False, stderr="Dispatcher returned None", returncode=-1)
+                    break
+                except Exception as exc:
+                    state.errors.append(f"DISPATCH_ERROR: {exc}")
+                    continue
+
+            if result is None:
+                err_msg = f"Step '{step[:80]}' failed after 3 attempts."
+                state.past_steps.append(step)
+                state.observations.append(f"[ERROR] {err_msg}")
+                state.execution_results.append(f"[Execution Error] {err_msg}")
+                continue
+
+            # Record real observation
+            output = ((result.stdout or "") + (result.stderr or "")).strip()
+            snippet = output[:500] + ("..." if len(output) > 500 else "")
+            observation = (
+                f"[OK] {step[:80]}\n"
+                f"  tool: {tool_call.tool}\n"
+                f"  exit: {result.returncode}\n"
+                f"  output: {snippet}"
+            ) if result.success else (
+                f"[FAIL] {step[:80]}\n"
+                f"  tool: {tool_call.tool}\n"
+                f"  exit: {result.returncode}\n"
+                f"  error: {snippet}"
+            )
             state.past_steps.append(step)
-            state.observations.append(result_msg)
-            state.execution_results.append(result_msg)
+            state.observations.append(observation)
+            state.execution_results.append(
+                output if result.success else f"[Error] {output or 'No output'}"
+            )
 
         state.final_output = "\n".join(state.execution_results)
         return state
+
+    def _tool_schemas_summary(self) -> str:
+        """Return a compact summary of available tools for the execute prompt."""
+        from engine.tool_registry import registry
+        schemas = registry.get_all_schemas()
+        return "; ".join(
+            f"{s['name']}: {s.get('description', '')[:80]}"
+            for s in schemas
+        )
 
     def review_node(self, state: DeepAgentState) -> DeepAgentState:
         """REVIEW Node: self-critique and quality verification."""

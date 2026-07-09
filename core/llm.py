@@ -21,7 +21,7 @@ class OpenRouterConfig:
     temperature: float = 0.1
     max_tokens: int = 4000
     top_p: float = 1.0
-    referer: str = "https://github.com/amiraq1"
+    referer: str = os.getenv("NABD_REFERER", "https://localhost/nabd")
     title: str = "Nabd Agent OS"
 
 
@@ -186,7 +186,7 @@ class LocalConfig:
 
     model: str = ""
 
-    timeout: int = 300
+    timeout: int = 15
 
     temperature: float = 0.1
 
@@ -196,7 +196,7 @@ class LocalConfig:
 
     stream: bool = False
 
-    retries: int = 2
+    retries: int = 1
 
     retry_delay: float = 0.5
 

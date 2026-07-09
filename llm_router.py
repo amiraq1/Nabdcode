@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -89,9 +90,56 @@ class ProviderRouter:
 
     MAX_COOLDOWN = 600
 
+    STATE_FILE = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        ".provider_state.json",
+    )
+
     def __init__(self, providers: list[ProviderState]):
 
         self.providers = providers
+        self._restore_state()
+
+    # --------------------------------------------------------
+
+    def _state_path(self) -> str:
+        return self.STATE_FILE
+
+    def _save_state(self) -> None:
+        """Persist provider runtime state so cooldowns survive restarts."""
+        data = []
+        for p in self.providers:
+            data.append({
+                "name": p.name,
+                "failures": p.failures,
+                "successes": p.successes,
+                "average_latency": p.average_latency,
+                "cooldown_until": p.cooldown_until,
+            })
+        try:
+            with open(self._state_path(), "w") as f:
+                json.dump(data, f)
+        except Exception:
+            pass  # best-effort; non-critical
+
+    def _restore_state(self) -> None:
+        """Load persisted provider state on startup."""
+        path = self._state_path()
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            saved = {d["name"]: d for d in data}
+            for p in self.providers:
+                if p.name in saved:
+                    s = saved[p.name]
+                    p.failures = s["failures"]
+                    p.successes = s["successes"]
+                    p.average_latency = s["average_latency"]
+                    p.cooldown_until = s["cooldown_until"]
+        except Exception:
+            pass
 
     # --------------------------------------------------------
 
@@ -147,6 +195,8 @@ class ProviderRouter:
                 + latency * 0.3
             )
 
+        self._save_state()
+
     # --------------------------------------------------------
 
     def _record_failure(
@@ -162,6 +212,8 @@ class ProviderRouter:
                 time.time()
                 + self._cooldown_duration(provider.failures)
             )
+
+        self._save_state()
 
     # --------------------------------------------------------
 
