@@ -13,3 +13,5 @@ sessions/
 brain/
 .cache/
 .provider_state.json
+.provider_state*.json
+.provider_state*.json
