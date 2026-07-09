@@ -274,6 +274,8 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGHUP, _shutdown_handler)
 
+    state = RuntimeState(session_id=ctx.session_manager.session_id, max_steps=50)
+
     # ── Helpers for ToolRequiredError path ────────────────────────────────
 
     def _cleanup_after_streamed_failure(state: RuntimeState,
