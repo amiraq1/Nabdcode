@@ -1,5 +1,4 @@
-"""
-renderer — single owner of terminal output.
+"""renderer — single owner of terminal output.
 
 Architecture
 ────────────
@@ -8,240 +7,152 @@ EventBus (loop thread)
     ▼
 Renderer.append() ──→ buffer: list[str]
     │
-    ▼ (flush at step boundaries)
+    ▼ (flush at event boundaries)
 Renderer.flush() ──→ sys.stdout.write()
 
-No background threads. No competing writers. No race conditions.
+No background threads. No competing writers.
 """
 
 from __future__ import annotations
 
 import shutil
 import sys
-import textwrap
-from typing import Final
 
-CANVAS_WIDTH: Final[int] = 48
 
-SPINNER_FRAMES: Final[tuple[str, ...]] = (
+SPINNER_FRAMES: tuple[str, ...] = (
     "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"
 )
 
-TOOL_BADGES: Final[dict[str, tuple[int, int]]] = {
-    "execute_shell": (41, 37),   # red bg, white fg
-    "file_system":   (42, 37),   # green bg
-    "web_search":    (45, 37),   # magenta bg
-    "search_memory": (43, 37),   # yellow bg
+# ── 5-color ANSI palette ────────────────────────────────────────────────────
+_COLORS: dict[str, str] = {
+    "cyan":   "\033[36m",
+    "green":  "\033[32m",
+    "yellow": "\033[33m",
+    "red":    "\033[31m",
+    "dim":    "\033[90m",
 }
+_RESET = "\033[0m"
+_INDENT = "  "
 
 
-# ── Layout Helpers ──────────────────────────────────────────────────────────
-
-def layout_margin() -> tuple[str, int]:
-    """Return (left_margin, effective_width) centered on CANVAS_WIDTH."""
-    term_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
-    effective = min(term_cols, CANVAS_WIDTH)
-    margin = max(0, (term_cols - effective) // 2)
-    return " " * margin, effective
+# ── Cached terminal size ────────────────────────────────────────────────────
+_cached_cols: int = 80
 
 
-def _badge(label: str, bg: int, fg: int = 37) -> str:
-    return f"\033[1;{fg};{bg}m {label} \033[0m"
-
-
-def _tool_badge(tool: str, args: dict) -> str:
-    """Return a colored badge for the given tool and action."""
-    if tool == "file_system":
-        action = str(args.get("action", "")).lower()
-        if action in ("read", "list", "exists"):
-            return _badge(" READ ", 44)  # blue
-        return _badge(" WRITE ", 42)     # green
-    bg, fg = TOOL_BADGES.get(tool, (46, 37))  # cyan default
-    return _badge(tool.upper()[:6], bg, fg)
+def _update_terminal_size() -> None:
+    global _cached_cols
+    try:
+        _cached_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
+    except Exception:
+        pass
 
 
 # ── Renderer ────────────────────────────────────────────────────────────────
-
 class Renderer:
-    """
-    Single owner of terminal output.
-
-    Usage (on the loop thread only):
-        renderer.print("some line")
-        renderer.separator()
-        renderer.badge_line("EXEC", "shell", args)
-        renderer.flush()
-
-    No background threads. No locks needed — all writes happen on the
-    single thread that owns the screen.
-    """
+    """Single owner of terminal output. Append-only, atomic writes."""
 
     def __init__(self) -> None:
         self._lines: list[str] = []
         self._spinner_idx: int = 0
         self._spinner_active: bool = False
 
-    # ── Buffer Writes ───────────────────────────────────────────────────────
+    # ── Core primitive: badge_line ──────────────────────────────────────────
 
-    def print(self, text: str = "") -> None:
-        """Append an unformatted line to the buffer."""
+    def badge_line(self, badge: str, message: str, color: str = "cyan") -> None:
+        """
+        Single rendering primitive.
+
+        badge   – 4-6 char uppercase label (EXEC, READ, WRITE, SEARCH, MODEL, ERROR, DONE)
+        message – human-readable single-line summary
+        color   – cyan | green | yellow | red | dim
+        """
+        ansi = _COLORS.get(color, _COLORS["cyan"])
+        self._lines.append(f"{_INDENT}{ansi}[{badge}]{_RESET} {message}")
+
+    def dim_line(self, message: str) -> None:
+        """Dimmed single-line for non-critical background events."""
+        self._lines.append(f"{_INDENT}{_COLORS['dim']}{message}{_RESET}")
+
+    def raw(self, text: str = "") -> None:
+        """Append a raw unformatted line."""
         self._lines.append(text)
 
-    def print_margin(self, text: str) -> None:
-        """Append a line with left-margin indentation."""
-        margin, _ = layout_margin()
-        self._lines.append(margin + text)
+    def stream_start(self, prefix: str = "❯ AGENT: ") -> None:
+        """Start token-by-token live streaming after stopping any active spinner."""
+        self.spinner_stop()
+        sys.stdout.write(f"\r\033[K{_COLORS['green']}{prefix}{_RESET}")
+        sys.stdout.flush()
 
-    def ansi(self, ansi_text: str) -> None:
-        """Append a raw ANSI-formatted line."""
-        self._lines.append(ansi_text)
+    def stream_token(self, token: str) -> None:
+        """Write a single token immediately to stdout during live streaming."""
+        sys.stdout.write(token)
+        sys.stdout.flush()
 
-    def separator(self) -> None:
-        """Append a full-width separator line."""
-        margin, w = layout_margin()
-        self._lines.append(f"{margin}\033[90m{'─' * w}\033[0m")
+    def stream_end(self) -> None:
+        """Finish live streaming with a clean newline."""
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
-    def step_header(self, step: int) -> None:
-        """Append a step header: '── [ Step N ] ──'"""
-        margin, w = layout_margin()
-        label = f"── [ Step {step} ] ──"
-        fill = max(0, w - len(label))
-        self._lines.append(f"{margin}\033[90m{'─' * fill}{label}\033[0m")
+    def flush(self) -> None:
+        """
+        Atomically write buffered lines to stdout.
 
-    def badge_line(self, prefix: str, tool: str, args: dict, target: str = "") -> None:
-        """Append a badge + tool name + target line."""
-        margin, _ = layout_margin()
-        badge = _tool_badge(tool, args)
-        target_str = f" \033[32m[{target}]\033[0m" if target else ""
-        self._lines.append(
-            f"{margin}\033[1;37;45m ◆ {prefix} \033[0m {badge}{target_str}"
-        )
+        Three cases:
+          1. Spinner only (no _lines) → \\r rewrites same line, no \\n.
+             Cursor stays ON the spinner line for the next overwrite.
+          2. Content only (no spinner) → \\r\\033[K clears any remnant,
+             then content + \\n.  Cursor moves to a fresh line below.
+          3. Content + spinner          → \\r\\033[K + content + \\n + spinner.
+             Content goes to scrollback; spinner lives on the current line.
+        """
+        _update_terminal_size()
 
-    def status_line(self, label: str, status_badge: str, detail: str = "") -> None:
-        """Append an indented status line: '  └─ OK Code: 0'"""
-        margin, _ = layout_margin()
-        self._lines.append(f"{margin}  └─ {status_badge} {detail}")
+        spinner_line = self._spinner_line() if self._spinner_active else None
 
-    def text_block(self, lines: list[str]) -> None:
-        """Append a block of indented text lines (tool output)."""
-        margin, w = layout_margin()
-        for line in lines[:10]:
-            self._lines.append(f"{margin}\033[90m  │ \033[0m{line[:w-6]}")
-        if len(lines) > 10:
-            self._lines.append(
-                f"{margin}\033[90m  │ ... +{len(lines) - 10} lines [ctrl+o to expand]\033[0m"
-            )
-
-    def diff_block(self, diff_text: str) -> None:
-        """Append a formatted diff block."""
-        margin, _ = layout_margin()
-        for line in diff_text.splitlines():
-            if line.startswith("---") or line.startswith("+++"):
-                self._lines.append(f"{margin}\033[1;36m{line}\033[0m")
-            elif line.startswith("@@"):
-                self._lines.append(f"{margin}\033[1;33m{line}\033[0m")
-            elif line.startswith("-"):
-                self._lines.append(f"{margin}\033[1;37;41m{line}\033[0m")
-            elif line.startswith("+"):
-                self._lines.append(f"{margin}\033[1;37;42m{line}\033[0m")
-            else:
-                self._lines.append(f"{margin}\033[90m{line}\033[0m")
-
-    def todo_block(self, todos: list[dict]) -> None:
-        """Append a formatted todo list."""
-        margin, _ = layout_margin()
-        self._lines.append(
-            f"\n{margin}\033[1;37;45m TODOS \033[0m \033[90m[{len(todos)} items]\033[0m"
-        )
-        for item in todos:
-            done = item.get("done", False)
-            text = item.get("task", "")
-            if done:
-                self._lines.append(f"{margin}  \033[32m☑ \033[9m{text}\033[29m\033[0m")
-            else:
-                self._lines.append(f"{margin}  \033[37m☐ {text}\033[0m")
-
-    def user_prompt_panel(self, text: str) -> None:
-        """Append a user prompt panel (colored background, wrapped)."""
-        if not text.strip():
+        if spinner_line and not self._lines:
+            # Pure spinner update — overwrite same terminal line
+            sys.stdout.write(f"\r{spinner_line}")
+            sys.stdout.flush()
             return
-        margin, w = layout_margin()
-        wrapper = textwrap.TextWrapper(
-            width=max(20, w - 4),
-            break_long_words=False,
-            break_on_hyphens=False,
-            replace_whitespace=True,
-        )
-        formatted_lines: list[str] = []
-        for paragraph in text.splitlines():
-            if paragraph.strip() == "":
-                formatted_lines.append("")
-            else:
-                formatted_lines.extend(wrapper.wrap(paragraph))
-        bg = "\033[48;5;237m"
-        tx = "\033[38;5;253m"
-        rst = "\033[0m"
-        self._lines.append(f"{rst}")
-        for line in formatted_lines:
-            padded = f" {line}".ljust(max(1, w - 2))
-            self._lines.append(f"{margin}{bg}{tx}{padded}{rst}")
-        self._lines.append(f"{rst}")
 
-    def message(self, text: str) -> None:
-        """Append a raw message (no formatting, no margin)."""
-        self._lines.append(text)
+        if not self._lines:
+            return
+
+        # Real content (with or without trailing spinner)
+        sys.stdout.write("\r\033[K")
+        sys.stdout.write("\n".join(self._lines))
+        if spinner_line:
+            # Spinner stays on current line (no \\n) so subsequent
+            # pure-spinner updates overwrite it with \\r
+            sys.stdout.write("\n")
+            sys.stdout.write(spinner_line)
+        else:
+            # No trailing spinner — move cursor to fresh line
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+        self._lines.clear()
 
     # ── Spinner ─────────────────────────────────────────────────────────────
 
     def spinner_start(self) -> None:
-        """Mark spinner active. Next flush writes the first frame."""
         self._spinner_active = True
         self._spinner_idx = 0
 
     def spinner_stop(self) -> None:
-        """Deactivate spinner."""
+        if self._spinner_active:
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
         self._spinner_active = False
 
     def _spinner_line(self) -> str | None:
-        """Return the current spinner line, or None if inactive."""
         if not self._spinner_active:
             return None
-        margin, _ = layout_margin()
         frame = SPINNER_FRAMES[self._spinner_idx % len(SPINNER_FRAMES)]
         self._spinner_idx += 1
-        return (
-            f"{margin}\033[1;37;45m {frame} Examining... \033[0m"
-            f" \033[90mProcessing context payload...\033[0m"
-        )
-
-    # ── Flush ───────────────────────────────────────────────────────────────
-
-    def flush(self) -> None:
-        """
-        Write all buffered lines + optional spinner to stdout atomically,
-        then clear the buffer.
-
-        This is the ONLY function that calls sys.stdout.write or print.
-        """
-        spinner = self._spinner_line()
-        if not self._lines and spinner is None:
-            return
-
-        parts: list[str] = []
-
-        if self._lines:
-            parts.extend(self._lines)
-        if spinner is not None:
-            parts.append(spinner)
-
-        sys.stdout.write("\n".join(parts))
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-        self._lines.clear()
+        return f"{_INDENT}{frame} Thinking..."
 
     # ── Cleanup ─────────────────────────────────────────────────────────────
 
     def shutdown(self) -> None:
-        """Final flush and terminal cleanup."""
         self.spinner_stop()
         self.flush()

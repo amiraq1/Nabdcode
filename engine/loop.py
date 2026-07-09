@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import time
 from typing import Any, Callable, Final
 
@@ -50,6 +51,7 @@ class ExecutionLoop:
         self.dispatcher = dispatcher or Dispatcher(state)
         self.llm_provider = llm_provider or execute_agent_with_memory
         self.max_output_len = max_output_len
+        self._recent_calls: deque[ToolCall] = deque(maxlen=16)
 
     def run(self, user_prompt: str) -> None:
         """
@@ -102,9 +104,16 @@ class ExecutionLoop:
                 elapsed = time.perf_counter() - started
 
                 if not response.strip():
-                    raise RuntimeError(
-                        "LLM returned an empty response."
+                    bus.emit("ui_validation_failed", {"error": "LLM returned an empty response.", "step": self.state.step_count})
+                    self.state.append_message(
+                        {
+                            "role": "system",
+                            "content": "Your previous response was empty. Please provide either a tool call or your answer.",
+                        }
                     )
+                    self.state.increment_step()
+                    time.sleep(self.POLL_DELAY)
+                    continue
 
                 self.state.append_message(
                     {
@@ -192,12 +201,10 @@ class ExecutionLoop:
                 # Infinite loop & Cycle detection
                 #
 
-                if not hasattr(self, "_recent_calls"):
-                    self._recent_calls = []
-
-                if tool_call == last_command or tool_call in self._recent_calls[-4:]:
+                recent_slice = list(self._recent_calls)[-4:]
+                if tool_call == last_command or tool_call in recent_slice:
                     repeated += 1
-                    if repeated >= 1 or tool_call == last_command:
+                    if repeated >= 2 or (tool_call == last_command and repeated >= 1):
                         bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count})
                         self.state.append_message({
                             "role": "system",
@@ -262,8 +269,8 @@ class ExecutionLoop:
                     guidance = ""
                     if "can't open file" in output and "python" in str(tool_args):
                         guidance = "\n[CRITICAL HINT] To execute inline Python statements via bash, you MUST use python3 -c \"import ...\". Never write unflagged 'python import ...'."
-                    elif "timeout" in output.lower():
-                        guidance = "\n[CRITICAL HINT] Execution timed out waiting for input or EOF. Never execute interactive REPL scripts (like 'python main.py') directly."
+                    elif any(msg in output.lower() for msg in ("timed out after", "timeoutexpired", "command execution timed out")):
+                        guidance = "\n[CRITICAL HINT] Execution timed out waiting for input or EOF. Never execute interactive REPL scripts directly."
 
                     feedback = (
                         f"[{tool_name} Error]\n"
