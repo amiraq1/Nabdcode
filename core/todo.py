@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List
+from typing import Any, Dict, List
 
 
 class TodoStatus(str, Enum):
@@ -18,7 +18,7 @@ class TodoItem:
 
 
 class TodoManager:
-    """يحتفظ بقائمة المهام لجلسة العمل الحالية. RAM فقط، بدون persistence حاليًا."""
+    """يحتفظ بقائمة المهام لجلسة العمل الحالية."""
 
     def __init__(self) -> None:
         self._items: List[TodoItem] = []
@@ -53,3 +53,29 @@ class TodoManager:
 
     def all(self) -> List[TodoItem]:
         return list(self._items)
+
+    # ── Serialization ────────────────────────────────────────────────────
+
+    def to_serializable(self) -> List[Dict[str, Any]]:
+        """Serialize all items to JSON-safe dicts."""
+        return [
+            {
+                "id": item.id,
+                "text": item.text,
+                "status": item.status.value,
+                "verification_note": item.verification_note,
+            }
+            for item in self._items
+        ]
+
+    def restore(self, items: List[Dict[str, Any]]) -> None:
+        """Replace all items from previously serialized dicts."""
+        self._items = [
+            TodoItem(
+                id=it["id"],
+                text=it["text"],
+                status=TodoStatus(it["status"]),
+                verification_note=it.get("verification_note", ""),
+            )
+            for it in items
+        ]

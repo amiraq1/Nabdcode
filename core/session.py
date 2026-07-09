@@ -1,8 +1,19 @@
+"""Session persistence: versioned JSON with messages, todos, and evidence audit trail.
+
+Version history:
+  v1 (implicit): session_id + updated_at + messages only.
+  v2 (explicit): adds version, todos, evidence_records.
+"""
+
 import json
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
+# Current schema version written by save().
+SCHEMA_VERSION: int = 2
+
 
 class SessionManager:
     def __init__(self, root: Path):
@@ -10,15 +21,24 @@ class SessionManager:
         self.root.mkdir(parents=True, exist_ok=True)
         self.session_id = f"sess_{uuid.uuid4().hex[:8]}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
         self.messages: List[Dict[str, Any]] = []
+        self.todos: List[Dict[str, Any]] = []       # v2
+        self.evidence: List[Dict[str, Any]] = []      # v2
         self.file_path = self.root / f"{self.session_id}.json"
+        self._version: int = SCHEMA_VERSION
 
     def save(self) -> bool:
         try:
-            data = {
+            data: dict[str, Any] = {
+                "version": SCHEMA_VERSION,
                 "session_id": self.session_id,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-                "messages": self.messages
+                "messages": self.messages,
             }
+            # v2 fields — always written so forward compat is explicit.
+            if self.todos:
+                data["todos"] = self.todos
+            if self.evidence:
+                data["evidence_records"] = self.evidence
             with open(self.file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             return True
@@ -37,6 +57,11 @@ class SessionManager:
                 self.session_id = data.get("session_id", session_id)
                 self.messages = data.get("messages", [])
                 self.file_path = target_path
+                version = data.get("version", 1)  # v1 if absent
+                self._version = version
+                # v2 fields — empty defaults for backward compat with v1 sessions.
+                self.todos = data.get("todos", [])
+                self.evidence = data.get("evidence_records", [])
             return True
         except Exception as e:
             import sys

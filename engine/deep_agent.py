@@ -16,6 +16,7 @@ from engine.events import bus
 from engine.state import RuntimeState
 from engine.dispatcher import Dispatcher
 from core.parser import extract_command
+from core.evidence import EvidenceLog, VerifierError
 from tools.models import ToolResult
 
 
@@ -104,6 +105,7 @@ class NativeDeepAgent:
         hitl_callback: Callable[[str], bool] | None = None,
         clarify_callback: Callable[[str, list[str]], str] | None = None,
         dispatcher: Dispatcher | None = None,
+        evidence_log: EvidenceLog | None = None,
     ) -> None:
         self.runtime_state = runtime_state
         self.llm = llm_client
@@ -111,6 +113,7 @@ class NativeDeepAgent:
         self.hitl_callback = hitl_callback
         self.clarify_callback = clarify_callback
         self.dispatcher = dispatcher or Dispatcher(runtime_state)
+        self.evidence_log = evidence_log or EvidenceLog()
 
     def _detect_ambiguity(self, state: DeepAgentState) -> tuple[bool, str, list[str]]:
         """Detect ambiguous branching or missing architectural constraints requiring Interactive Steering."""
@@ -252,6 +255,19 @@ class NativeDeepAgent:
                     result = self.dispatcher.dispatch(tool_call.tool, tool_call.args)
                     if result is None:
                         result = ToolResult(success=False, stderr="Dispatcher returned None", returncode=-1)
+                    # Record evidence for every dispatched tool call (success or failure)
+                    cmd_summary = (
+                        tool_call.args.get("command")
+                        or tool_call.args.get("path")
+                        or tool_call.args.get("query")
+                        or str(tool_call.args)[:60]
+                    )
+                    self.evidence_log.record(
+                        tool=tool_call.tool,
+                        command_or_path=cmd_summary,
+                        success=getattr(result, "success", False),
+                        output_snippet=getattr(result, "output", "") or getattr(result, "stderr", ""),
+                    )
                     break
                 except Exception as exc:
                     state.errors.append(f"DISPATCH_ERROR: {exc}")
@@ -322,7 +338,19 @@ class NativeDeepAgent:
         return False
 
     def run(self, task: str) -> str:
-        """Main Native Deep Agent loop: Plan -> Clarify -> Execute -> Review -> Replan."""
+        """Main Native Deep Agent loop: Plan -> Clarify -> Execute -> Review -> Replan.
+
+        After the review loop passes, runs EvidenceLog.verify() as a final
+        gate before returning the output — same as ExecutionLoop's no-tool-call
+        path.  If verification fails, raises VerifierError (propagated as
+        ToolRequiredError by the caller).
+
+        DESIGN DECISION — TodoManager ownership:
+          NativeDeepAgent manages its own plan via DeepAgentState.plan and does
+          NOT write to the shared TodoManager.  Two parallel task lists (one on
+          screen, one internal) would cause confusion.  The ExecutionLoop path
+          owns TodoManager; the deep agent path owns DeepAgentState.plan.
+        """
         state = DeepAgentState(task=task)
 
         state = self.plan_node(state)
@@ -335,5 +363,9 @@ class NativeDeepAgent:
             if self.should_replan(state) and state.iteration < self.max_iterations - 1:
                 state.iteration += 1
                 state = self.replan_node(state)
+
+        # Final evidence verification gate — same guard as ExecutionLoop's
+        # no-tool-call path.  Uses L0 then L1 (if claim has technical tokens).
+        self.evidence_log.verify(require_tools=True, claim=state.final_output)
 
         return state.final_output

@@ -2,12 +2,19 @@
 
 [cmd]: https://commandcode.ai/
 
+# deliverables
+- Include a structured Phase deliverable summary with sections: Summary, files touched, notes, tests, manual verification, and rollback instructions. Confidence: 0.78
+- After making code changes, verify them with unit tests that cover success paths, failure paths, and edge cases. Confidence: 0.65
+
 # evidence
 See [evidence/taste.md](evidence/taste.md)
 # termios
 - Set `mouse_support=False` in PromptSession configurations to prevent keyboard input issues. Confidence: 0.65
 - Call `renderer.flush()` before entering the main input loop to display buffered output (e.g. logo, system info). Confidence: 0.65
 - Use `termios.TCSANOW` instead of `TCSADRAIN` when applying termios attribute changes during active execution. Confidence: 0.65
+
+# task-specification
+- Structure technical task instructions with sections: Goal, numbered Requirements, Non-goals, and Deliverable format reference. Confidence: 0.70
 
 # architecture
 - Restore terminal attributes and flush input buffer using `termios.tcflush()` inside a `finally` block, then call `renderer.flush()` after the block, not inside it. Confidence: 0.65

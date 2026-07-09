@@ -5,10 +5,27 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-# Current workspace root
-WORKSPACE_ROOT = Path.cwd().resolve()
+# Pinned workspace root — set once by AppContext.build(), never re-evaluated.
+# Falls back to Path.cwd() if not explicitly set.
+_WORKSPACE_ROOT: Optional[Path] = None
+
+
+def pin_workspace_root(root: Path) -> None:
+    """Pin the workspace root for all subsequent path validation.
+
+    Called once by AppContext.build() at startup.  After this, all
+    _validate_path calls use this value regardless of later chdir calls.
+    """
+    global _WORKSPACE_ROOT
+    _WORKSPACE_ROOT = root.resolve()
+
+
+def get_workspace_root() -> Path:
+    """Return the pinned workspace root, or cwd as fallback."""
+    global _WORKSPACE_ROOT
+    return _WORKSPACE_ROOT.resolve() if _WORKSPACE_ROOT else Path.cwd().resolve()
 
 # ---------------------------------------------------------------------
 # Regular Expressions
@@ -126,9 +143,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 
 def _validate_path(path: str) -> bool:
     try:
-        workspace_root = Path.cwd().resolve()
-        resolved = (workspace_root / path).resolve()
-        resolved.relative_to(workspace_root)
+        root = get_workspace_root()
+        resolved = (root / path).resolve()
+        resolved.relative_to(root)
         return True
     except Exception:
         return False

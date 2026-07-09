@@ -5,6 +5,7 @@ Single-renderer architecture: Renderer owns stdout, PromptSession owns input.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import signal
@@ -15,7 +16,7 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.formatted_text import ANSI
 
 from engine.state import RuntimeState
-from engine.loop import ExecutionLoop
+from engine.loop import ExecutionLoop, ToolRequiredError
 from engine.events import bus
 from engine.renderer import Renderer
 from core.app_context import AppContext
@@ -25,7 +26,11 @@ from core.constants import TODO_DISCIPLINE
 # ── Tool output summariser ─────────────────────────────────────────────────
 
 def _summarise_tool(tool: str, args: dict, result) -> tuple[str, str, str]:
-    """Return (badge, message, color) for a completed tool call."""
+    """Return (badge, message, color) for a completed tool call.
+
+    Used only as fallback; UI theme methods (tool_start/tool_end) are
+    the primary rendering path.
+    """
     if tool == "execute_shell":
         cmd = (args.get("command") or "")[:60]
         out = (getattr(result, "stdout", "") or "").strip()
@@ -80,43 +85,89 @@ def wire_events(ctx: AppContext) -> None:
     renderer = ctx.renderer
     metrics = ctx.metrics
     todo_manager = ctx.todo_manager
+    from engine.ui_theme import map_tool_to_badge
 
     _last_tool_args: dict = {}
+    _streaming: bool = False
 
     def _on_llm_started(p: dict) -> None:
-        renderer.think_start("thinking")
+        nonlocal _streaming
+        _streaming = False
+        renderer.thought_start()
+
+    def _on_llm_token(p: dict) -> None:
+        nonlocal _streaming
+        if not _streaming:
+            _streaming = True
+            renderer.think_end()
+        renderer.stream_chunk(p.get("token", ""))
 
     def _on_llm_completed(p: dict) -> None:
-        renderer.think_end()
+        renderer.thought_end()
+        renderer.flush()
         metrics.record_api_call(duration=p.get("duration", 1.0))
 
     def _on_tool_started(p: dict) -> None:
         nonlocal _last_tool_args
-        _last_tool_args = p.get("args", {})
+        tool = p.get("tool") or p.get("name", "")
+        args = p.get("args") or {}
+        _last_tool_args = args
+        renderer.tool_start(tool, args)
+        renderer.flush()
 
     def _on_tool_completed(p: dict) -> None:
-        tool = p.get("tool", "")
-        args = _last_tool_args
         result = p.get("result")
         if result is None:
             return
-        badge, msg, color = _summarise_tool(tool, args, result)
-        renderer.badge_line(badge, msg, color)
+        tool = p.get("tool", "")
+        success = p.get("success", getattr(result, "success", False))
+        output = (getattr(result, "stdout", "") or "").strip()
+        stderr = (getattr(result, "stderr", "") or "").strip()
+        diff_text = p.get("diff") or getattr(result, "diff", "")
+        kind = map_tool_to_badge(tool)
+
+        # Build summary line
+        summary = ""
+        if not success:
+            snippet = (stderr or output).splitlines()[0][:80] if (stderr or output) else "failed"
+            summary = snippet
+        elif kind == "READ" and output:
+            n = len(output.splitlines())
+            summary = f"{n} lines"
+        elif kind == "SHELL" and output:
+            n = len(output.splitlines())
+            cmd = _last_tool_args.get("command", "")[:40]
+            summary = f"{cmd} ({n} lines)"
+        elif kind in ("SEARCH", "MEMORY") and output:
+            count = output.count("[")
+            summary = f"{count} results"
+
+        renderer.tool_end(
+            tool,
+            success=success,
+            output=output,
+            summary=summary,
+            diff=diff_text if kind == "EDIT" and diff_text else "",
+        )
         renderer.flush()
 
         # Render TODO list when the todo_write tool completes
         if tool == "todo_write" and todo_manager is not None:
-            renderer.render_todos(todo_manager.all())
+            items = [
+                {"content": it.text, "status": it.status.value}
+                for it in todo_manager.all()
+            ]
+            renderer.todos(items)
             renderer.flush()
 
     def _on_max_steps(p: dict) -> None:
         renderer.think_end()
-        renderer.badge_line("PAUSED", "Max steps reached, continuing...", "yellow")
+        renderer.error_badge("PAUSED", "Max steps reached, continuing...")
         renderer.flush()
 
     def _on_loop_error(p: dict) -> None:
         renderer.think_end()
-        renderer.badge_line("ERROR", f"Engine: {p.get('error', 'unknown')}", "red")
+        renderer.error_badge("ENGINE", p.get("error", "unknown"))
         renderer.flush()
 
     def _on_provider_failover(p: dict) -> None:
@@ -151,6 +202,7 @@ def wire_events(ctx: AppContext) -> None:
         renderer.flush()
 
     bus.subscribe("llm_request_started", _on_llm_started)
+    bus.subscribe("llm_token", _on_llm_token)
     bus.subscribe("llm_request_completed", _on_llm_completed)
     bus.subscribe("tool_started", _on_tool_started)
     bus.subscribe("tool_completed", _on_tool_completed)
@@ -185,13 +237,34 @@ def main() -> None:
     ctx = AppContext.build()
     deleted = ctx.session_manager.enforce_retention_policy(ctx.config.max_sessions)
 
-    state = RuntimeState(session_id=ctx.session_manager.session_id, max_steps=50)
+    # Restore todos + evidence from the latest session (v2+ only) — read JSON
+    # directly to avoid mutating session_manager's identity.
+    _latest_id = ctx.session_manager.get_latest_session(ctx.config.session_dir)
+    if _latest_id:
+        _latest_path = ctx.config.session_dir / f"{_latest_id}.json"
+        if _latest_path.exists():
+            try:
+                _data = json.loads(_latest_path.read_text(encoding="utf-8"))
+                _todos = _data.get("todos")
+                if _todos:
+                    ctx.todo_manager.restore(_todos)
+                _evidence_records = _data.get("evidence_records")
+                if _evidence_records:
+                    ctx.evidence_log.restore({"records": _evidence_records})
+            except Exception:
+                pass
     wire_events(ctx)
+
+    # Isolate provider state file per session
+    from llm_router import router as _provider_router
+    _provider_router.set_state_key(ctx.session_manager.session_id[:12])
 
     # Graceful shutdown
     def _shutdown_handler(signum: int, frame: object) -> None:
         ctx.renderer.shutdown()
         ctx.session_manager.messages = state.get_messages()
+        ctx.session_manager.todos = ctx.todo_manager.to_serializable()
+        ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
         ctx.session_manager.save()
         ctx.memory_manager.close()
         ctx.logger.shutdown()
@@ -199,6 +272,24 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGHUP, _shutdown_handler)
+
+    # ── Helpers for ToolRequiredError path ────────────────────────────────
+
+    def _cleanup_after_streamed_failure(state: RuntimeState,
+                                        ctx: AppContext,
+                                        exc: ToolRequiredError) -> None:
+        """After streaming output, the verifier rejected the answer.
+        Strip the fabricated response, add a newline separator so the
+        rejection message isn't glued to the last token, and render
+        the verifier's message to the user.
+        """
+        msgs = state.get_messages()
+        if msgs and msgs[-1].get("role") == "assistant":
+            state.set_messages(msgs[:-1])
+        ctx.logger.error(f"ToolRequiredError: {exc}")
+        ctx.renderer.think_end()
+        ctx.renderer.verifier_reject(str(exc))
+        ctx.renderer.flush()
 
     base_inst = (
         "You are an advanced Autonomous Agent running on a Linux environment.\n"
@@ -260,7 +351,11 @@ def main() -> None:
         sys.stdout.flush()
 
         state.reset_step_count()
-        engine = ExecutionLoop(state=state, max_output_len=ctx.config.max_output)
+        engine = ExecutionLoop(
+            state=state,
+            max_output_len=ctx.config.max_output,
+            evidence_log=ctx.evidence_log,
+        )
 
         fd = sys.stdin.fileno()
         old_termios = None
@@ -273,6 +368,11 @@ def main() -> None:
         except KeyboardInterrupt:
             ctx.renderer.think_end()
             ctx.renderer.flush()
+        except ToolRequiredError as exc:
+            # ToolRequiredError: The LLM answered without using required tools.
+            # Strip the fabricated response, add newline separator after any
+            # partial streaming output, and show the verifier's rejection.
+            _cleanup_after_streamed_failure(state, ctx, exc)
         except Exception as exc:
             # Error already rendered by _on_loop_error via event bus
             ctx.logger.error(f"Execution failed: {exc}")
@@ -284,8 +384,10 @@ def main() -> None:
             except Exception:
                 pass
 
-        # Save session
+        # Save session — messages, todos, evidence audit trail
         ctx.session_manager.messages = state.get_messages()
+        ctx.session_manager.todos = ctx.todo_manager.to_serializable()
+        ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
         ctx.session_manager.save()
 
         # Print assistant response — no badge, just content

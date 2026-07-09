@@ -1,4 +1,41 @@
-from typing import Final, Set
+"""Shared constants and small classification helpers for the agent."""
+
+from typing import Final, Set, Tuple
+
+# ── Chitchat detection ──────────────────────────────────────────────────────
+#
+# Heuristic set for quick prompt classification.  This is NOT a full NLU
+# classifier — it only catches single-word / very short greetings and
+# acknowledgements.  Any longer or more specific prompt is treated as
+# substantive (require_tools=True → L1 verification applies).
+#
+# Rationale for keeping it small and explicit:
+#   - Over-classifying as chitchat would let user-facing questions skip
+#     verification, defeating the guardrail.
+#   - Under-classifying is safe (the agent just spends one inference step
+#     verifying trivial claims instead of chitchat-passing).
+#   - Adding every possible cultural/regional greeting is a losing game;
+#     genuine prompts with "Salam, analyze this project" are >1 token anyway.
+
+CHITCHAT_SET: Final[Set[str]] = {
+    "hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
+    "yes", "no", "exit", "quit", "clear", "bye", "goodbye",
+    "sup", "yo", "thanks!", "ok!", "yes!", "no!",
+}
+
+
+def is_chitchat(text: str) -> Tuple[bool, str]:
+    """Classify a user prompt as chitchat (True) or substantive (False).
+
+    Returns (is_chitchat: bool, reason: str).
+    """
+    lower = text.lower().strip()
+    if not lower:
+        return True, "empty input"
+    if lower in CHITCHAT_SET:
+        return True, f"recognised chitchat token '{lower}'"
+    return False, "substantive or multi-word"
+
 
 SAFE_BINARIES: Final[Set[str]] = {
     "ls", "pwd", "echo", "whoami", "cat", "grep", "date", 

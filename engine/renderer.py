@@ -4,27 +4,34 @@ Architecture
 ────────────
 EventBus (loop thread)
     │
-    ├── think_pulse()   → \r rewrite same line (never \n)
-    ├── think_end()     → \r\033[K wipes line entirely
-    ├── badge_line()    → real content → \n goes to scrollback
+    ├── tool_start()    → badge + path line (READ / SHELL / EDIT / …)
+    ├── tool_end()      → output block with optional collapse + diff
+    ├── thought_start() → * Thought [ctrl+o to expand]
+    ├── thought_end()   → * Thought for Xs …
+    ├── stream_chunk()  → live token output (under lock)
+    ├── todos()         → TODOS checklist block
+    ├── verifier_reject() → yellow VERIFIER badge
+    ├── error_badge()   → red ERROR badge
     └── flush()         → atomic commit of buffered _lines
 
 Thread safety
 ─────────────
-All mutable state is protected by a Lock. badge_line / raw / flush / think_*
-are safe to call from any thread.
+All mutable state is protected by a Lock. Every public method acquires
+self._lock before reading or writing shared state.
 """
 
 from __future__ import annotations
 
+import difflib
 import itertools
 import shutil
 import sys
 import threading
 import time
+from typing import Any
 
 
-# ── 5-color ANSI palette ────────────────────────────────────────────────────
+# ── 5-color ANSI palette (preserved for backward compat) ────────────────────
 _COLORS: dict[str, str] = {
     "cyan":   "\033[36m",
     "green":  "\033[32m",
@@ -39,6 +46,21 @@ _ERASE_LINE = "\r\033[K"
 _INDENT = "  "
 _STRIKE = "\033[9m"
 
+# ── UI theme import ─────────────────────────────────────────────────────────
+from engine.ui_theme import (
+    badge,
+    tool_header,
+    collapsed,
+    render_diff,
+    todo_block as ui_todo_block,
+    map_tool_to_badge,
+    think_line,
+    dim,
+    fg,
+    P,
+    tree_prefix,
+)
+
 
 # ── Renderer ────────────────────────────────────────────────────────────────
 class Renderer:
@@ -51,14 +73,17 @@ class Renderer:
         self._think_alive: bool = False
         self._think_last_draw: float = 0.0
         self._think_min_interval: float = 0.12  # ~8 fps throttle
+        # UI theme state
+        self._think_t0: float | None = None
+        self._token_count: int = 0
 
-    # ── Core primitive: badge_line ──────────────────────────────────────────
+    # ── Legacy methods (preserved for wire_events backward compat) ─────────
 
-    def badge_line(self, badge: str, message: str, color: str = "cyan") -> None:
+    def badge_line(self, badge_txt: str, message: str, color: str = "cyan") -> None:
         """Single rendering primitive — appends to buffer, goes to scrollback."""
         ansi = _COLORS.get(color, _COLORS["cyan"])
         with self._lock:
-            self._lines.append(f"{_INDENT}{ansi}[{badge}]{_COLORS['reset']} {message}")
+            self._lines.append(f"{_INDENT}{ansi}[{badge_txt}]{_COLORS['reset']} {message}")
 
     def raw(self, text: str = "") -> None:
         """Append a raw unformatted line."""
@@ -75,7 +100,7 @@ class Renderer:
         with self._lock:
             self._lines.append(f"{_INDENT}{_COLORS['white']}{text}{_COLORS['reset']}")
 
-    # ── TODO checklist ─────────────────────────────────────────────────────
+    # ── Legacy TODO checklist (preserved) ──────────────────────────────────
 
     def render_todos(self, items: list) -> None:
         """
@@ -153,6 +178,119 @@ class Renderer:
         sys.stdout.write("\n")
         sys.stdout.flush()
 
+    # ── Stream chunk (progressive token output) ──────────────────────────
+
+    def stream_chunk(self, text: str) -> None:
+        """Append a token chunk inline after the THINK indicator on the same line.
+
+        Thread-safe: uses the same lock as badge_line/raw/flush.
+        """
+        with self._lock:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # UI Theme methods (Cursor-style badges, collapse, thought, TODOS)
+    # ══════════════════════════════════════════════════════════════════════
+
+    def tool_start(self, tool: str, args: dict) -> None:
+        """Emit a badge + path header at the start of a tool call.
+
+        Matches Cursor style: SHELL [ls -la] or READ [core/llm.py].
+        """
+        kind = map_tool_to_badge(tool)
+        detail, extra = _format_args(kind, tool, args or {})
+        header = tool_header(kind, detail, extra)
+        self._lines_append(header)
+
+    def tool_end(
+        self,
+        tool: str,
+        *,
+        success: bool,
+        output: str = "",
+        summary: str = "",
+        diff: str = "",
+    ) -> None:
+        """Emit tool output — optional summary, diff, or collapsed block.
+
+        If *diff* is provided (EDIT tools), renders a unified diff block.
+        If *summary* is provided, emits one tree line.
+        Otherwise collapses *output* lines with a folded indicator.
+        """
+        lines = (output or "").splitlines()
+        n = len(lines)
+
+        # Diff path
+        if diff:
+            rendered = render_diff(diff)
+            if rendered:
+                self._lines_append(rendered)
+            return
+
+        # Summary path (e.g. "382 lines", "10 results")
+        if summary:
+            self._lines_append(f"{tree_prefix()}{dim(summary)}")
+            if not lines:
+                self._lines_append(collapsed(0, ""))
+            return
+
+        # Collapsed output path
+        if not lines:
+            return
+        show = lines[:6]
+        for l in show:
+            self._lines_append(f"{tree_prefix()}{dim(l)}")
+        if n > 6:
+            self._lines_append(collapsed(n - 6))
+
+    def thought_start(self) -> None:
+        """Begin a thought line with timer + token count tracking."""
+        self._think_t0 = time.time()
+        self._token_count = 0
+        self._lines_append(think_line(None))
+
+    def thought_end(self) -> None:
+        """Finish thought line: replace in-place with duration."""
+        dt = (time.time() - self._think_t0) if self._think_t0 else 1.0
+        self._think_t0 = None
+        self._lines_append(think_line(dt))
+
+    def todos(self, items: list[dict[str, Any]]) -> None:
+        """Emit a TODOS checklist block (Cursor style)."""
+        block = ui_todo_block(items)
+        for l in block.splitlines():
+            self._lines_append(l)
+
+    def verifier_reject(self, message: str) -> None:
+        """Separator + VERIFIER badge after streamed rejection."""
+        self._lines_append("")                              # blank separator
+        self._lines_append(
+            f"{badge('VERIFIER', color='warn')} {message}"
+        )
+        self._lines_append(
+            f"{badge('VERIFIER', color='warn')} "
+            f"{dim('previous streamed text is not accepted')}"
+        )
+
+    def error_badge(self, title: str, body: str = "") -> None:
+        """Red ERROR badge with optional body."""
+        self._lines_append(f"{badge('ERROR', color='err')} {title}")
+        if body:
+            for l in body.splitlines()[:8]:
+                self._lines_append(f"  {dim(l)}")
+
+    def narrate(self, text: str) -> None:
+        """Dimmed narration line (:: ...) between tool steps."""
+        self._lines_append(f"{dim('::')} {dim(text)}")
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _lines_append(self, text: str) -> None:
+        """Thread-safe append to the render buffer.  Does NOT auto-flush."""
+        with self._lock:
+            self._lines.append(text)
+
     # ── Cleanup ─────────────────────────────────────────────────────────────
 
     def shutdown(self) -> None:
@@ -169,3 +307,39 @@ def _update_terminal_size() -> None:
         _cached_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
     except Exception:
         pass
+
+
+# ── arg formatter (module-level, used by tool_start) ────────────────────────
+
+def _format_args(kind: str, tool: str, args: dict) -> tuple[str, str]:
+    """Return (detail, extra) for a tool header.
+
+    e.g. kind=READ  → detail="[core/llm.py]", extra=""
+         kind=SHELL → detail="[ls -la]", extra=""
+    """
+    if kind == "READ":
+        path = (
+            args.get("path") or args.get("file") or args.get("filename") or tool
+        )
+        # Extra filled on tool_end with line count
+        return f"[{path}]", ""
+    if kind == "SHELL":
+        cmd = (
+            args.get("command") or args.get("cmd") or ""
+        )
+        cmd = cmd.replace("\n", " ")
+        if len(cmd) > 60:
+            cmd = cmd[:57] + "..."
+        return f"[{cmd}]", ""
+    if kind == "EDIT":
+        path = (
+            args.get("path") or args.get("file") or tool
+        )
+        return f"[{path}]", ""
+    if kind == "TODOS":
+        return "[plan]", ""
+    if kind in ("SEARCH", "MEMORY"):
+        query = args.get("query", "")
+        return f'["{query[:40]}"]', ""
+    return f"[{tool}]", ""
+

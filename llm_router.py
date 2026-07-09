@@ -95,15 +95,29 @@ class ProviderRouter:
         ".provider_state.json",
     )
 
-    def __init__(self, providers: list[ProviderState]):
+    def __init__(self, providers: list[ProviderState], state_key: str = ""):
 
         self.providers = providers
+        self._state_key = state_key
+        self._restore_state()
+
+    # --------------------------------------------------------
+
+    def set_state_key(self, key: str) -> None:
+        """Update the state key post-construction (e.g. with session_id)."""
+        self._state_key = key
         self._restore_state()
 
     # --------------------------------------------------------
 
     def _state_path(self) -> str:
-        return self.STATE_FILE
+        """Session-aware state path. With a key suffix, multiple instances
+        don't clobber each other's cooldown state."""
+        base = self.STATE_FILE
+        if self._state_key:
+            stem, ext = os.path.splitext(base)
+            return f"{stem}_{self._state_key}{ext}"
+        return base
 
     def _save_state(self) -> None:
         """Persist provider runtime state so cooldowns survive restarts."""
@@ -265,6 +279,55 @@ class ProviderRouter:
             + "\n".join(errors)
         )
 
+    # --------------------------------------------------------
+
+    def generate_stream(
+        self,
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        """Streaming generation. Attempts Local first with SSE; falls back
+        to non-streaming generate() if the provider doesn't support it."""
+        _load_env_files()
+        errors: list[str] = []
+
+        for provider in self._sorted():
+            # Only Local supports streaming currently
+            if provider.name == "Local" and hasattr(provider.client, "generate_stream"):
+                started = time.perf_counter()
+                try:
+                    response = provider.client.generate_stream(messages, **kwargs)
+                    latency = time.perf_counter() - started
+                    self._record_success(provider, latency)
+                    bus.emit("llm_provider_success", {"provider": provider.name, "latency": latency})
+                    return response
+                except Exception as exc:
+                    self._record_failure(provider)
+                    bus.emit("llm_provider_failure", {"provider": provider.name, "error": str(exc)[:60]})
+                    bus.emit("llm_provider_failover", {"provider": provider.name, "error": str(exc)[:60]})
+                    errors.append(f"{provider.name} stream: {exc}")
+                    # Fall through to non-streaming fallback
+                    continue
+
+            # Non-streaming fallback for all providers
+            started = time.perf_counter()
+            try:
+                response = provider.client.generate_response(messages, **kwargs)
+                latency = time.perf_counter() - started
+                self._record_success(provider, latency)
+                bus.emit("llm_provider_success", {"provider": provider.name, "latency": latency})
+                return response
+            except Exception as exc:
+                self._record_failure(provider)
+                bus.emit("llm_provider_failure", {"provider": provider.name, "error": str(exc)[:60]})
+                bus.emit("llm_provider_failover", {"provider": provider.name, "error": str(exc)[:60]})
+                errors.append(f"{provider.name}: {exc}")
+
+        raise RuntimeError(
+            "[CRITICAL] All available LLM providers failed.\n"
+            + "\n".join(errors)
+        )
+
 
 # ============================================================
 # Build Providers
@@ -313,7 +376,7 @@ def execute_agent_with_memory(state_or_messages: Any, **kwargs: Any) -> str:
     else:
         messages = str(state_or_messages)
 
-    return router.generate(
+    return router.generate_stream(
         messages,
         **kwargs,
     )

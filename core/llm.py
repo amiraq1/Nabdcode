@@ -188,6 +188,8 @@ class LocalConfig:
 
     timeout: int = 15
 
+    connect_timeout: float = 3.0  # first-byte timeout before failover
+
     temperature: float = 0.1
 
     max_tokens: int = 2048
@@ -379,3 +381,65 @@ class LocalClient:
         except Exception:
 
             return False
+
+    # ── Streaming (SSE) ──────────────────────────────────────────────────
+
+    def generate_stream(
+        self,
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        """Send a streaming request and accumulate the full response.
+
+        Emits bus events for each token chunk.
+        Yields the full accumulated response string.
+        """
+        payload = self._build_payload(messages, **kwargs)
+        # Force stream=True for this code path
+        payload["stream"] = True
+
+        body = json.dumps(payload).encode("utf-8")
+
+        request = urllib.request.Request(
+            self.config.base_url,
+            headers=self.headers,
+            method="POST",
+            data=body,
+        )
+
+        from engine.events import bus
+
+        accumulated: list[str] = []
+
+        try:
+            with urllib.request.urlopen(request, timeout=self.config.connect_timeout) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    # SSE: "data: ..."
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                accumulated.append(content)
+                                bus.emit("llm_token", {"token": content})
+                        except json.JSONDecodeError:
+                            continue
+
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Stream connection failed: {exc.reason}") from exc
+
+        full_text = "".join(accumulated).strip()
+        if not full_text:
+            raise RuntimeError("Stream returned empty response")
+
+        return full_text

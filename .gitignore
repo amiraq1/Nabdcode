@@ -13,3 +13,4 @@ logs/
 sessions/
 brain/
 .cache/
+.provider_state.json

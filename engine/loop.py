@@ -12,33 +12,17 @@ from core.parser import extract_command, extract_json_from_response, validate_to
 from core.security import is_safe_command
 from core.utils import truncate
 from core.evidence import EvidenceLog, VerifierError
+from core.constants import is_chitchat
 
 from llm_router import execute_agent_with_memory
-
-
-# ── Capability classifier — does the prompt require tool use? ──────────────
-
-_CHITCHAT: Final[set[str]] = {
-    "hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
-    "yes", "no", "exit", "quit", "clear", "bye", "goodbye",
-}
 
 
 def _prompt_requires_investigation(text: str) -> bool:
     """Return True if this prompt asks for real work, not chitchat.
 
-    Decision is based on length and known chitchat patterns,
-    not a fragile keyword list.  Any prompt ≥5 words that isn't
-    a recognised greeting / command is treated as substantive.
+    Delegates to core/constants.is_chitchat() for the heuristic.
     """
-    lower = text.lower().strip()
-    if not lower:
-        return False
-    if lower in _CHITCHAT:
-        return False
-    # "list files", "show me", "what's in", etc. all pass
-    # because they have multiple words and aren't chitchat.
-    return True
+    return not is_chitchat(text)[0]
 
 
 class ToolRequiredError(RuntimeError):
@@ -76,6 +60,7 @@ class ExecutionLoop:
         max_output_len: int = 2000,
         llm_provider: Callable[[list[dict[str, Any]]], str] | None = None,
         dispatcher: Dispatcher | None = None,
+        evidence_log: EvidenceLog | None = None,
     ) -> None:
 
         self.state = state
@@ -83,7 +68,7 @@ class ExecutionLoop:
         self.llm_provider = llm_provider or execute_agent_with_memory
         self.max_output_len = max_output_len
         self._recent_calls: deque[ToolCall] = deque(maxlen=16)
-        self.evidence_log = EvidenceLog()
+        self.evidence_log = evidence_log or EvidenceLog()
 
     def run(self, user_prompt: str) -> None:
         """
@@ -220,7 +205,10 @@ class ExecutionLoop:
                     # Catches: missing evidence, failed evidence, type mismatch.
                     require_tools = _prompt_requires_investigation(user_prompt)
                     try:
-                        self.evidence_log.verify(require_tools=require_tools)
+                        self.evidence_log.verify(
+                            require_tools=require_tools,
+                            claim=response,
+                        )
                     except VerifierError as verr:
                         self.state.update_status("ERROR")
                         bus.emit(
