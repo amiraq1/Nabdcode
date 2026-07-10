@@ -28,7 +28,7 @@ from typing import Any
 
 from core.sanitize import sanitize
 
-DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct")
+DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
 
 
 @dataclass(slots=True)
@@ -70,20 +70,19 @@ class OpenRouterClient:
     ):
 
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("NVIDIA_API_KEY")
-        self.model = model or DEFAULT_MODEL
+        self.model = model
         self.config = config or OpenRouterConfig()
 
     @property
     def headers(self) -> dict[str, str]:
-        if not self.api_key:
-            self.api_key = os.getenv("NVIDIA_API_KEY")
-        if not self.api_key:
+        api_key = self.api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("NVIDIA_API_KEY")
+        if not api_key:
             raise AuthenticationError(
-                "NVIDIA_API_KEY environment variable is missing."
+                "OPENROUTER_API_KEY environment variable is missing."
             )
 
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": self.config.referer,
             "X-Title": self.config.title,
@@ -95,9 +94,9 @@ class OpenRouterClient:
         messages: list[dict[str, Any]],
         **kwargs: Any,
     ) -> dict[str, Any]:
-
+        model = self.model or os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
         payload = {
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "temperature": self.config.temperature,
             "top_p": self.config.top_p,
