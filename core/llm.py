@@ -462,3 +462,52 @@ class LocalClient:
             raise RuntimeError("Stream returned empty response")
 
         return full_text
+
+
+class NvidiaClient:
+    BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "meta/llama-3.1-70b-instruct",
+        timeout: int = 60,
+    ):
+        self.api_key = api_key or os.getenv("NVIDIA_API_KEY")
+        self.model = os.getenv("NVIDIA_MODEL", model)
+        self.timeout = timeout
+
+    def generate_response(
+        self,
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        api_key = self.api_key or os.getenv("NVIDIA_API_KEY")
+        if not api_key:
+            raise AuthenticationError("NVIDIA_API_KEY environment variable is missing.")
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "NabdAgent/1.0",
+        }
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": kwargs.get("temperature", 0.1),
+            "max_tokens": kwargs.get("max_tokens", 4000),
+        }
+
+        request = urllib.request.Request(
+            self.BASE_URL,
+            headers=headers,
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            content = data.get("choices", [{}])[0].get("message", {}).get("content")
+            if not content:
+                raise RuntimeError("Empty response from NVIDIA API")
+            return sanitize(content)

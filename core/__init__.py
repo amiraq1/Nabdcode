@@ -24,6 +24,7 @@ from core.llm import (
     ServerError,
     LocalClient,
     LocalConfig,
+    NvidiaClient,
 )
 
 __all__ = [
