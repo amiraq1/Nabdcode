@@ -328,37 +328,22 @@ class ProviderRouter:
             + "\n".join(errors)
         )
 
+    generate_response = generate_stream
+
 
 # ============================================================
 # Build Providers
 # ============================================================
 
 router = ProviderRouter(
-
     [
-
         ProviderState(
-
-            name="Local",
-
-            client=LocalClient(),
-
-            priority=0,
-
-        ),
-
-        ProviderState(
-
             name="OpenRouter",
-
             client=OpenRouterClient(),
-
-            priority=1,
-
+            priority=0,
+            enabled=True,
         ),
-
     ]
-
 )
 
 

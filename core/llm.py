@@ -1,5 +1,23 @@
 from __future__ import annotations
 
+import os
+for _env_path in [os.path.join(os.path.expanduser("~"), ".env"), ".env"]:
+    if os.path.exists(_env_path):
+        try:
+            with open(_env_path, "r", encoding="utf-8") as _ef:
+                for _line in _ef:
+                    _line=_line.strip()
+                    if _line and not _line.startswith("#") and "=" in _line:
+                        _k,_v=_line.split("=",1)
+                        _k=_k.strip()
+                        _v=_v.strip().strip("'").strip('"')
+                        if _k and not os.getenv(_k):
+                            os.environ[_k]=_v
+        except Exception:
+            pass
+
+
+
 import json
 import os
 import time
@@ -10,10 +28,7 @@ from typing import Any
 
 from core.sanitize import sanitize
 
-DEFAULT_MODEL = os.getenv(
-    "NVIDIA_MODEL",
-    "meta/llama-3.1-70b-instruct"
-)
+DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct")
 
 
 @dataclass(slots=True)
@@ -45,7 +60,7 @@ class ServerError(OpenRouterError):
 
 class OpenRouterClient:
 
-    BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+    BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
     def __init__(
         self,
@@ -54,7 +69,7 @@ class OpenRouterClient:
         config: OpenRouterConfig | None = None,
     ):
 
-        self.api_key = api_key or os.getenv("NVIDIA_API_KEY")
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("NVIDIA_API_KEY")
         self.model = model or DEFAULT_MODEL
         self.config = config or OpenRouterConfig()
 
