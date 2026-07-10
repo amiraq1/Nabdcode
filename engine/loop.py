@@ -16,7 +16,7 @@ from pathlib import Path
 from core.evidence import EvidenceLog, VerifierError
 from core.constants import is_chitchat
 from core.memory import load_memory, write_lesson
-
+from core.sanitize import sanitize
 from llm_router import execute_agent_with_memory
 
 
@@ -179,8 +179,8 @@ class ExecutionLoop:
                 compacted = self._compact_messages(self.state.get_messages())
                 if compacted and compacted[0].get("role") == "system":
                     agent_md = Path("AGENT.md")
-                    rules = agent_md.read_text(encoding="utf-8") if agent_md.exists() else ""
-                    memory = load_memory()
+                    rules = sanitize(agent_md.read_text(encoding="utf-8"))[:4000] if agent_md.exists() else ""
+                    memory = sanitize(load_memory() or "")[:4000]
                     prefix = ""
                     if rules:
                         prefix += f"{rules}\n\n"

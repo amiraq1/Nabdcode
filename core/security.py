@@ -109,7 +109,8 @@ def _dangerous_operators_unquoted(command: str) -> Tuple[bool, str]:
     return True, ""
 
 
-DANGEROUS_FLAGS = {"-c", "-e", "--eval", "--exec"}
+DANGEROUS_FLAGS = {"-c", "-e", "--eval", "--exec", "--import"}
+INTERPRETERS = {"python", "python3", "bash", "sh", "node"}
 
 
 def _validate_segment_args(tokens: List[str]) -> Tuple[bool, str]:
@@ -121,6 +122,14 @@ def _validate_segment_args(tokens: List[str]) -> Tuple[bool, str]:
     for arg in tokens[1:]:
         if arg in DANGEROUS_FLAGS:
             return False, f"Dangerous argument '{arg}' is not allowed for binary '{bin_name}'."
+    if bin_name in INTERPRETERS:
+        from core.parser import _validate_path
+        for arg in tokens[1:]:
+            if arg.endswith(".py") or arg.endswith(".sh") or arg.endswith(".js"):
+                if not _validate_path(arg):
+                    return False, f"Script file execution '{arg}' outside workspace is not allowed for '{bin_name}'."
+            elif arg.startswith("/") and not _validate_path(arg):
+                return False, f"Absolute path '{arg}' outside workspace is not allowed for '{bin_name}'."
     return True, ""
 
 
@@ -147,7 +156,9 @@ def validate(command: str) -> Tuple[bool, str]:
         ok, segments, err = split_pipe_segments(cmd_str)
         if not ok:
             return False, err
-        for seg_tokens in segments:
+        for idx, seg_tokens in enumerate(segments):
+            if idx > 0 and seg_tokens and seg_tokens[0] in INTERPRETERS:
+                return False, f"Piping into interpreter '{seg_tokens[0]}' is not allowed."
             ok_seg, reason = _validate_segment_args(seg_tokens)
             if not ok_seg:
                 return False, reason

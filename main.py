@@ -21,6 +21,8 @@ from engine.events import bus
 from engine.renderer import Renderer
 from core.app_context import AppContext
 from core.constants import TODO_DISCIPLINE
+from core.sanitize import sanitize
+from core.parser import normalize
 
 
 # ── Tool output summariser ─────────────────────────────────────────────────
@@ -262,14 +264,15 @@ def main() -> None:
         if _latest_path.exists():
             try:
                 _data = json.loads(_latest_path.read_text(encoding="utf-8"))
-                _todos = _data.get("todos")
-                if _todos:
-                    ctx.todo_manager.restore(_todos)
-                _evidence_records = _data.get("evidence_records")
-                if _evidence_records:
-                    ctx.evidence_log.restore({"records": _evidence_records})
-            except Exception:
-                pass
+                if isinstance(_data, dict):
+                    _todos = _data.get("todos")
+                    if isinstance(_todos, list):
+                        ctx.todo_manager.restore(_todos)
+                    _evidence_records = _data.get("evidence_records")
+                    if isinstance(_evidence_records, dict):
+                        ctx.evidence_log.restore({"records": _evidence_records})
+            except Exception as exc:
+                sys.stderr.write(f"[Warning] Session restore failed: {exc}\n")
     wire_events(ctx)
 
     # Isolate provider state file per session
@@ -406,8 +409,11 @@ def main() -> None:
 
         # Replace the prompt_toolkit line with a background-highlighted version
         # so the user's input is visually distinct from the agent response.
-        sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {user_input}\033[0m\n")
+        safe_display = sanitize(user_input)
+        sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {safe_display}\033[0m\n")
         sys.stdout.flush()
+
+        clean_prompt = normalize(user_input)[:10000]
 
         state.reset_step_count()
         engine = ExecutionLoop(
@@ -423,7 +429,7 @@ def main() -> None:
             new = list(old_termios)
             new[3] = new[3] & ~termios.ECHO
             termios.tcsetattr(fd, termios.TCSANOW, new)
-            engine.run(user_input)
+            engine.run(clean_prompt)
         except KeyboardInterrupt:
             ctx.renderer.think_end()
             ctx.renderer.flush()

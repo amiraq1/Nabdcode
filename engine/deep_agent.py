@@ -15,7 +15,8 @@ from typing import Any, Callable, List
 from engine.events import bus
 from engine.state import RuntimeState
 from engine.dispatcher import Dispatcher
-from core.parser import extract_command
+from core.parser import extract_command, validate_tool_call
+from core.security import is_safe_command
 from core.evidence import EvidenceLog, VerifierError
 from tools.models import ToolResult
 from core.sanitize import sanitize
@@ -251,6 +252,17 @@ class NativeDeepAgent:
                 if tool_call is None:
                     state.errors.append(f"PARSE_FAILURE: LLM did not produce a tool call for step '{step[:60]}'")
                     continue
+
+                v_res = validate_tool_call({"tool": tool_call.tool, "args": tool_call.args})
+                if not v_res.ok:
+                    state.errors.append(f"SECURITY_REJECT: Schema validation failed for '{tool_call.tool}': {v_res.error}")
+                    continue
+
+                if tool_call.tool == "execute_shell":
+                    command = str(tool_call.args.get("command", ""))
+                    if not is_safe_command(command):
+                        state.errors.append(f"SECURITY_REJECT: Unsafe shell command blocked: {command[:60]}")
+                        continue
 
                 try:
                     result = self.dispatcher.dispatch(tool_call.tool, tool_call.args)

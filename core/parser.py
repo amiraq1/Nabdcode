@@ -359,11 +359,14 @@ def _parse_bash(text: str) -> ToolCall | None:
     if _is_hallucinated_python_tool_call(candidate):
         return None
 
+    payload = {"tool": "execute_shell", "args": {"command": candidate}}
+    res = validate_tool_call(payload)
+    if not res.ok or not res.data:
+        return None
+
     return ToolCall(
         tool="execute_shell",
-        args={
-            "command": candidate,
-        },
+        args={"command": candidate},
     )
 
 
