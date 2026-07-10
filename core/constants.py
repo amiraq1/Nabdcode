@@ -57,9 +57,10 @@ SAFE_BINARIES: Final[Set[str]] = {
 
 DANGEROUS_STRICT: Final[Set[str]] = {";", "`", "$("}
 TODO_DISCIPLINE: Final[str] = """
-## TODO Discipline (Mandatory)
+## TODO Discipline (Applies ONLY to Category B - Codebase/Filesystem tasks)
+## IGNORE this entire section for greetings, general knowledge, countries, math, facts.
 
-When working on a multi-step task, you MUST use the `todo_write` tool as follows:
+When working on a multi-step CODEBASE task, you MUST use the `todo_write` tool as follows:
 
 1. **Before starting**, call `todo_write(action="plan", items=[...])` with the full list of steps you intend to take. Do this even for tasks that seem simple if they involve more than one file or more than one verification step.
 
