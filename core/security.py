@@ -109,19 +109,6 @@ def _dangerous_operators_unquoted(command: str) -> Tuple[bool, str]:
     return True, ""
 
 
-# ── Public API ──────────────────────────────────────────────────────────────
-
-def validate(command: str) -> Tuple[bool, str]:
-    if not command or not command.strip():
-        return False, "Command is empty."
-
-    cmd_str = command.strip()
-
-    # 1. Check for dangerous operators at the unquoted syntactic level
-    safe, reason = _dangerous_operators_unquoted(cmd_str)
-    if not safe:
-        return False, reason
-
 DANGEROUS_FLAGS = {"-c", "-e", "--eval", "--exec"}
 
 
@@ -136,6 +123,8 @@ def _validate_segment_args(tokens: List[str]) -> Tuple[bool, str]:
             return False, f"Dangerous argument '{arg}' is not allowed for binary '{bin_name}'."
     return True, ""
 
+
+# ── Public API ──────────────────────────────────────────────────────────────
 
 def validate(command: str) -> Tuple[bool, str]:
     if not command or not command.strip():
