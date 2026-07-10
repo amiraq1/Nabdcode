@@ -37,17 +37,50 @@ def _extract_subjects(tool: str, command_or_path: str) -> FrozenSet[str]:
 
 # ── Core data types ─────────────────────────────────────────────────────────
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class EvidenceRecord:
     """A completed tool call — fully immutable after creation."""
 
-    evidence_id: str            # "E-1", "E-2", …
-    evidence_type: str          # "shell", "filesystem", "web", "memory"
-    tool: str                   # "execute_shell", "file_system", …
-    command_or_path: str        # brief summary of what was invoked
-    success: bool               # if False, findings referencing this are rejected
-    output_snippet: str         # first 200 chars of stdout/stderr
-    covered_subjects: FrozenSet[str]  # extracted keywords from the command/path
+    evidence_id: str = "E-0"
+    evidence_type: str = "other"
+    tool: str = "unknown"
+    command_or_path: str = ""
+    success: bool = True
+    output_snippet: str = ""
+    covered_subjects: FrozenSet[str] = field(default_factory=frozenset)
+
+    def __init__(
+        self,
+        evidence_id: str = "E-0",
+        evidence_type: str = "other",
+        tool: str = "unknown",
+        command_or_path: str = "",
+        success: bool = True,
+        output_snippet: str = "",
+        covered_subjects: FrozenSet[str] = frozenset(),
+        *,
+        tool_name: Optional[str] = None,
+        input: str = "",
+        raw_output: Optional[str] = None,
+        exit_code: int = 0,
+        timestamp: float = 0.0,
+        call_id: str = "",
+    ) -> None:
+        object.__setattr__(self, "evidence_id", evidence_id if evidence_id != "E-0" else (call_id or "E-0"))
+        object.__setattr__(self, "evidence_type", evidence_type)
+        object.__setattr__(self, "tool", tool_name or tool)
+        object.__setattr__(self, "command_or_path", input or command_or_path)
+        object.__setattr__(self, "success", (exit_code == 0) if exit_code != 0 else success)
+        object.__setattr__(self, "output_snippet", raw_output if raw_output is not None else output_snippet)
+        object.__setattr__(self, "covered_subjects", covered_subjects)
+
+    @property
+    def tool_name(self) -> str:
+        return self.tool
+
+    @property
+    def raw_output(self) -> str:
+        return self.output_snippet
 
     # ── Serialization ───────────────────────────────────────────────────
 
@@ -467,6 +500,14 @@ class EvidenceLog:
         )
         self._records[eid] = rec
         return rec
+
+    def add(self, rec: EvidenceRecord) -> EvidenceRecord:
+        eid = rec.evidence_id if rec.evidence_id != "E-0" else self.next_id()
+        self._records[eid] = rec
+        return rec
+
+    def get_records(self) -> List[EvidenceRecord]:
+        return list(self._records.values())
 
     # ── queries ─────────────────────────────────────────────────────────
 
