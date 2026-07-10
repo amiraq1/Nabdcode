@@ -140,6 +140,7 @@ class ExecutionLoop:
         interrupted = False
         start_time = time.time()
         self._self_correct_count = 0
+        last_response_fingerprints = []
 
         try:
 
@@ -194,6 +195,34 @@ class ExecutionLoop:
                             }
                         ] + compacted[1:]
                 response = self.llm_provider(compacted)
+
+                # ================================
+                # [REPETITION GUARD LOGIC]
+                # ================================
+                fingerprint = response.strip()[:200]
+                if fingerprint and last_response_fingerprints.count(fingerprint) >= 2:
+                    self.state.update_status("COMPLETED")
+                    safe_msg = self._safe_shutdown(
+                        user_prompt,
+                        "CRITICAL: Infinite Replication Loop Detected (Entropy = 0). "
+                        "Aborting session to preserve API budget and memory."
+                    )
+                    bus.emit(
+                        "loop_completed",
+                        {
+                            "reason": "infinite_replication_loop",
+                            "output": safe_msg,
+                        },
+                    )
+                    return
+
+                if fingerprint:
+                    last_response_fingerprints.append(fingerprint)
+                    if len(last_response_fingerprints) > 3:
+                        last_response_fingerprints.pop(0)
+                # ================================
+                # [END OF GUARD LOGIC]
+                # ================================
 
                 elapsed = time.perf_counter() - started
 
