@@ -2,7 +2,6 @@ __pycache__/
 *.pyc
 .env
 *.env
-core/config.py
 *secret*
 *.log
 *.gguf

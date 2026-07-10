@@ -235,6 +235,7 @@ def main() -> None:
         pass
 
     ctx = AppContext.build()
+    state = RuntimeState(session_id=ctx.session_manager.session_id, max_steps=50)
     deleted = ctx.session_manager.enforce_retention_policy(ctx.config.max_sessions)
 
     # Restore todos + evidence from the latest session (v2+ only) — read JSON
