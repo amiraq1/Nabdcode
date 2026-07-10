@@ -10,6 +10,7 @@ except ImportError:
 
 from tools.base import BaseTool
 from tools.models import ToolResult
+from core.sanitize import sanitize
 
 
 def _is_online(timeout: float = 1.5) -> bool:
@@ -132,13 +133,13 @@ class WebSearchTool(BaseTool):
                     start=1,
                 ):
 
-                    title = result.get("title") or "Untitled"
+                    title = sanitize(result.get("title") or "Untitled")
                     url = (
                         result.get("href")
                         or result.get("url")
                         or ""
                     )
-                    snippet = (
+                    snippet = sanitize(
                         result.get("body")
                         or result.get("snippet")
                         or "No description."

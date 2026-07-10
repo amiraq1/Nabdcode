@@ -18,6 +18,7 @@ from engine.dispatcher import Dispatcher
 from core.parser import extract_command
 from core.evidence import EvidenceLog, VerifierError
 from tools.models import ToolResult
+from core.sanitize import sanitize
 
 
 def extract_json_array(raw_output: str) -> List[Any]:
@@ -25,7 +26,7 @@ def extract_json_array(raw_output: str) -> List[Any]:
     if not raw_output or not isinstance(raw_output, str):
         return []
 
-    text = raw_output.strip()
+    text = sanitize(raw_output).strip()
     text = re.sub(r"```(?:json)?\s*", "", text)
     text = re.sub(r"```\s*", "", text)
 
@@ -33,14 +34,14 @@ def extract_json_array(raw_output: str) -> List[Any]:
     if match:
         candidate = match.group(0)
         try:
-            parsed = json.loads(candidate)
+            parsed = json.loads(sanitize(candidate))
             if isinstance(parsed, list):
                 return parsed
         except json.JSONDecodeError:
             pass
 
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(sanitize(text))
         if isinstance(parsed, list):
             return parsed
     except json.JSONDecodeError:
@@ -364,8 +365,32 @@ class NativeDeepAgent:
                 state.iteration += 1
                 state = self.replan_node(state)
 
-        # Final evidence verification gate — same guard as ExecutionLoop's
-        # no-tool-call path.  Uses L0 then L1 (if claim has technical tokens).
-        self.evidence_log.verify(require_tools=True, claim=state.final_output)
+        # Check chitchat first
+        from core.constants import is_chitchat
+        is_chat, _ = is_chitchat(task)
+        if is_chat and not state.past_steps:
+            return state.final_output
+
+        # Final evidence verification gate with self-correction
+        retry_count = 0
+        MAX_SELF_CORRECT = 3
+        while retry_count <= MAX_SELF_CORRECT:
+            try:
+                self.evidence_log.verify(require_tools=True, claim=state.final_output)
+                return state.final_output
+            except Exception as verr:
+                if retry_count == MAX_SELF_CORRECT:
+                    state.final_output = (
+                        f"تعذر إكمال المهمة بعد {MAX_SELF_CORRECT} محاولات تصحيح ذاتي. آخر خطأ: {verr}"
+                    )
+                    break
+                critique = (
+                    f"[VERIFIER CRITIQUE]: {verr}. صحح مسارك وأعد المحاولة بالأداة الصحيحة."
+                )
+                state.observations.append(critique)
+                state.iteration += 1
+                state = self.execute_node(state)
+                state = self.review_node(state)
+                retry_count += 1
 
         return state.final_output

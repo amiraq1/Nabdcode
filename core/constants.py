@@ -21,7 +21,16 @@ CHITCHAT_SET: Final[Set[str]] = {
     "hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
     "yes", "no", "exit", "quit", "clear", "bye", "goodbye",
     "sup", "yo", "thanks!", "ok!", "yes!", "no!",
+    "iraq", "مرحبا", "مرحبا!", "أهلا", "أهلا!", "هلا", "سلام",
 }
+
+HARD_RULES: Final[str] = """
+[RULES - VERIFIER CONTRACT]
+1. ممنوع الادعاء العددي (found, there are, total, عدد) بدون اقتباس حرفي من ناتج الأداة بين backticks.
+2. إذا سُئلت how many / count، يجب استدعاء file_system.read أولا ثم العد من المخرجات.
+3. إذا كانت المهمة chitchat مثل 'iraq' أو 'مرحبا'، أجب مباشرة بدون أدوات وبدون مطالبة بدليل.
+"""
+
 
 
 def is_chitchat(text: str) -> Tuple[bool, str]:

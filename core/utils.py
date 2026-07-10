@@ -4,6 +4,7 @@ import threading
 from typing import List, Tuple
 
 from core.security import split_pipe_segments, validate
+from core.sanitize import sanitize
 
 
 def safe_execute_command(command: str, timeout: int = 30) -> Tuple[int, str, str]:
@@ -109,7 +110,7 @@ def safe_execute_command(command: str, timeout: int = 30) -> Tuple[int, str, str
                     p.wait()
 
             combined_stderr = "".join("".join(part) for part in stderr_parts)
-            return last_proc.returncode or 0, stdout_data or "", combined_stderr or ""
+            return last_proc.returncode or 0, sanitize(stdout_data or ""), sanitize(combined_stderr or "")
         else:
             # Simple command
             args = shlex.split(cmd_str)
@@ -122,7 +123,7 @@ def safe_execute_command(command: str, timeout: int = 30) -> Tuple[int, str, str
                 text=True,
                 timeout=timeout,
             )
-            return result.returncode, result.stdout or "", result.stderr or ""
+            return result.returncode, sanitize(result.stdout or ""), sanitize(result.stderr or "")
 
     except subprocess.TimeoutExpired:
         return -1, "", f"Command execution timed out after {timeout} seconds."

@@ -8,6 +8,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.sanitize import sanitize
+
 DEFAULT_MODEL = os.getenv(
     "NVIDIA_MODEL",
     "meta/llama-3.1-70b-instruct"
@@ -139,7 +141,7 @@ class OpenRouterClient:
                             "Empty model response."
                         )
 
-                    return content
+                    return sanitize(content)
 
             except urllib.error.HTTPError as e:
 
@@ -345,7 +347,7 @@ class LocalClient:
                 "Model returned empty content."
             )
 
-        return content.strip()
+        return sanitize(content.strip())
 
     def generate_response(
         self,
@@ -424,13 +426,16 @@ class LocalClient:
                             break
                         try:
                             chunk = json.loads(data_str)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                accumulated.append(content)
-                                bus.emit("llm_token", {"token": content})
                         except json.JSONDecodeError:
-                            continue
+                            try:
+                                chunk = json.loads(sanitize(data_str, strip_control=False))
+                            except json.JSONDecodeError:
+                                continue
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        content = sanitize(delta.get("content", ""))
+                        if content:
+                            accumulated.append(content)
+                            bus.emit("llm_token", {"token": content})
 
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
@@ -438,7 +443,7 @@ class LocalClient:
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Stream connection failed: {exc.reason}") from exc
 
-        full_text = "".join(accumulated).strip()
+        full_text = sanitize("".join(accumulated).strip())
         if not full_text:
             raise RuntimeError("Stream returned empty response")
 

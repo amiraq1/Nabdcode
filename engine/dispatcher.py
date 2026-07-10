@@ -27,6 +27,12 @@ class Dispatcher:
         """
         Dispatch to the appropriate tool with timeout monitoring to prevent hangs.
         """
+        # Resolve dotted tool names (e.g. file_system.write -> file_system)
+        if tool_name not in registry and "." in tool_name:
+            real_tool = tool_name.split(".")[0]
+            if real_tool in registry:
+                tool_name = real_tool
+
         # 1. Emit execution start event
         bus.emit("tool_started", {"tool": tool_name, "args": kwargs, "step": self.state.step_count})
 

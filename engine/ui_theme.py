@@ -143,8 +143,14 @@ def collapsed(n_lines: int, key_hint: str = "ctrl+o to expand") -> str:
 
 
 # ── Tools → badge map ──────────────────────────────────────────────────────
-def map_tool_to_badge(tool_name: str) -> str:
+def map_tool_to_badge(tool_name: str, args: Optional[dict[str, Any]] = None) -> str:
     t = (tool_name or "").lower()
+    if t in ("file_system", "file") and args:
+        action = str(args.get("action", "")).lower()
+        if action in ("write", "append", "replace", "patch"):
+            return "EDIT"
+        if action in ("read",):
+            return "READ"
     if "shell" in t or "exec" in t or t == "bash":
         return "SHELL"
     if "read" in t or t in ("read_file", "open_file", "file_system", "file"):
@@ -162,6 +168,25 @@ def map_tool_to_badge(tool_name: str) -> str:
     return tool_name.upper()[:12] or "TOOL"
 
 
+# ── Stage-aware status verbs ──────────────────────────────────────────────
+def select_status_verb(stage: str = "", last_tool: str = "", turn_index: int = 0) -> str:
+    """Select stage-aware dynamic status verbs matching Phase UI-3 spec."""
+    s = (stage or "").lower()
+    t = (last_tool or "").lower()
+
+    if "plan" in s or "choreograph" in s:
+        return "Choreographing" if turn_index % 2 == 1 else "Planning"
+    if s == "edit" or "write" in t or "edit" in t or "replace" in t or "patch" in t:
+        return "Crafting" if turn_index % 2 == 1 else "Sculpting"
+    if s == "shell" or "shell" in t or "exec" in t or "test" in t or "build" in t:
+        return "Verifying" if turn_index % 2 == 1 else "Tuning"
+    if s == "read" or "read" in t or "search" in t or "memory" in t:
+        return "Inspecting" if "memory" in t or "search" in t else "Examining"
+    if s in ("init", "user_input", "first_turn"):
+        return "Reading" if turn_index % 2 == 1 else "Examining"
+    return "Planning" if turn_index % 2 == 1 else "Thinking"
+
+
 # ── Diff rendering ──────────────────────────────────────────────────────────
 def _diff_line(line: str) -> str:
     if line.startswith("+") and not line.startswith("+++"):
@@ -171,7 +196,7 @@ def _diff_line(line: str) -> str:
     return dim(line)
 
 
-def render_diff(diff_text: str, max_lines: int = 12) -> str:
+def render_diff(diff_text: str, max_lines: int = 16) -> str:
     if not diff_text:
         return ""
     raw = diff_text.splitlines()

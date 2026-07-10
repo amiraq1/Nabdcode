@@ -2,6 +2,7 @@ import json
 import sqlite3
 import time
 from collections import OrderedDict
+from datetime import datetime
 from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple
@@ -365,3 +366,24 @@ class MemoryManager:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+
+MEMORY_FILE = Path("MEMORY.md")
+MAX_MEMORY_CHARS = 4000  # لمنع انفجار السياق، نفس فكرة Compaction
+
+
+def load_memory() -> str:
+    if not MEMORY_FILE.exists():
+        return ""
+    text = MEMORY_FILE.read_text(encoding="utf-8")
+    return text[-MAX_MEMORY_CHARS:]
+
+
+def write_lesson(problem: str, solution: str):
+    entry = f"\n## {datetime.now().date()} - درس مستفاد\n"
+    entry += f"**المشكلة:** {problem}\n"
+    entry += f"**الحل:** {solution}\n"
+
+    with open(MEMORY_FILE, "a", encoding="utf-8") as f:
+        f.write(entry)
+

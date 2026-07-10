@@ -11,8 +11,10 @@ from engine.state import RuntimeState
 from core.parser import extract_command, extract_json_from_response, validate_tool_call, ToolCall
 from core.security import is_safe_command
 from core.utils import truncate
+from pathlib import Path
 from core.evidence import EvidenceLog, VerifierError
 from core.constants import is_chitchat
+from core.memory import load_memory, write_lesson
 
 from llm_router import execute_agent_with_memory
 
@@ -25,6 +27,11 @@ def _prompt_requires_investigation(text: str) -> bool:
     return not is_chitchat(text)[0]
 
 
+MAX_SELF_CORRECT: Final[int] = 3
+MAX_BUDGET_SECONDS: Final[int] = 180  # سقف الميزانية: 3 دقائق لكل مهمة على Termux
+MAX_BUDGET_TOKENS: Final[int] = 12000  # سقف التوكنات التقريبي
+
+
 class ToolRequiredError(RuntimeError):
     """Raised when the agent answered without using required tools."""
     pass
@@ -32,23 +39,7 @@ class ToolRequiredError(RuntimeError):
 
 class ExecutionLoop:
     """
-    Autonomous execution engine.
-
-    Flow:
-
-        User
-          ↓
-        LLM
-          ↓
-        Parser
-          ↓
-        Dispatcher
-          ↓
-        Tool
-          ↓
-        Feedback
-          ↓
-        LLM
+    Autonomous execution engine with Self-Correction Loop.
     """
 
     POLL_DELAY: Final[float] = 0.5
@@ -69,6 +60,56 @@ class ExecutionLoop:
         self.max_output_len = max_output_len
         self._recent_calls: deque[ToolCall] = deque(maxlen=16)
         self.evidence_log = evidence_log or EvidenceLog()
+        self._self_correct_count = 0
+
+    def _build_critique(self, result: Any, last_tool_call: Any = None) -> str:
+        findings_str = str(getattr(result, "findings", result))
+        if "technical anchors" in findings_str:
+            return (
+                f"[VERIFIER CRITIQUE L1]: {findings_str} "
+                f"قاعدتك الحالية لا تحتوي على دليل نصي. "
+                f"يجب عليك أولا استدعاء file_system.read أو shell، "
+                f"ثم اقتبس سطرا حرفيا من المخرجات في ردك. "
+                f"ممنوع الادعاء بدون اقتباس."
+            )
+        if "enumeration" in findings_str:
+            return f"[VERIFIER CRITIQUE]: ادعيت عددا بدون دليل. استخدم الأداة ثم اذكر المخرجات."
+
+        return f"[VERIFIER CRITIQUE]: {findings_str}. صحح مسارك وأعد المحاولة بالأداة الصحيحة."
+
+    def _safe_shutdown(self, task: str, last_result: Any) -> str:
+        try:
+            if hasattr(self, "executor") and hasattr(self.executor, "close_all"):
+                self.executor.close_all()
+            if hasattr(self, "session") and hasattr(self.session, "flush"):
+                self.session.flush()
+        except Exception:
+            pass
+        findings_str = str(getattr(last_result, "findings", last_result))
+        return f"تعذر إكمال المهمة بعد {MAX_SELF_CORRECT} محاولات تصحيح ذاتي. آخر خطأ: {findings_str}"
+
+    def _compact_messages(
+        self, messages: list[dict[str, Any]], keep_last_tools: int = 2
+    ) -> list[dict[str, Any]]:
+        if len(messages) <= 8:
+            return messages
+
+        system_msg = messages[0]
+        first_user = messages[1]
+
+        # Keep only the last keep_last_tools tool messages + last critique
+        tail = []
+        tool_count = 0
+        for m in reversed(messages[2:]):
+            if m.get("role") == "tool" and tool_count < keep_last_tools:
+                tail.append(m)
+                tool_count += 1
+            elif "[VERIFIER CRITIQUE" in str(m.get("content", "")):
+                tail.append(m)
+                break
+
+        tail.reverse()
+        return [system_msg, first_user] + tail
 
     def run(self, user_prompt: str) -> None:
         """
@@ -94,6 +135,8 @@ class ExecutionLoop:
         last_command = None
         repeated = 0
         interrupted = False
+        start_time = time.time()
+        self._self_correct_count = 0
 
         try:
 
@@ -101,6 +144,21 @@ class ExecutionLoop:
                 self.state.status == "RUNNING"
                 and self.state.is_loop_safe()
             ):
+
+                # 1. Budget Ceiling
+                elapsed_total = time.time() - start_time
+                token_est = sum(len(str(m.get("content", ""))) // 4 for m in self.state.get_messages())
+                if elapsed_total > MAX_BUDGET_SECONDS or token_est > MAX_BUDGET_TOKENS:
+                    self.state.update_status("COMPLETED")
+                    safe_msg = self._safe_shutdown(user_prompt, f"Budget Ceiling: time={int(elapsed_total)}s tokens~{token_est}")
+                    bus.emit(
+                        "loop_completed",
+                        {
+                            "reason": "budget_exhausted",
+                            "output": safe_msg,
+                        },
+                    )
+                    return
 
                 #
                 # LLM
@@ -115,9 +173,24 @@ class ExecutionLoop:
                     },
                 )
 
-                response = self.llm_provider(
-                    self.state.get_messages()
-                )
+                compacted = self._compact_messages(self.state.get_messages())
+                if compacted and compacted[0].get("role") == "system":
+                    agent_md = Path("AGENT.md")
+                    rules = agent_md.read_text(encoding="utf-8") if agent_md.exists() else ""
+                    memory = load_memory()
+                    prefix = ""
+                    if rules:
+                        prefix += f"{rules}\n\n"
+                    if memory:
+                        prefix += f"# ذاكرة سابقة:\n{memory}\n\n"
+                    if prefix:
+                        compacted = [
+                            {
+                                "role": "system",
+                                "content": f"{prefix}{compacted[0]['content']}",
+                            }
+                        ] + compacted[1:]
+                response = self.llm_provider(compacted)
 
                 elapsed = time.perf_counter() - started
 
@@ -205,21 +278,41 @@ class ExecutionLoop:
                     # Catches: missing evidence, failed evidence, type mismatch.
                     require_tools = _prompt_requires_investigation(user_prompt)
                     try:
-                        self.evidence_log.verify(
+                        self.evidence_log.verify_fresh(
                             require_tools=require_tools,
                             claim=response,
                         )
                     except VerifierError as verr:
-                        self.state.update_status("ERROR")
-                        bus.emit(
-                            "loop_error",
-                            {
+                        if self._self_correct_count < MAX_SELF_CORRECT:
+                            self._self_correct_count += 1
+                            critique = self._build_critique(verr)
+                            self.state.append_message({"role": "user", "content": critique})
+                            bus.emit("verifier_critique", {
                                 "step": self.state.step_count,
-                                "error": str(verr),
-                            },
-                        )
-                        raise ToolRequiredError(str(verr))
+                                "attempt": self._self_correct_count,
+                                "max_attempts": MAX_SELF_CORRECT,
+                                "critique": critique,
+                            })
+                            self.state.increment_step()
+                            time.sleep(self.POLL_DELAY)
+                            continue
+                        else:
+                            self.state.update_status("COMPLETED")
+                            safe_msg = self._safe_shutdown(user_prompt, verr)
+                            bus.emit(
+                                "loop_completed",
+                                {
+                                    "reason": "self_correct_exhausted",
+                                    "output": safe_msg,
+                                },
+                            )
+                            return
 
+                    if self._self_correct_count > 0:
+                        write_lesson(
+                            problem=f"فشل أولي في التحقق وتم حله بعد {self._self_correct_count} محاولة تصحيح",
+                            solution=f"تم الحل عبر الالتزام بقواعد دستور العميل والاقتباس من المخرجات",
+                        )
                     self.state.update_status("COMPLETED")
 
                     bus.emit(

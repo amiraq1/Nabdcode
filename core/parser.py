@@ -5,7 +5,9 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Final, Optional
+
+from core.sanitize import sanitize
 
 # Pinned workspace root — set once by AppContext.build(), never re-evaluated.
 # Falls back to Path.cwd() if not explicitly set.
@@ -50,13 +52,13 @@ def normalize(text: str) -> str:
     """
     Normalize user-facing input:
       - NFKC (Unicode homoglyph prevention)
-      - Strip ASCII control characters except \n, \t
+      - Strip ANSI sequences and illegal control characters except \n, \t
     Returns the normalized string.  Non-strings are returned as-is.
     """
     if not isinstance(text, str):
         return text
     normalized = unicodedata.normalize("NFKC", text)
-    return "".join(ch for ch in normalized if ch == "\n" or ch == "\t" or not unicodedata.category(ch).startswith("C"))
+    return sanitize(normalized)
 
 
 # ---------------------------------------------------------------------
@@ -153,8 +155,9 @@ def _validate_path(path: str) -> bool:
 
 def validate_tool_call(payload: Any) -> ValidationResult:
     if isinstance(payload, str):
+        payload_clean = sanitize(payload)
         try:
-            obj = json.loads(payload)
+            obj = json.loads(payload_clean)
         except json.JSONDecodeError as e:
             return ValidationResult(
                 False,
@@ -309,7 +312,8 @@ def _parse_json(text: str) -> ToolCall | None:
         return None
 
     try:
-        payload = json.loads(match.group(1))
+        inner = sanitize(match.group(1), strip_control=True)
+        payload = json.loads(inner)
     except json.JSONDecodeError:
         return None
 
@@ -320,20 +324,45 @@ def _parse_json(text: str) -> ToolCall | None:
 # Bash Strategy
 # ---------------------------------------------------------------------
 
+TOOL_NAMES_IN_CODE: Final[tuple[str, ...]] = (
+    "todo_write",
+    "file_system",
+    "evidence_log",
+    "shell",
+    "execute_shell",
+)
+
+
+def _is_hallucinated_python_tool_call(cmd: str) -> bool:
+    c = cmd.strip()
+    if not c.startswith("python "):
+        return False
+    if "import " in c and "(" in c and ")" in c:
+        return True
+    if any(
+        f" {t}(" in c or f" {t}." in c or c.startswith(f"python {t}.")
+        for t in TOOL_NAMES_IN_CODE
+    ):
+        return True
+    return False
+
 
 def _parse_bash(text: str) -> ToolCall | None:
     match = BASH_PATTERN.search(text)
     if not match:
         return None
 
-    command = match.group(1).strip()
-    if not command:
+    candidate = match.group(1).strip()
+    if not candidate:
+        return None
+
+    if _is_hallucinated_python_tool_call(candidate):
         return None
 
     return ToolCall(
         tool="execute_shell",
         args={
-            "command": command,
+            "command": candidate,
         },
     )
 
@@ -364,26 +393,18 @@ def extract_command(text: str) -> ToolCall | None:
     Parse an LLM response and extract a tool call.
 
     Priority:
-
         1. JSON Tool Call
-        2. Bash Code Block (Legacy)
-
-    Returns:
-        ToolCall | None
+        2. Bash Code Block (with hallucinated Python tool call guard)
     """
     if not text or not text.strip():
         return None
 
     text = normalize(text)
 
-    parsers = (
-        _parse_json,
-        _parse_bash,
-    )
+    # Priority 1: JSON tool calls
+    result = _parse_json(text)
+    if result is not None:
+        return result
 
-    for parser in parsers:
-        result = parser(text)
-        if result is not None:
-            return result
-
-    return None
+    # Priority 2: Bash blocks
+    return _parse_bash(text)

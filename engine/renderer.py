@@ -30,6 +30,8 @@ import threading
 import time
 from typing import Any
 
+from core.sanitize import sanitize
+
 
 # ── 5-color ANSI palette (preserved for backward compat) ────────────────────
 _COLORS: dict[str, str] = {
@@ -90,23 +92,27 @@ class Renderer:
     def badge_line(self, badge_txt: str, message: str, color: str = "cyan") -> None:
         """Single rendering primitive — appends to buffer, goes to scrollback."""
         ansi = _COLORS.get(color, _COLORS["cyan"])
+        clean = sanitize(message)
         with self._lock:
-            self._lines.append(f"{_INDENT}{ansi}[{badge_txt}]{_COLORS['reset']} {message}")
+            self._lines.append(f"{_INDENT}{ansi}[{badge_txt}]{_COLORS['reset']} {clean}")
 
     def raw(self, text: str = "") -> None:
         """Append a raw unformatted line."""
+        clean = sanitize(text)
         with self._lock:
-            self._lines.append(text)
+            self._lines.append(clean)
 
     def dim_line(self, message: str) -> None:
         """Dimmed single-line for non-critical background events."""
+        clean = sanitize(message)
         with self._lock:
-            self._lines.append(f"{_INDENT}{_COLORS['dim']}{message}{_COLORS['reset']}")
+            self._lines.append(f"{_INDENT}{_COLORS['dim']}{clean}{_COLORS['reset']}")
 
     def agent_text(self, text: str = "") -> None:
         """Append an agent response line in distinct white coloring."""
+        clean = sanitize(text)
         with self._lock:
-            self._lines.append(f"{_INDENT}{_COLORS['white']}{text}{_COLORS['reset']}")
+            self._lines.append(f"{_INDENT}{_COLORS['white']}{clean}{_COLORS['reset']}")
 
     # ── Legacy TODO checklist (preserved) ──────────────────────────────────
 
@@ -156,11 +162,10 @@ class Renderer:
                 return
             self._think_last_draw = now
             spin = next(self._spinner)
-        # Write outside the lock to avoid holding it during syscall
-        sys.stdout.write(
-            f"{_ERASE_LINE}{_INDENT}\033[2m[THINK]\033[0m {spin} {label}..."
-        )
-        sys.stdout.flush()
+            sys.stdout.write(
+                f"{_ERASE_LINE}{_INDENT}\033[2m[THINK]\033[0m {spin} {label}..."
+            )
+            sys.stdout.flush()
 
     def think_end(self) -> None:
         """Wipe the think line from the terminal completely."""
@@ -168,8 +173,8 @@ class Renderer:
             if not self._think_alive:
                 return
             self._think_alive = False
-        sys.stdout.write(_ERASE_LINE)
-        sys.stdout.flush()
+            sys.stdout.write(_ERASE_LINE)
+            sys.stdout.flush()
 
     # ── Flush (batched badge + raw lines) ──────────────────────────────────
 
@@ -180,11 +185,11 @@ class Renderer:
                 return
             lines = self._lines
             self._lines = []
-        _update_terminal_size()
-        sys.stdout.write(_ERASE_LINE)
-        sys.stdout.write("\n".join(lines))
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+            _update_terminal_size()
+            sys.stdout.write(_ERASE_LINE)
+            sys.stdout.write("\n".join(lines))
+            sys.stdout.write("\n")
+            sys.stdout.flush()
 
     # ── Stream chunk (progressive token output) ──────────────────────────
 
@@ -193,8 +198,9 @@ class Renderer:
 
         Thread-safe: uses the same lock as badge_line/raw/flush.
         """
+        clean = sanitize(text, preserve_tabs=True)
         with self._lock:
-            sys.stdout.write(text)
+            sys.stdout.write(clean)
             sys.stdout.flush()
 
     # ══════════════════════════════════════════════════════════════════════
@@ -202,7 +208,7 @@ class Renderer:
     # ══════════════════════════════════════════════════════════════════════
 
     def status_start(self, verb: str = "Examining") -> None:
-        """Begin a live status chip that updates in-place via \\r."""
+        """Begin a live status chip that updates in-place via \r."""
         with self._lock:
             self._status_alive = True
             self._status_verb = verb
@@ -222,8 +228,8 @@ class Renderer:
             if not self._status_alive:
                 return
             self._status_alive = False
-        sys.stdout.write(_ERASE_LINE)
-        sys.stdout.flush()
+            sys.stdout.write(_ERASE_LINE)
+            sys.stdout.flush()
 
     def _status_draw(self) -> None:
         """Atomically rewrite the status chip line."""
@@ -236,9 +242,9 @@ class Renderer:
             self._status_last_draw = now
             verb = self._status_verb
             count = self._token_count
-        chip = ui_status_chip(verb, count)
-        sys.stdout.write(f"{_ERASE_LINE}{_INDENT}{chip}")
-        sys.stdout.flush()
+            chip = ui_status_chip(verb, count)
+            sys.stdout.write(f"{_ERASE_LINE}{_INDENT}{chip}")
+            sys.stdout.flush()
 
     # ══════════════════════════════════════════════════════════════════════
     # Expand state — store collapsed output for ctrl+o
@@ -263,7 +269,7 @@ class Renderer:
 
         Matches Cursor style: SHELL [ls -la] or READ [core/llm.py].
         """
-        kind = map_tool_to_badge(tool)
+        kind = map_tool_to_badge(tool, args)
         detail, extra = _format_args(kind, tool, args or {})
         header = tool_header(kind, detail, extra)
         self._lines_append(header)
@@ -283,12 +289,21 @@ class Renderer:
         If *summary* is provided, emits one tree line.
         Otherwise collapses *output* lines with a folded indicator.
         """
-        lines = (output or "").splitlines()
+        output = sanitize(output or "", preserve_tabs=True)
+        summary = sanitize(summary or "")
+        lines = output.splitlines()
         n = len(lines)
 
         # Diff path
         if diff:
-            rendered = render_diff(diff)
+            diff_lines = diff.splitlines()
+            adds = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+            dels = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+            stats_line = f"{tree_prefix()}{dim(f'Updated with +{adds} -{dels}')}"
+            self._lines_append(stats_line)
+            if len(diff_lines) > 16:
+                self.store_collapsed(diff_lines)
+            rendered = render_diff(diff, max_lines=16)
             if rendered:
                 self._lines_append(rendered)
             return

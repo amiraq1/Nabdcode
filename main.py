@@ -85,15 +85,20 @@ def wire_events(ctx: AppContext) -> None:
     renderer = ctx.renderer
     metrics = ctx.metrics
     todo_manager = ctx.todo_manager
-    from engine.ui_theme import map_tool_to_badge
+    from engine.ui_theme import map_tool_to_badge, select_status_verb
 
     _last_tool_args: dict = {}
     _streaming: bool = False
+    _last_stage: str = "init"
+    _last_tool_name: str = ""
+    _turn_index: int = 0
 
     def _on_llm_started(p: dict) -> None:
-        nonlocal _streaming
+        nonlocal _streaming, _turn_index
         _streaming = False
-        renderer.status_start("Examining")
+        _turn_index += 1
+        verb = select_status_verb(stage=_last_stage, last_tool=_last_tool_name, turn_index=_turn_index)
+        renderer.status_start(verb)
         renderer.thought_start()
 
     def _on_llm_token(p: dict) -> None:
@@ -110,14 +115,16 @@ def wire_events(ctx: AppContext) -> None:
         metrics.record_api_call(duration=p.get("duration", 1.0))
 
     def _on_tool_started(p: dict) -> None:
-        nonlocal _last_tool_args
+        nonlocal _last_tool_args, _last_tool_name
         tool = p.get("tool") or p.get("name", "")
         args = p.get("args") or {}
         _last_tool_args = args
+        _last_tool_name = tool
         renderer.tool_start(tool, args)
         renderer.flush()
 
     def _on_tool_completed(p: dict) -> None:
+        nonlocal _last_stage
         result = p.get("result")
         if result is None:
             return
@@ -126,7 +133,14 @@ def wire_events(ctx: AppContext) -> None:
         output = (getattr(result, "stdout", "") or "").strip()
         stderr = (getattr(result, "stderr", "") or "").strip()
         diff_text = p.get("diff") or getattr(result, "diff", "")
-        kind = map_tool_to_badge(tool)
+        kind = map_tool_to_badge(tool, _last_tool_args)
+
+        if kind == "EDIT":
+            _last_stage = "edit"
+        elif kind == "SHELL":
+            _last_stage = "shell"
+        elif kind == "READ":
+            _last_stage = "read"
 
         # Build summary line
         summary = ""
@@ -324,14 +338,14 @@ def main() -> None:
 
     from prompt_toolkit.key_binding import KeyBindings
 
-    def _bottom_toolbar() -> str:
+    def _bottom_toolbar():
         if plan_mode:
-            return (
+            return ANSI(
                 f"\033[38;2;250;204;21mplan mode\033[0m "
                 f"\033[2m[shift+tab]\033[0m  "
                 f"\033[2m? for shortcuts\033[0m"
             )
-        return (
+        return ANSI(
             f"\033[38;2;167;139;250m» accept edits on\033[0m "
             f"\033[2m[shift+tab]\033[0m  "
             f"\033[2m? for shortcuts\033[0m"

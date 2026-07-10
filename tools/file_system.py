@@ -7,6 +7,7 @@ from typing import Final
 
 from tools.base import BaseTool
 from tools.models import ToolResult
+from core.sanitize import sanitize
 
 
 class FileAction(str, Enum):
@@ -14,6 +15,10 @@ class FileAction(str, Enum):
     WRITE = "write"
     APPEND = "append"
     REPLACE = "replace"
+
+
+MAX_DIFF_BYTES = 200 * 1024  # 200KB limit
+MAX_DIFF_LINES = 1000
 
 
 class FileSystemTool(BaseTool):
@@ -171,20 +176,32 @@ class FileSystemTool(BaseTool):
 
         return ToolResult(
             success=True,
-            stdout=text,
+            stdout=sanitize(text, preserve_tabs=True, preserve_newlines=True),
         )
 
     # ------------------------------------------------------------------
 
-    def _compute_diff(self, filename: str, old_content: str, new_content: str) -> str:
+    def _compute_diff(self, filename: str, old_content: str, new_content: str) -> tuple[str, int, int]:
         lines = list(difflib.unified_diff(
             old_content.splitlines(),
             new_content.splitlines(),
             fromfile=f"a/{filename}",
             tofile=f"b/{filename}",
+            n=3,
             lineterm=""
         ))
-        return "\n".join(lines)
+        additions = sum(1 for l in lines if l.startswith("+") and not l.startswith("+++"))
+        deletions = sum(1 for l in lines if l.startswith("-") and not l.startswith("---"))
+
+        if len(lines) > MAX_DIFF_LINES:
+            half = MAX_DIFF_LINES // 2
+            head = lines[:half]
+            tail = lines[-half:]
+            lines = head + [f"... [diff truncated (exceeded {MAX_DIFF_LINES} lines)] ..."] + tail
+        diff_str = "\n".join(lines)
+        if len(diff_str.encode("utf-8", errors="ignore")) > MAX_DIFF_BYTES:
+            diff_str = diff_str[:MAX_DIFF_BYTES - 100] + f"\n... [diff truncated (exceeded {MAX_DIFF_BYTES} bytes)] ..."
+        return diff_str, additions, deletions
 
     def _write(
         self,
@@ -209,15 +226,21 @@ class FileSystemTool(BaseTool):
             encoding="utf-8",
         )
 
-        diff_text = self._compute_diff(path.name, old_content, str(content))
+        diff_text, additions, deletions = self._compute_diff(path.name, old_content, str(content))
 
         return ToolResult(
             success=True,
             stdout=(
                 f"Wrote {len(str(content))} characters "
-                f"to '{path.name}'."
+                f"to '{path.name}' (Updated with +{additions} -{deletions})."
             ),
             diff=diff_text,
+            metadata={
+                "diff": diff_text,
+                "additions": additions,
+                "deletions": deletions,
+                "path": path.name,
+            },
         )
 
     # ------------------------------------------------------------------
@@ -245,15 +268,21 @@ class FileSystemTool(BaseTool):
 
             fp.write(str(content))
 
-        diff_text = self._compute_diff(path.name, old_content, new_content)
+        diff_text, additions, deletions = self._compute_diff(path.name, old_content, new_content)
 
         return ToolResult(
             success=True,
             stdout=(
                 f"Appended {len(str(content))} characters "
-                f"to '{path.name}'."
+                f"to '{path.name}' (Updated with +{additions} -{deletions})."
             ),
             diff=diff_text,
+            metadata={
+                "diff": diff_text,
+                "additions": additions,
+                "deletions": deletions,
+                "path": path.name,
+            },
         )
 
     # ------------------------------------------------------------------
@@ -324,12 +353,19 @@ class FileSystemTool(BaseTool):
             encoding="utf-8",
         )
 
-        diff_text = self._compute_diff(path.name, content, updated)
+        diff_text, additions, deletions = self._compute_diff(path.name, content, updated)
 
         return ToolResult(
             success=True,
             stdout=(
-                f"Successfully replaced {occurrences} occurrence(s) of text in '{path.name}'."
+                f"Successfully replaced {occurrences} occurrence(s) of text in '{path.name}' "
+                f"(Updated with +{additions} -{deletions})."
             ),
             diff=diff_text,
+            metadata={
+                "diff": diff_text,
+                "additions": additions,
+                "deletions": deletions,
+                "path": path.name,
+            },
         )

@@ -10,8 +10,11 @@ class ToolResult:
     returncode: int = 0
     status: str = ""
     diff: str = ""
+    metadata: dict = None
 
     def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
         if not self.status:
             self.status = "success" if self.success else "error"
         if not self.success and self.returncode == 0:

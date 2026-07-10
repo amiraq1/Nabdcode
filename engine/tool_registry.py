@@ -21,6 +21,9 @@ class ToolRegistry:
             raise KeyError(f"Tool '{tool_name}' not found in registry.")
         return self._tools[tool_name]
 
+    def __contains__(self, tool_name: str) -> bool:
+        return tool_name in self._tools
+
     def get_all_schemas(self) -> list:
         """Return all tool schemas to inform the LLM of available capabilities."""
         return [tool.get_schema() for tool in self._tools.values()]
