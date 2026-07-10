@@ -105,6 +105,17 @@ class TestVerifierRegression(unittest.TestCase):
         result = check_file_count_claim(report, log)
         self.assertTrue(result.passed)
 
+    def test_run_tests_as_evidence(self):
+        """يتأكد إن run_tests_as_evidence يشغل الاختبارات ويسجل الناتج في evidence_log."""
+        from core.test_runner_wrapper import run_tests_as_evidence
+        log = EvidenceLog()
+        out = run_tests_as_evidence("tests/test_sanitize.py", log)
+        self.assertIn("Ran", out)
+        recs = log.get_records()
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0].tool_name, "run_tests")
+        self.assertTrue(recs[0].success)
+
 
 if __name__ == "__main__":
     unittest.main()
