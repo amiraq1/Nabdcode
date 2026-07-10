@@ -16,3 +16,4 @@ brain/
 .provider_state*.json
 .provider_state*.json
 core/state/
+models/*.gguf
