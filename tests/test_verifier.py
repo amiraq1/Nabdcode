@@ -116,6 +116,26 @@ class TestVerifierRegression(unittest.TestCase):
         self.assertEqual(recs[0].tool_name, "run_tests")
         self.assertTrue(recs[0].success)
 
+    def test_fake_test_count_claim_rejected(self):
+        """يرفض ادعاء تشغيل عدد اختبارات مزيف أو بدون استدعاء run_tests."""
+        from core.verifier import check_test_count_claim
+        log = make_log([])
+        report = "Ran 50 tests in 0.1s OK"
+        res = check_test_count_claim(report, log)
+        self.assertFalse(res.passed)
+
+    def test_real_test_count_claim_accepted(self):
+        """يقبل ادعاء تشغيل عدد اختبارات مطابق لنتائج run_tests الموثقة."""
+        from core.verifier import check_test_count_claim
+        log = make_log([
+            EvidenceRecord(tool_name="run_tests", input="tests/test_verifier.py",
+                           raw_output="Ran 12 tests in 0.05s\n\nOK",
+                           exit_code=0, timestamp=0, call_id="1"),
+        ])
+        report = "Ran 12 tests successfully."
+        res = check_test_count_claim(report, log)
+        self.assertTrue(res.passed)
+
 
 if __name__ == "__main__":
     unittest.main()

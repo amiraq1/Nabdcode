@@ -129,11 +129,47 @@ def check_commit_count_claim(report_text: str, evidence_log: Any) -> Verificatio
     return VerificationResult(True, [], "كل رسائل الـ commits مطابقة لـ git_log.")
 
 
+def check_test_count_claim(report_text: str, evidence_log: Any) -> VerificationResult:
+    """Check claims regarding test run counts against actual run_tests tool output."""
+    claimed = re.search(
+        r"(?:Ran\s+(\d+)\s+tests?|تشغيل\s+(\d+)\s+اختبار|(\d+)\s+اختبار)",
+        report_text,
+        re.IGNORECASE,
+    )
+    if not claimed:
+        return VerificationResult(True, [], "لا يوجد ادعاء عدد اختبارات.")
+    claimed_num = int(claimed.group(1) or claimed.group(2) or claimed.group(3))
+
+    records = [
+        r for r in evidence_log.get_records()
+        if getattr(r, "tool_name", getattr(r, "tool", "")) == "run_tests"
+    ]
+    if not records:
+        return VerificationResult(
+            False,
+            [f"ادعاء {claimed_num} اختبار بدون تشغيل فعلي مسجل"],
+            "مفبرك",
+        )
+
+    last_out = getattr(records[-1], "raw_output", getattr(records[-1], "output_snippet", ""))
+    actual = re.search(r"Ran\s+(\d+)\s+tests?", last_out, re.IGNORECASE)
+    actual_num = int(actual.group(1)) if actual else -1
+
+    if actual_num != claimed_num:
+        return VerificationResult(
+            False,
+            [f"مُدّعى={claimed_num}, فعلي={actual_num}"],
+            "تعارض",
+        )
+    return VerificationResult(True, [], "مطابق")
+
+
 def verify_report_strict(report_text: str, evidence_log: Any) -> VerificationResult:
     """Run all strict checks."""
     checks = [
         check_file_count_claim(report_text, evidence_log),
         check_commit_count_claim(report_text, evidence_log),
+        check_test_count_claim(report_text, evidence_log),
     ]
     all_unsupported = [c for check in checks for c in check.unsupported_claims]
     passed = all(check.passed for check in checks)
