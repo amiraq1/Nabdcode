@@ -197,9 +197,28 @@ class ExecutionLoop:
                 response = self.llm_provider(compacted)
 
                 # ================================
-                # [REPETITION GUARD LOGIC]
+                # [REPETITION GUARD & THOUGHT BLOCK BAN LOGIC]
                 # ================================
-                fingerprint = response.strip()[:200]
+                response_text = response.strip()
+                normalized_resp = re.sub(r"^(?:Thought|Thinking)\s+for\s+\d+s\s*", "", response_text, flags=re.IGNORECASE).strip()
+
+                has_tool = bool(extract_json_from_response(response))
+                if not has_tool and len(normalized_resp) < 10:
+                    self.state.update_status("COMPLETED")
+                    safe_msg = self._safe_shutdown(
+                        user_prompt,
+                        "CRITICAL: Detected only 'Thought' blocks or empty output without execution tools. Aborting to prevent hallucination loop."
+                    )
+                    bus.emit(
+                        "loop_completed",
+                        {
+                            "reason": "thought_only_loop",
+                            "output": safe_msg,
+                        },
+                    )
+                    return
+
+                fingerprint = normalized_resp[:200]
                 if fingerprint and last_response_fingerprints.count(fingerprint) >= 2:
                     self.state.update_status("COMPLETED")
                     safe_msg = self._safe_shutdown(

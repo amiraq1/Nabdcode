@@ -26,6 +26,39 @@ class TestLoopRepetitionGuard(unittest.TestCase):
         args, _ = loop._safe_shutdown.call_args
         self.assertIn("Infinite Replication Loop Detected", args[1])
 
+    def test_thought_only_block_ban_triggers_kill_switch(self):
+        """يتأكد أن الرد المكون فقط من Thought بدون أداة يتم إيقافه فوراً في أول محاولة."""
+        state = RuntimeState(session_id="test-thought-ban")
+        mock_llm = MagicMock(return_value="Thought for 2s")
+        loop = ExecutionLoop(llm_provider=mock_llm, state=state)
+        loop._safe_shutdown = MagicMock(return_value="ABORTED_SAFE")
+
+        loop.run("Hello test")
+
+        self.assertEqual(mock_llm.call_count, 1)
+        loop._safe_shutdown.assert_called_once()
+        args, _ = loop._safe_shutdown.call_args
+        self.assertIn("only 'Thought' blocks or empty output without execution tools", args[1])
+
+    def test_normalized_fingerprint_catches_varying_thought_seconds(self):
+        """يتأكد أن تغير ثواني التفكير في Thought for Xs لا يخدع نظام كشف التكرار."""
+        state = RuntimeState(session_id="test-norm-fingerprint")
+        responses = [
+            "Thought for 1s\nExact same repeated hallucinated response body that repeats over and over.",
+            "Thought for 2s\nExact same repeated hallucinated response body that repeats over and over.",
+            "Thought for 8s\nExact same repeated hallucinated response body that repeats over and over.",
+        ]
+        mock_llm = MagicMock(side_effect=responses)
+        loop = ExecutionLoop(llm_provider=mock_llm, state=state)
+        loop._safe_shutdown = MagicMock(return_value="ABORTED_SAFE")
+
+        loop.run("Hello test")
+
+        self.assertEqual(mock_llm.call_count, 3)
+        loop._safe_shutdown.assert_called_once()
+        args, _ = loop._safe_shutdown.call_args
+        self.assertIn("Infinite Replication Loop Detected", args[1])
+
 
 if __name__ == "__main__":
     unittest.main()
