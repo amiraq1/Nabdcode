@@ -470,7 +470,7 @@ class NvidiaClient:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "meta/llama-3.1-70b-instruct",
+        model: str = "meta/llama-3.1-8b-instruct",
         timeout: int = 60,
     ):
         self.api_key = api_key or os.getenv("NVIDIA_API_KEY")
