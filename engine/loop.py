@@ -197,17 +197,42 @@ class ExecutionLoop:
                 response = self.llm_provider(compacted)
 
                 # ================================
-                # [REPETITION GUARD & THOUGHT BLOCK BAN LOGIC]
+                # [REPETITION GUARD & THOUGHT BLOCK BAN LOGIC (PATCH 3)]
                 # ================================
                 response_text = response.strip()
-                normalized_resp = re.sub(r"^(?:Thought|Thinking)\s+for\s+\d+s\s*", "", response_text, flags=re.IGNORECASE).strip()
+                normalized_resp = re.sub(
+                    r"^(?:\s*[\*\-]\s*)?(?:Thought|Thinking)\s+for\s+\d+s\s*",
+                    "",
+                    response_text,
+                    flags=re.IGNORECASE,
+                ).strip()
 
                 has_tool = bool(extract_json_from_response(response))
-                if not has_tool and len(normalized_resp) < 10:
+
+                forbidden_thought_patterns = [
+                    r"^\s*(?:[\*\-]\s*)?(?:Thought|Thinking)\s+(?:for\s+\d+\s*(?:s|seconds?)|through|about)\s*\.?$",
+                    r"^\s*(?:[\*\-]\s*)?(?:I am thinking|I will think|I will now think)\s*\.?$",
+                    r"^\s*(?:[\*\-]\s*)?Thinking through the problem\s*\.?$",
+                    r"^\s*(?:[\*\-]\s*)?Proceeding to think\s*\.?$",
+                    r"^\s*I will now think about that\s*\.?$",
+                ]
+
+                is_thought_only = False
+                if not has_tool:
+                    if len(normalized_resp) < 10:
+                        is_thought_only = True
+                    else:
+                        for pattern in forbidden_thought_patterns:
+                            if re.match(pattern, response_text.strip(), re.IGNORECASE):
+                                is_thought_only = True
+                                break
+
+                if is_thought_only:
                     self.state.update_status("COMPLETED")
                     safe_msg = self._safe_shutdown(
                         user_prompt,
-                        "CRITICAL: Detected only 'Thought' blocks or empty output without execution tools. Aborting to prevent hallucination loop."
+                        "CRITICAL: Detected only 'Thinking' blocks without tools (bullet/star detected). "
+                        "Aborting loop to prevent hallucination."
                     )
                     bus.emit(
                         "loop_completed",

@@ -38,7 +38,7 @@ class TestLoopRepetitionGuard(unittest.TestCase):
         self.assertEqual(mock_llm.call_count, 1)
         loop._safe_shutdown.assert_called_once()
         args, _ = loop._safe_shutdown.call_args
-        self.assertIn("only 'Thought' blocks or empty output without execution tools", args[1])
+        self.assertIn("only 'Thinking' blocks without tools", args[1])
 
     def test_normalized_fingerprint_catches_varying_thought_seconds(self):
         """يتأكد أن تغير ثواني التفكير في Thought for Xs لا يخدع نظام كشف التكرار."""
@@ -58,6 +58,25 @@ class TestLoopRepetitionGuard(unittest.TestCase):
         loop._safe_shutdown.assert_called_once()
         args, _ = loop._safe_shutdown.call_args
         self.assertIn("Infinite Replication Loop Detected", args[1])
+
+    def test_bullet_tolerant_thought_ban_triggers_kill_switch(self):
+        """يتأكد أن الردود المبدوءة بنجمة أو عبارات التفكير المعتادة يتم حظرها عند عدم وجود أداة."""
+        for prompt_text in [
+            "* Thought for 3 seconds",
+            "  * Thinking through the problem.",
+            "I will now think about that.",
+        ]:
+            state = RuntimeState(session_id="test-bullet-ban")
+            mock_llm = MagicMock(return_value=prompt_text)
+            loop = ExecutionLoop(llm_provider=mock_llm, state=state)
+            loop._safe_shutdown = MagicMock(return_value="ABORTED_SAFE")
+
+            loop.run("Hello test")
+
+            self.assertEqual(mock_llm.call_count, 1)
+            loop._safe_shutdown.assert_called_once()
+            args, _ = loop._safe_shutdown.call_args
+            self.assertIn("only 'Thinking' blocks without tools (bullet/star detected)", args[1])
 
 
 if __name__ == "__main__":
