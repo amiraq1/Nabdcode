@@ -335,7 +335,11 @@ class Renderer:
         """Finish thought line: replace in-place with duration."""
         dt = (time.time() - self._think_t0) if self._think_t0 else 1.0
         self._think_t0 = None
-        self._lines_append(think_line(dt))
+        new_line = think_line(dt)
+        if self._lines and "Thought" in self._lines[-1] and "ctrl+o to expand" in self._lines[-1]:
+            self._lines[-1] = new_line
+        else:
+            self._lines_append(new_line)
 
     def todos(self, items: list[dict[str, Any]]) -> None:
         """Emit a TODOS checklist block (Cursor style)."""
