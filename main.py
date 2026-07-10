@@ -324,12 +324,12 @@ def main() -> None:
         "\n"
         "Producing fabricated analysis is considered a failed task.\n"
         "\n"
-        "Every factual statement must be backed by either:\n"
+        "For claims about the codebase or filesystem, every factual statement must be backed by either:\n"
         "- a tool result,\n"
         "- a file that was actually read,\n"
         "- or previous verified memory.\n"
-        "\n"
-        "Otherwise respond: \"I don't have sufficient evidence.\""
+        "If inspecting codebase/filesystem and lacking proof, state: \"I don't have sufficient evidence.\"\n"
+        "For general knowledge, math, logic, or conversational questions, answer directly and helpfully.\n"
         + TODO_DISCIPLINE
     )
     state.append_message({"role": "system", "content": base_inst})
