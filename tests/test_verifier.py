@@ -163,6 +163,17 @@ class TestVerifierRegression(unittest.TestCase):
         res = check_git_push_claim(report, log)
         self.assertTrue(res.passed)
 
+    def test_git_push_tool_auto_records_diff(self):
+        """يتأكد إن أداة git_push تسجل تلقائياً سجل git_diff في evidence_log."""
+        from tools.git_tool import GitPushTool
+        log = EvidenceLog()
+        tool = GitPushTool()
+        tool.execute(evidence_log=log, remote="origin", branch="main")
+        recs = log.get_records()
+        diff_recs = [r for r in recs if r.tool_name == "git_diff"]
+        self.assertGreaterEqual(len(diff_recs), 1)
+        self.assertEqual(diff_recs[0].input, "HEAD origin/main")
+
 
 if __name__ == "__main__":
     unittest.main()

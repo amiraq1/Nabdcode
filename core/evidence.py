@@ -82,6 +82,14 @@ class EvidenceRecord:
     def raw_output(self) -> str:
         return self.output_snippet
 
+    @property
+    def input(self) -> str:
+        return self.command_or_path
+
+    @property
+    def exit_code(self) -> int:
+        return 0 if self.success else 1
+
     # ── Serialization ───────────────────────────────────────────────────
 
     def to_dict(self) -> dict:
