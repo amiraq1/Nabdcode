@@ -29,6 +29,9 @@ class ProviderState:
 class ProviderRouter:
     def __init__(self, providers):
         self.providers = sorted(providers, key=lambda x: x.priority)
+        self.state_key = ""
+    def set_state_key(self, key: str) -> None:
+        self.state_key = key
     def _sorted(self):
         return [p for p in self.providers if p.is_available()]
     def generate_stream(self, messages, **kwargs):
