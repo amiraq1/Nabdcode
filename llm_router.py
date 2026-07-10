@@ -18,8 +18,23 @@ class ProviderState:
     failure_count: int = 0
     cooldown_until: float = 0
     def is_available(self): return self.enabled and time.time() >= self.cooldown_until
-    def record_failure(self): self.failure_count+=1; self.cooldown_until=time.time()+10*self.failure_count
-    def record_success(self): self.failure_count=0; self.cooldown_until=0
+    def record_failure(self, rate=False, notfound=False):
+        if notfound:
+            self.enabled = False
+            return
+        self.failure_count += 1
+        self.cooldown_until = time.time() + (65 if rate else 10 * self.failure_count)
+    def record_success(self):
+        self.failure_count = 0
+        self.cooldown_until = 0
+
+def is_rate_limit(e):
+    s = str(e).lower()
+    return "429" in s or "rate-limited" in s or "20 requests" in s
+
+def is_not_found(e):
+    s = str(e).lower()
+    return "404" in s or "no endpoints" in s or "unavailable for free" in s
 
 class ProviderRouter:
     def __init__(self, providers):
@@ -38,16 +53,22 @@ class ProviderRouter:
                 return
             except Exception as e:
                 last = e
-                p.record_failure()
-                print(f"[fallback] {p.name} failed -> next")
+                rate = is_rate_limit(e)
+                nf = is_not_found(e)
+                p.record_failure(rate=rate, notfound=nf)
+                print(f"[fallback] {p.name} {'RATE-LIMIT' if rate else '404' if nf else 'FAIL'} -> next")
+                if rate and ("openrouter" in p.name.lower() or "OR-" in p.name):
+                    # If free OR account is rate-limited, put all OR-* on 65s cooldown and jump straight to NVIDIA
+                    for op in self.providers:
+                        if "OR-" in op.name and op.is_available():
+                            op.cooldown_until = time.time() + 65
+                    continue
                 continue
         raise RuntimeError(f"All failed: {last}")
     def generate_response(self, m, **kwargs): return "".join(self.generate_stream(m, **kwargs))
 
-FREE_MODELS = [
-    os.getenv("OPENROUTER_MODEL", "google/gemma-3-27b:free"),
-    "google/gemma-3-27b:free",
-    "google/gemma-4-31b-it:free",
+base_model = os.getenv("OPENROUTER_MODEL", "google/gemma-3-27b:free")
+FREE_FALLBACK = [
     "qwen/qwen3-32b:free",
     "openai/gpt-oss-20b:free",
     "deepseek/deepseek-chat-v3.1:free",
@@ -55,19 +76,20 @@ FREE_MODELS = [
 ]
 
 providers = []
-seen = set()
-for i, mdl in enumerate(FREE_MODELS):
-    if not mdl or mdl in seen:
-        continue
-    seen.add(mdl)
-    try:
-        providers.append(ProviderState(name=f"OR-{i}", client=OpenRouterClient(model=mdl), priority=i))
-    except Exception:
-        pass
+try:
+    providers.append(ProviderState(name="OR-0", client=OpenRouterClient(model=base_model), priority=0))
+except Exception:
+    pass
 
 if NvidiaClient:
     try:
-        providers.append(ProviderState(name="NVIDIA", client=NvidiaClient(), priority=99))
+        providers.append(ProviderState(name="NVIDIA", client=NvidiaClient(), priority=1))
+    except Exception:
+        pass
+
+for i, mdl in enumerate(FREE_FALLBACK, start=2):
+    try:
+        providers.append(ProviderState(name=f"OR-{i}", client=OpenRouterClient(model=mdl), priority=i))
     except Exception:
         pass
 
