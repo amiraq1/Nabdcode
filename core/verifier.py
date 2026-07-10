@@ -164,12 +164,58 @@ def check_test_count_claim(report_text: str, evidence_log: Any) -> VerificationR
     return VerificationResult(True, [], "مطابق")
 
 
+def check_git_push_claim(report_text: str, evidence_log: Any) -> VerificationResult:
+    """Check claims regarding commit hash and push sync against actual documented git evidence."""
+    claimed_hashes = re.findall(r"\b[0-9a-f]{7,40}\b", report_text)
+    push_claimed = bool(re.search(r"push|origin/main", report_text, re.IGNORECASE))
+
+    if not claimed_hashes and not push_claimed:
+        return VerificationResult(True, [], "لا يوجد ادعاء git.")
+
+    records = [
+        r for r in evidence_log.get_records()
+        if getattr(r, "tool_name", getattr(r, "tool", "")) in ("git_show", "git_log", "git_diff", "git_push")
+    ]
+    if not records:
+        return VerificationResult(
+            False,
+            ["ادعاء commit/push بدون أي استدعاء git_* موثق"],
+            "مفبرك بالكامل.",
+        )
+
+    raw = "\n".join(getattr(r, "raw_output", getattr(r, "output_snippet", "")) for r in records)
+    unsupported = [h for h in claimed_hashes if h[:7] not in raw]
+
+    if unsupported:
+        return VerificationResult(
+            False,
+            [f"commit hash غير موجود بالدليل: {h}" for h in unsupported],
+            "تعارض",
+        )
+
+    # push claim requires an empty git_diff record confirming HEAD vs origin sync
+    if push_claimed:
+        diff_records = [
+            r for r in records
+            if getattr(r, "tool_name", getattr(r, "tool", "")) == "git_diff"
+        ]
+        if not diff_records or getattr(diff_records[-1], "raw_output", getattr(diff_records[-1], "output_snippet", "")).strip() != "":
+            return VerificationResult(
+                False,
+                ["ادعاء push بدون git diff فارغ يؤكد التزامن"],
+                "غير مؤكد",
+            )
+
+    return VerificationResult(True, [], "مطابق.")
+
+
 def verify_report_strict(report_text: str, evidence_log: Any) -> VerificationResult:
     """Run all strict checks."""
     checks = [
         check_file_count_claim(report_text, evidence_log),
         check_commit_count_claim(report_text, evidence_log),
         check_test_count_claim(report_text, evidence_log),
+        check_git_push_claim(report_text, evidence_log),
     ]
     all_unsupported = [c for check in checks for c in check.unsupported_claims]
     passed = all(check.passed for check in checks)

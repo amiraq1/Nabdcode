@@ -136,6 +136,33 @@ class TestVerifierRegression(unittest.TestCase):
         res = check_test_count_claim(report, log)
         self.assertTrue(res.passed)
 
+    def test_fake_git_push_claim_rejected(self):
+        """يرفض ادعاء الرفع إلى origin/main بدون وجود git_diff فارغ يثبت التزامن."""
+        from core.verifier import check_git_push_claim
+        log = make_log([
+            EvidenceRecord(tool_name="git_log", input="-1",
+                           raw_output="79a8c9b feat(verifier)",
+                           exit_code=0, timestamp=0, call_id="1"),
+        ])
+        report = "تم الرفع بنجاح إلى origin/main"
+        res = check_git_push_claim(report, log)
+        self.assertFalse(res.passed)
+
+    def test_real_git_push_claim_accepted(self):
+        """يقبل ادعاء الرفع عندما يوجد استدعاء git_diff فارغ يؤكد التزامن."""
+        from core.verifier import check_git_push_claim
+        log = make_log([
+            EvidenceRecord(tool_name="git_log", input="-1",
+                           raw_output="79a8c9b feat(verifier)",
+                           exit_code=0, timestamp=0, call_id="1"),
+            EvidenceRecord(tool_name="git_diff", input="HEAD origin/main",
+                           raw_output="",
+                           exit_code=0, timestamp=0, call_id="2"),
+        ])
+        report = "تم الرفع بنجاح إلى origin/main والرمز 79a8c9b متزامن"
+        res = check_git_push_claim(report, log)
+        self.assertTrue(res.passed)
+
 
 if __name__ == "__main__":
     unittest.main()
