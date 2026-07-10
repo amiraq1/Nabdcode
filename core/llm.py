@@ -60,22 +60,24 @@ class ServerError(OpenRouterError):
 
 class OpenRouterClient:
 
-    BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+    BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
 
     def __init__(
         self,
         api_key: str | None = None,
         model: str | None = None,
         config: OpenRouterConfig | None = None,
+        base_url: str | None = None,
     ):
 
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("NVIDIA_API_KEY")
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("AGENTROUTER_API_KEY") or os.getenv("NVIDIA_API_KEY")
         self.model = model
         self.config = config or OpenRouterConfig()
+        self.base_url = base_url or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
 
     @property
     def headers(self) -> dict[str, str]:
-        api_key = self.api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("NVIDIA_API_KEY")
+        api_key = self.api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("AGENTROUTER_API_KEY") or os.getenv("NVIDIA_API_KEY")
         if not api_key:
             raise AuthenticationError(
                 "OPENROUTER_API_KEY environment variable is missing."
@@ -118,7 +120,7 @@ class OpenRouterClient:
         body = json.dumps(payload).encode()
 
         request = urllib.request.Request(
-            self.BASE_URL,
+            self.base_url,
             headers=self.headers,
             data=body,
             method="POST",
