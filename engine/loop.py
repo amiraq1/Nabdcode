@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+import re
 import time
 from typing import Any, Callable, Final
 
@@ -20,14 +21,16 @@ from llm_router import execute_agent_with_memory
 
 
 def _prompt_requires_investigation(text: str) -> bool:
-    """Return True if this prompt asks for real work, not chitchat.
-
-    Delegates to core/constants.is_chitchat() for the heuristic.
-    """
-    return not is_chitchat(text)[0]
+    """Return True if this prompt asks for real work, not chitchat or simple math."""
+    if is_chitchat(text)[0]:
+        return False
+    if re.search(r'^\s*\d+\s*[\+\-\*\/]\s*\d+', text):
+        return False
+    return True
 
 
 MAX_SELF_CORRECT: Final[int] = 3
+MAX_THOUGHTS_WITHOUT_ACTION: Final[int] = 3
 MAX_BUDGET_SECONDS: Final[int] = 180  # سقف الميزانية: 3 دقائق لكل مهمة على Termux
 MAX_BUDGET_TOKENS: Final[int] = 12000  # سقف التوكنات التقريبي
 

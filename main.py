@@ -329,7 +329,10 @@ def main() -> None:
         "- a file that was actually read,\n"
         "- or previous verified memory.\n"
         "If inspecting codebase/filesystem and lacking proof, state: \"I don't have sufficient evidence.\"\n"
-        "For general knowledge, math, logic, or conversational questions, answer directly and helpfully.\n"
+        "BEHAVIOR RULES:\n"
+        "- For simple questions (greetings, facts, math), respond directly. DO NOT overthink or loop.\n"
+        "- For calculations, either answer directly or use execute_shell with: python3 -c \"print(...)\"\n"
+        "- Maximum 2 thoughts before action.\n"
         + TODO_DISCIPLINE
     )
     state.append_message({"role": "system", "content": base_inst})

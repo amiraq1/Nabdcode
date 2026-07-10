@@ -394,3 +394,16 @@ class NativeDeepAgent:
                 retry_count += 1
 
         return state.final_output
+
+
+def classify_intent(text: str) -> str:
+    """Classify user intent to prevent overthinking simple queries."""
+    text_lower = text.lower().strip()
+    if text_lower in {"hi", "hello", "hey", "iraq", "مرحبا", "هلا"}:
+        return "direct_response"
+    if re.search(r'^\s*\d+\s*[\+\-\*\/]\s*\d+', text):
+        return "use_calculator"
+    if any(w in text_lower for w in ("count", "read", "grep", "file", "list")):
+        return "use_tools"
+    return "default"
+
