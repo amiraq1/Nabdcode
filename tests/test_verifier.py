@@ -66,6 +66,45 @@ class TestVerifierRegression(unittest.TestCase):
         gated = gate_report(report, log)
         self.assertIn("فشل التحقق", gated)
 
+    def test_gate_report_passes_valid_report(self):
+        """يتأكد إن gate_report ما يرفض تقرير صحيح فعلاً."""
+        log = make_log([
+            EvidenceRecord(tool_name="find_files", input="*.py",
+                           raw_output="a.py\nb.py\nc.py",
+                           exit_code=0, timestamp=0, call_id="1"),
+        ])
+        report = "عدد ملفات .py في المستودع هو 3"
+        result = gate_report(report, log)
+        self.assertNotIn("⚠️", result)
+
+    def test_verify_report_strict_empty_log(self):
+        """تقرير بدون أي evidence_log إطلاقاً يجب أن يُرفض بالكامل."""
+        log = make_log([])
+        report = "عدد ملفات .py هو 10 و commit 1: \"fix bug\""
+        result = verify_report_strict(report, log)
+        self.assertFalse(result.passed)
+
+    def test_partial_commit_match_rejected(self):
+        """لو ادّعى 3 commits لكن evidence فيها 2 بس فعلياً."""
+        log = make_log([
+            EvidenceRecord(tool_name="git_log", input="-3",
+                           raw_output='"fix bug"\n"add feature"',
+                           exit_code=0, timestamp=0, call_id="1"),
+        ])
+        report = 'commit 1: "fix bug"\ncommit 2: "add feature"\ncommit 3: "update docs"'
+        result = check_commit_count_claim(report, log)
+        self.assertFalse(result.passed)  # "update docs" مش موجود فعلياً
+
+    def test_zero_file_count_edge_case(self):
+        """حالة حدّية: عدد الملفات صفر."""
+        log = make_log([
+            EvidenceRecord(tool_name="find_files", input="*.py",
+                           raw_output="", exit_code=0, timestamp=0, call_id="1"),
+        ])
+        report = "عدد ملفات .py في المستودع هو 0"
+        result = check_file_count_claim(report, log)
+        self.assertTrue(result.passed)
+
 
 if __name__ == "__main__":
     unittest.main()
