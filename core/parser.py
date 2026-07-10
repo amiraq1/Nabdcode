@@ -140,6 +140,12 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "limit": int,
         },
     },
+    "todo_write": {
+        "required": {
+            "todos": list,
+        },
+        "optional": {},
+    },
 }
 
 
@@ -274,6 +280,16 @@ def validate_tool_call(payload: Any) -> ValidationResult:
                 None,
                 "Path escapes workspace.",
             )
+
+    if tool == "todo_write":
+        todos = args.get("todos", [])
+        if not isinstance(todos, list):
+            return ValidationResult(False, None, "Argument 'todos' must be a list.")
+        for item in todos:
+            if not isinstance(item, dict) or "task" not in item or "status" not in item:
+                return ValidationResult(False, None, "Each item in 'todos' must have 'task' and 'status'.")
+            if item["status"] not in {"pending", "in_progress", "done"}:
+                return ValidationResult(False, None, f"Invalid todo status: {item['status']}.")
 
     return ValidationResult(
         True,

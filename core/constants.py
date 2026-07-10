@@ -51,8 +51,8 @@ SAFE_BINARIES: Final[Set[str]] = {
     "ps", "uptime", "df", "free", "history", "clear", "find", "wc",
     "du", "sort", "head", "tail", "awk", "top",
     "termux-battery-status", "termux-telephony-deviceinfo",
-    "git", "xargs", "python", "python3", "pip", "uname", "id",
-    "uvicorn", "sleep", "lsof", "pytest"
+    "git", "python", "python3", "uname", "id",
+    "sleep", "lsof", "pytest"
 }
 
 DANGEROUS_STRICT: Final[Set[str]] = {";", "`", "$("}

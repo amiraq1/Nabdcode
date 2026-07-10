@@ -101,6 +101,12 @@ def _dangerous_operators_unquoted(command: str) -> Tuple[bool, str]:
                 return False, "Command separator ';' is not allowed."
             if ch == '`':
                 return False, "Backtick substitution is not allowed."
+            if ch == '\n':
+                return False, "Newline inside command is not allowed."
+            if ch == '&' and i + 1 < n and command[i + 1] == '&':
+                return False, "Logical AND '&&' is not allowed."
+            if ch == '|' and i + 1 < n and command[i + 1] == '|':
+                return False, "Logical OR '||' is not allowed."
             if ch == '$' and i + 1 < n and command[i + 1] == '(':
                 return False, "Command substitution $() is not allowed."
 
@@ -109,14 +115,17 @@ def _dangerous_operators_unquoted(command: str) -> Tuple[bool, str]:
     return True, ""
 
 
-DANGEROUS_FLAGS = {"-c", "-e", "--eval", "--exec", "--import"}
+DANGEROUS_FLAGS = {"-c", "-e", "--eval", "--exec", "--import", "-i", "--interactive"}
 INTERPRETERS = {"python", "python3", "bash", "sh", "node"}
+BANNED_PYTHON_MODULES = {"pip", "http", "http.server", "urllib", "subprocess", "os", "pty", "eval", "shutil"}
 
 
 def _validate_segment_args(tokens: List[str]) -> Tuple[bool, str]:
     if not tokens:
         return False, "Empty segment."
     bin_name = tokens[0]
+    if bin_name == "xargs" or "xargs" in tokens:
+        return False, "Binary 'xargs' is not allowed."
     if bin_name not in SAFE_BINARIES:
         return False, f"Binary '{bin_name}' is not whitelisted."
     for arg in tokens[1:]:
@@ -124,7 +133,11 @@ def _validate_segment_args(tokens: List[str]) -> Tuple[bool, str]:
             return False, f"Dangerous argument '{arg}' is not allowed for binary '{bin_name}'."
     if bin_name in INTERPRETERS:
         from core.parser import _validate_path
-        for arg in tokens[1:]:
+        for idx, arg in enumerate(tokens[1:]):
+            if arg == "-m" and idx + 1 < len(tokens[1:]):
+                mod = tokens[1:][idx + 1]
+                if mod in BANNED_PYTHON_MODULES or any(b in mod for b in BANNED_PYTHON_MODULES):
+                    return False, f"Banned python module '{mod}' is not allowed."
             if arg.endswith(".py") or arg.endswith(".sh") or arg.endswith(".js"):
                 if not _validate_path(arg):
                     return False, f"Script file execution '{arg}' outside workspace is not allowed for '{bin_name}'."
