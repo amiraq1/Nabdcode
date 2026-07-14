@@ -11,7 +11,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("DebugExecutor")
 
 from core.agent_manager import initialize_secure_agent
-from smolagents import CodeAgent
 
 def run_isolated_test():
     logger.info("⚡ Igniting Secure Agent Environment...")

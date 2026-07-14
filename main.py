@@ -18,7 +18,6 @@ from prompt_toolkit.formatted_text import ANSI, HTML
 from engine.state import RuntimeState
 from engine.loop import ExecutionLoop, ToolRequiredError
 from engine.events import bus
-from engine.renderer import Renderer
 from core.app_context import AppContext
 from core.constants import TODO_DISCIPLINE
 from core.sanitize import sanitize
@@ -275,6 +274,94 @@ def wire_events(ctx: AppContext) -> None:
 
 # ── Main Loop ──────────────────────────────────────────────────────────────
 
+def _initialize_session_state(ctx: AppContext) -> None:
+    """Restore todos and evidence from the latest session if available."""
+    _latest_id = ctx.session_manager.get_latest_session(ctx.config.session_dir)
+    if not _latest_id:
+        return
+    _latest_path = ctx.config.session_dir / f"{_latest_id}.json"
+    if not _latest_path.exists():
+        return
+    try:
+        _data = json.loads(_latest_path.read_text(encoding="utf-8"))
+        if isinstance(_data, dict):
+            _todos = _data.get("todos")
+            if isinstance(_todos, list):
+                ctx.todo_manager.restore(_todos)
+            _evidence_records = _data.get("evidence_records")
+            if isinstance(_evidence_records, dict):
+                ctx.evidence_log.restore({"records": _evidence_records})
+    except Exception as exc:
+        sys.stderr.write(f"[Warning] Session restore failed: {exc}\n")
+
+
+def _process_user_turn(ctx: AppContext, state: RuntimeState, base_inst: str, user_input: str) -> bool:
+    """Process a single user turn inside the REPL loop. Returns False if session should exit."""
+    if user_input.lower() in ("exit", "quit"):
+        return False
+
+    if user_input.lower() == "clear":
+        sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ clear\033[0m\n")
+        sys.stdout.flush()
+        state.set_messages([{"role": "system", "content": base_inst}])
+        state.reset_step_count()
+        return True
+
+    safe_display = sanitize(user_input)
+    sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {safe_display}\033[0m\n")
+    sys.stdout.flush()
+
+    clean_prompt = normalize(user_input)[:10000]
+    state.reset_step_count()
+    engine = ExecutionLoop(
+        state=state,
+        max_output_len=ctx.config.max_output,
+        evidence_log=ctx.evidence_log,
+    )
+
+    fd = sys.stdin.fileno()
+    old_termios = None
+    try:
+        old_termios = termios.tcgetattr(fd)
+        new = list(old_termios)
+        new[3] = new[3] & ~termios.ECHO
+        termios.tcsetattr(fd, termios.TCSANOW, new)
+        engine.run(clean_prompt)
+    except KeyboardInterrupt:
+        ctx.renderer.think_end()
+        ctx.renderer.flush()
+    except ToolRequiredError as exc:
+        msgs = state.get_messages()
+        if msgs and msgs[-1].get("role") == "assistant":
+            state.set_messages(msgs[:-1])
+        ctx.logger.error(f"ToolRequiredError: {exc}")
+        ctx.renderer.think_end()
+        ctx.renderer.verifier_reject(str(exc))
+        ctx.renderer.flush()
+    except Exception as exc:
+        ctx.logger.error(f"Execution failed: {exc}")
+    finally:
+        if old_termios is not None:
+            termios.tcsetattr(fd, termios.TCSANOW, old_termios)
+        try:
+            termios.tcflush(fd, termios.TCIFLUSH)
+        except Exception:
+            pass
+
+    ctx.session_manager.messages = state.get_messages()
+    ctx.session_manager.todos = ctx.todo_manager.to_serializable()
+    ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
+    ctx.session_manager.save()
+
+    last_msg = state.get_last_message()
+    if last_msg and last_msg.get("role") == "assistant":
+        rendered = _extract_final_answer_text(last_msg.get("content", ""))
+        for line in rendered.splitlines():
+            ctx.renderer.agent_text(line)
+        ctx.renderer.flush()
+    return True
+
+
 def main() -> None:
     sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
@@ -289,23 +376,8 @@ def main() -> None:
     state = RuntimeState(session_id=ctx.session_manager.session_id, max_steps=50)
     deleted = ctx.session_manager.enforce_retention_policy(ctx.config.max_sessions)
 
-    # Restore todos + evidence from the latest session (v2+ only) — read JSON
-    # directly to avoid mutating session_manager's identity.
-    _latest_id = ctx.session_manager.get_latest_session(ctx.config.session_dir)
-    if _latest_id:
-        _latest_path = ctx.config.session_dir / f"{_latest_id}.json"
-        if _latest_path.exists():
-            try:
-                _data = json.loads(_latest_path.read_text(encoding="utf-8"))
-                if isinstance(_data, dict):
-                    _todos = _data.get("todos")
-                    if isinstance(_todos, list):
-                        ctx.todo_manager.restore(_todos)
-                    _evidence_records = _data.get("evidence_records")
-                    if isinstance(_evidence_records, dict):
-                        ctx.evidence_log.restore({"records": _evidence_records})
-            except Exception as exc:
-                sys.stderr.write(f"[Warning] Session restore failed: {exc}\n")
+    # Restore todos + evidence from the latest session (v2+ only)
+    _initialize_session_state(ctx)
     wire_events(ctx)
 
     # Isolate provider state file per session
@@ -325,26 +397,6 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGHUP, _shutdown_handler)
-
-    state = RuntimeState(session_id=ctx.session_manager.session_id, max_steps=50)
-
-    # ── Helpers for ToolRequiredError path ────────────────────────────────
-
-    def _cleanup_after_streamed_failure(state: RuntimeState,
-                                        ctx: AppContext,
-                                        exc: ToolRequiredError) -> None:
-        """After streaming output, the verifier rejected the answer.
-        Strip the fabricated response, add a newline separator so the
-        rejection message isn't glued to the last token, and render
-        the verifier's message to the user.
-        """
-        msgs = state.get_messages()
-        if msgs and msgs[-1].get("role") == "assistant":
-            state.set_messages(msgs[:-1])
-        ctx.logger.error(f"ToolRequiredError: {exc}")
-        ctx.renderer.think_end()
-        ctx.renderer.verifier_reject(str(exc))
-        ctx.renderer.flush()
 
     base_inst = (
         "You are an advanced Autonomous Agent running on a Linux environment.\n"
@@ -407,15 +459,10 @@ def main() -> None:
     input_session = PromptSession(
         history=InMemoryHistory(),
         mouse_support=False,
-        # Single-line mode: 'Enter' always submits immediately, even when the
-        # pasted text contains newlines. Without this, prompt_toolkit defaults
-        # to auto-multiline and a paste with newlines traps the user in the
-        # "accept edits on [shift+tab]" editor (Enter just inserts newlines).
         multiline=False,
         key_bindings=bindings,
     )
 
-    # Flush any setup output before first prompt
     ctx.renderer.flush()
 
     while True:
@@ -431,72 +478,8 @@ def main() -> None:
         if not user_input:
             continue
 
-        if user_input.lower() in ("exit", "quit"):
+        if not _process_user_turn(ctx, state, base_inst, user_input):
             break
-
-        if user_input.lower() == "clear":
-            # Replace the prompt line with a background-highlighted version
-            sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ clear\033[0m\n")
-            sys.stdout.flush()
-            state.set_messages([{"role": "system", "content": base_inst}])
-            state.reset_step_count()
-            continue
-
-        # Replace the prompt_toolkit line with a background-highlighted version
-        # so the user's input is visually distinct from the agent response.
-        safe_display = sanitize(user_input)
-        sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {safe_display}\033[0m\n")
-        sys.stdout.flush()
-
-        clean_prompt = normalize(user_input)[:10000]
-
-        state.reset_step_count()
-        engine = ExecutionLoop(
-            state=state,
-            max_output_len=ctx.config.max_output,
-            evidence_log=ctx.evidence_log,
-        )
-
-        fd = sys.stdin.fileno()
-        old_termios = None
-        try:
-            old_termios = termios.tcgetattr(fd)
-            new = list(old_termios)
-            new[3] = new[3] & ~termios.ECHO
-            termios.tcsetattr(fd, termios.TCSANOW, new)
-            engine.run(clean_prompt)
-        except KeyboardInterrupt:
-            ctx.renderer.think_end()
-            ctx.renderer.flush()
-        except ToolRequiredError as exc:
-            # ToolRequiredError: The LLM answered without using required tools.
-            # Strip the fabricated response, add newline separator after any
-            # partial streaming output, and show the verifier's rejection.
-            _cleanup_after_streamed_failure(state, ctx, exc)
-        except Exception as exc:
-            # Error already rendered by _on_loop_error via event bus
-            ctx.logger.error(f"Execution failed: {exc}")
-        finally:
-            if old_termios is not None:
-                termios.tcsetattr(fd, termios.TCSANOW, old_termios)
-            try:
-                termios.tcflush(fd, termios.TCIFLUSH)
-            except Exception:
-                pass
-
-        # Save session — messages, todos, evidence audit trail
-        ctx.session_manager.messages = state.get_messages()
-        ctx.session_manager.todos = ctx.todo_manager.to_serializable()
-        ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
-        ctx.session_manager.save()
-
-        # Print assistant response — no badge, just content
-        last_msg = state.get_last_message()
-        if last_msg and last_msg.get("role") == "assistant":
-            rendered = _extract_final_answer_text(last_msg.get("content", ""))
-            for line in rendered.splitlines():
-                ctx.renderer.agent_text(line)
-            ctx.renderer.flush()
 
 
 if __name__ == "__main__":

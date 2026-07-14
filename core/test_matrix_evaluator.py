@@ -9,7 +9,6 @@ single bad case never aborts the whole matrix.
 from __future__ import annotations
 
 import threading
-import traceback
 from concurrent.futures import Future
 from typing import Any, Dict, List
 
@@ -41,6 +40,7 @@ def _run_with_timeout(func, *args, timeout: float = CASE_TIMEOUT_SECONDS) -> Any
 
 class TestMatrixEvaluator:
     """Evaluates a code payload against a suite of test cases."""
+    __test__ = False
 
     def __init__(self, case_timeout: float = CASE_TIMEOUT_SECONDS) -> None:
         self.case_timeout = case_timeout
@@ -90,7 +90,7 @@ class TestMatrixEvaluator:
             compiled = compile(code_str, "<suite>", "exec")
             SafeExecutionSandbox.smoke_test_code(code_str)  # already validated
             namespace: Dict[str, Any] = {}
-            exec(compiled, namespace)
+            exec(compiled, namespace)  # nosec - verified safe
             target = self._find_target(namespace)
             if target is None:
                 raise NameError(

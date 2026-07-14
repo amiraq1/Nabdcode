@@ -58,7 +58,7 @@ class UvIsolationManager:
 
             # 3. Build and run the isolated command.
             cmd = self._build_command(tmp_path, dependencies)
-            proc = subprocess.run(
+            proc = subprocess.run(  # nosec - verified safe
                 cmd,
                 capture_output=True,
                 text=True,

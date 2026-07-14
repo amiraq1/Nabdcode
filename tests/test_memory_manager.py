@@ -11,8 +11,6 @@ test_memory_manager.py
 5. دورة حياة الاتصال (close / __del__ / __enter__ / __exit__)
 """
 
-import json
-import sqlite3
 import time
 import pytest
 

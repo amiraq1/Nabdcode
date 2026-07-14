@@ -16,9 +16,7 @@ from __future__ import annotations
 import os
 import sys
 import platform
-import asyncio
-from typing import Any, Dict, Optional
-from core.errors import ConfigurationError, PermissionDeniedError
+from typing import Any, Dict
 from core.logger import Logger
 from core.model_registry import get_visible_models
 

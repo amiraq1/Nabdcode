@@ -563,5 +563,3 @@ class SemanticMemoryPipeline:
 
         return results
 
-
-from tools.secure_tools import SecureSemanticMemoryTool

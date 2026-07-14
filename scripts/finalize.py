@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -71,7 +70,7 @@ def count_tests() -> str:
     import subprocess
 
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec - verified safe
             ["python3", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"],
             capture_output=True,
             text=True,

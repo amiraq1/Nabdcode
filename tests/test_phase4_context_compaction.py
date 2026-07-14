@@ -2,11 +2,10 @@
 """Phase4.1: Context Hardening, Critical Hard Caps & Auto-Policy."""
 import json
 import unittest
-from engine.loop import ExecutionLoop, _LoopCtx, _ToolInteraction, MAX_CRITICAL_FULL
+from engine.loop import ExecutionLoop, _LoopCtx, _ToolInteraction
 from engine.state import RuntimeState
-from engine.deep_agent import NativeDeepAgent, DeepAgentState, CHECKPOINT_FILENAME, _slim_evidence_ledger
+from engine.deep_agent import NativeDeepAgent, DeepAgentState, _slim_evidence_ledger
 from core.evidence import EvidenceLog
-from pathlib import Path
 import tempfile
 import os
 

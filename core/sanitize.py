@@ -134,27 +134,31 @@ def sanitize(
 
     # 5. Strip illegal control characters while preserving printable Unicode
     if strip_control:
-        cleaned_chars: list[str] = []
-        for ch in text:
-            if ch == "\n":
-                if preserve_newlines:
-                    cleaned_chars.append(ch)
-            elif ch == "\t":
-                if preserve_tabs:
-                    cleaned_chars.append(ch)
-            elif ch == "\x1b" and keep_color:
-                cleaned_chars.append(ch)
-            else:
-                cat = unicodedata.category(ch)
-                # C = Other (Cc Control, Cf Format, Cs Surrogate, Co Private, Cn Unassigned)
-                if not cat.startswith("C"):
-                    cleaned_chars.append(ch)
-        text = "".join(cleaned_chars)
+        text = _clean_control_chars(text, preserve_newlines, preserve_tabs, keep_color)
 
     if redact_secrets_flag:
         text = redact_secrets(text)
 
     return text
+
+
+def _clean_control_chars(text: str, preserve_newlines: bool, preserve_tabs: bool, keep_color: bool) -> str:
+    """Strip illegal control characters while preserving printable Unicode and allowed layout chars."""
+    cleaned_chars: list[str] = []
+    for ch in text:
+        if ch == "\n":
+            if preserve_newlines:
+                cleaned_chars.append(ch)
+        elif ch == "\t":
+            if preserve_tabs:
+                cleaned_chars.append(ch)
+        elif ch == "\x1b" and keep_color:
+            cleaned_chars.append(ch)
+        else:
+            cat = unicodedata.category(ch)
+            if not cat.startswith("C"):
+                cleaned_chars.append(ch)
+    return "".join(cleaned_chars)
 
 
 def format_tool_result_output(raw_output: str | bytes | None, max_length: int = 25000) -> str:

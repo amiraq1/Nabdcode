@@ -13,22 +13,18 @@ broadcast through the safe UIBridge fan-out so logs capture the loop.
 
 from __future__ import annotations
 
-import logging
-import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List
 
-from smolagents import CodeAgent, FinalAnswerTool
+from smolagents import CodeAgent
 
 from core.agent_manager import (
     MemoryStore,
     _build_verifier_agent,
-    _broadcast,
     _parse_verdict,
-    initialize_secure_agent,
 )
 from core.llm import get_secure_model
 from core.parser import pin_workspace_root

@@ -8,7 +8,6 @@ Verifies:
 """
 
 import math
-import os
 import pathlib
 import shutil
 import tempfile

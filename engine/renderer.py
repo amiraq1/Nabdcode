@@ -22,7 +22,6 @@ self._lock before reading or writing shared state.
 
 from __future__ import annotations
 
-import difflib
 import itertools
 import shutil
 import sys
@@ -60,8 +59,6 @@ from engine.ui_theme import (
     think_line,
     status_chip as ui_status_chip,
     dim,
-    fg,
-    P,
     tree_prefix,
 )
 

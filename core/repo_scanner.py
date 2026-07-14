@@ -38,7 +38,7 @@ USAGE EXAMPLES (for the LLM):
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from smolagents import Tool
 

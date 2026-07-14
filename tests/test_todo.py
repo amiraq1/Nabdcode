@@ -1,7 +1,7 @@
 """Automated verification suite for core/todo.py (TodoManager, TodoItem, mandatory verification note)."""
 
 import unittest
-from core.todo import TodoItem, TodoManager, TodoStatus
+from core.todo import TodoManager, TodoStatus
 
 
 class TestTodoManager(unittest.TestCase):

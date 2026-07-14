@@ -10,7 +10,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from engine.loop import ToolRequiredError, ExecutionLoop
+from engine.loop import ToolRequiredError
 from core.evidence import VerifierError
 
 

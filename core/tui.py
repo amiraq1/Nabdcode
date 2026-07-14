@@ -1,5 +1,4 @@
 import sys
-import time
 from rich.console import Console
 from rich.markup import escape as _rich_escape
 from core.sanitize import sanitize
@@ -90,8 +89,9 @@ def launch_stream_tui(agent_runner_func=None, mode: str = "repl"):
     if mode in ("repl", "auto") or "--repl" in sys.argv:
         try:
             import asyncio
-            from ui.repl_termux import run_repl
-            asyncio.run(run_repl(agent=None, agent_runner_func=agent_runner_func))
+            import importlib
+            repl_mod = importlib.import_module("ui.repl_termux")
+            asyncio.run(repl_mod.run_repl(agent=None, agent_runner_func=agent_runner_func))
             return
         except Exception:
             pass

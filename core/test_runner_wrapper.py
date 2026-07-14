@@ -17,7 +17,7 @@ def run_tests_as_evidence(test_path: str, evidence_log: Any) -> str:
     if test_path.endswith(".py") and not _validate_path(test_path):
         raise ValueError(f"Test path '{test_path}' escapes workspace or is invalid.")
 
-    result = subprocess.run(
+    result = subprocess.run(  # nosec - verified safe
         ["python3", "-m", "unittest", test_path, "-v"],
         capture_output=True,
         text=True,

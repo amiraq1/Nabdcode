@@ -7,8 +7,6 @@ from core.tool_factory import build_skill_tools
 from core.memory_manager import PersistentMemory
 from tools.secure_tools import (
     SecureWorkspaceReader,
-    SecureGitInspector,
-    SecureTestRunner,
     SecureSemanticMemoryTool,
     SecureFileSystemTool,
     SecureShellTool,

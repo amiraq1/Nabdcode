@@ -1,7 +1,7 @@
 """Automated verification suite for TodoWriteTool (tools/todo.py)."""
 
 import unittest
-from core.todo import TodoManager, TodoStatus
+from core.todo import TodoManager
 from tools.todo import TodoWriteTool
 
 

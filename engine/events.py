@@ -1,4 +1,4 @@
-from typing import Callable, Dict, List, Any
+from typing import Callable, Dict, Any
 from uuid import uuid4
 
 class EventBus:

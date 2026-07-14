@@ -4,14 +4,12 @@ import json
 import logging
 import os
 import time
-import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
 from core.sanitize import sanitize
 from core.config import ConfigManager
-import core._env  # auto-load .env variables
 
 logger = logging.getLogger("nabd.llm")
 

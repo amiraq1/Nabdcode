@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 from threading import RLock
 from typing import Any
-from engine.state import RuntimeState
 
 STATE_FILE = Path("core/state/shared_state.json")
 

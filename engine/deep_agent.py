@@ -19,6 +19,7 @@ from engine.state import RuntimeState, GoalSpec
 from engine.consent import ConsentManager
 from core.parser import extract_command, validate_tool_call, get_workspace_root
 from core.evidence import EvidenceLog, VerifierError
+from core.utils import truncate
 from tools.models import ToolResult
 from core.sanitize import sanitize
 
@@ -474,56 +475,20 @@ class NativeDeepAgent:
             state.errors.append("NO_LLM")
             return state
 
-        # Iterate using the persistent cursor, not a fresh enumerate().
         while state.current_plan_index < len(state.plan):
             idx = state.current_plan_index
             step = state.plan[idx]
 
-            # ── Mid-EXECUTE re-dispatch prevention (resume only) ──────────
-            # On the resumed call we must NOT blindly re-run steps:
-            #   • idx < len(past_steps) → already completed in a prior run;
-            #     skip it without re-dispatching.
-            #   • idx >= len(past_steps) → no result in the ledger, i.e. the
-            #     step was killed mid-flight (or never started). Re-executing a
-            #     non-idempotent shell command is unsafe, so we record it
-            #     INTERRUPTED and transition out to REVIEW/REPLAN instead.
-            if resuming:
-                if idx < len(state.past_steps):
-                    state.current_plan_index += 1
-                    self._save_checkpoint(state)
-                    continue
-                # Interrupted in-flight step: never re-dispatch blindly.
-                state.past_steps.append(step)
-                interrupted_obs = (
-                    f"[INTERRUPTED] {step[:80]}\n"
-                    f"  tool: (unknown — killed mid-dispatch before result)\n"
-                    f"  Note: skipped re-dispatch to avoid non-idempotent replay."
-                )
-                state.observations.append(interrupted_obs)
-                state.execution_results.append("[Interrupted] step killed before result")
-                state.errors.append(f"LMK_INTERRUPT: step '{step[:60]}'")
-                state.current_plan_index += 1
-                self._save_checkpoint(state)
-                # Fall through to REVIEW/REPLAN rather than retrying blindly.
+            skip, stop = self._check_interrupted_or_hitl(state, step, idx, resuming)
+            if skip:
+                continue
+            if stop:
                 break
-
-            if self._is_sensitive_action(step) or state.critique:
-                bus.emit("hitl_triggered", {"step": step, "iteration": state.iteration})
-                if self.hitl_callback and not self.hitl_callback(step):
-                    state.critique = f"User rejected step: '{step}'. Re-plan alternative path."
-                    state.errors.append("USER_REJECTION")
-                    state.current_plan_index += 1
-                    self._save_checkpoint(state)
-                    return state
 
             worker_tag = "[SEC]" if any(k in step.lower() for k in ("security", "audit", "vuln", "patch")) else "[FS]"
             bus.emit("deep_exec_step", {"step_idx": idx + 1, "total": len(state.plan), "step": step, "worker": worker_tag})
 
-            # Build context from this plan step, past observations, and tool schemas
             tool_schemas = self._tool_schemas_summary()
-            # Phase5 (GoalSpec): surface the active verifiable objective so the
-            # executor steers every step toward the success criteria, not just the
-            # local plan step. Injected as a hard XML block the planner preserves.
             goal = self.runtime_state.active_goal
             from engine.state import GoalSpec as _GS, build_goal_block
             goal_block = build_goal_block(goal) if isinstance(goal, _GS) else ""
@@ -540,113 +505,120 @@ class NativeDeepAgent:
                 {"role": "user", "content": exec_prompt},
             ]
 
-            result = None
-            for attempt in range(3):
-                try:
-                    response = self.llm(messages)
-                except Exception as exc:
-                    state.errors.append(f"LLM_ERROR: {exc}")
-                    continue
-
-                tool_call = extract_command(response)
-                if tool_call is None:
-                    state.errors.append(f"PARSE_FAILURE: LLM did not produce a tool call for step '{step[:60]}'")
-                    continue
-
-                v_res = validate_tool_call({"tool": tool_call.tool, "args": tool_call.args})
-                if not v_res.ok:
-                    state.errors.append(f"SECURITY_REJECT: Schema validation failed for '{tool_call.tool}': {v_res.error}")
-                    continue
-
-                # NOTE: no separate execute_shell safety pre-check here. Security
-                # validation is performed exactly once, inside the dispatcher's
-                # ShellTool.execute(), which returns a ToolResult (success=False)
-                # on rejection. A duplicated pre-check would block the dispatch
-                # before any evidence is recorded — preventing the failed-dispatch
-                # evidence path (and other callers) from observing the rejection.
-                # The emit/record flow below therefore captures both success and
-                # failure outcomes uniformly.
-
-                # Phase3.2 granular checkpoint: snapshot the cursor (with the
-                # pending tool_call) IMMEDIATELY before dispatch, so a kill
-                # during execution leaves the step flagged as in-flight.
-                state.current_plan_index = idx
-                self._save_checkpoint(state)
-
-                # ── Consent Loop (Phase 2 Public Release Protocol) ────────────
-                # Intercept BEFORE dispatch. The consent policy is centralized in
-                # ConsentManager. A declined call returns a normal successful
-                # ToolResult (success=True, stdout="Execution blocked by user.")
-                # — a valid outcome, not an engine error. No exception, no abort,
-                # no loop_error; the LLM adapts its plan from the observation.
-                result = None
-                if ConsentManager().requires_confirmation(tool_call.tool, tool_call.args):
-                    blocked = ConsentManager().confirm(tool_call.tool, tool_call.args)
-                    if blocked is not None:
-                        result = blocked
-
-                if result is None:
-                    try:
-                        result = self.dispatcher.dispatch(tool_call.tool, tool_call.args)
-                        if result is None:
-                            result = ToolResult(success=False, stderr="Dispatcher returned None", returncode=-1)
-                        # Recovery guard: if this exact step already produced a
-                        # ledger entry from a prior (pre-LMK) run, treat the new
-                        # dispatch as authoritative and avoid double-counting.
-                        cmd_summary = (
-                            tool_call.args.get("command")
-                            or tool_call.args.get("path")
-                            or tool_call.args.get("query")
-                            or str(tool_call.args)[:60]
-                        )
-                        self.evidence_log.record(
-                            tool=tool_call.tool,
-                            command_or_path=cmd_summary,
-                            success=getattr(result, "success", False),
-                            output_snippet=getattr(result, "output", "") or getattr(result, "stderr", ""),
-                        )
-                        # Phase3.2 granular checkpoint: snapshot AFTER the result
-                        # is recorded, so a kill now resumes past this step.
-                        self._save_checkpoint(state)
-                        break
-                    except Exception as exc:
-                        state.errors.append(f"DISPATCH_ERROR: {exc}")
-                        continue
-
+            result, tool_call = self._attempt_tool_dispatch(state, step, idx, messages)
             if result is None:
                 err_msg = f"Step '{step[:80]}' failed after 3 attempts."
                 state.past_steps.append(step)
                 state.observations.append(f"[ERROR] {err_msg}")
                 state.execution_results.append(f"[Execution Error] {err_msg}")
+                if not any(e.startswith("PARSE_FAILURE:") or e.startswith("SECURITY_REJECT:") or e.startswith("DISPATCH_ERROR:") or e.startswith("LLM_ERROR:") for e in state.errors[-3:]):
+                    state.errors.append(f"STEP_FAILED: {err_msg}")
                 state.current_plan_index += 1
                 self._save_checkpoint(state)
-                continue
+                break
 
-            # Record real observation
-            output = ((result.stdout or "") + (result.stderr or "")).strip()
-            snippet = output[:500] + ("..." if len(output) > 500 else "")
-            observation = (
-                f"[OK] {step[:80]}\n"
-                f"  tool: {tool_call.tool}\n"
-                f"  exit: {result.returncode}\n"
-                f"  output: {snippet}"
-            ) if result.success else (
-                f"[FAIL] {step[:80]}\n"
-                f"  tool: {tool_call.tool}\n"
-                f"  exit: {result.returncode}\n"
-                f"  error: {snippet}"
-            )
+            output = getattr(result, "output", "") or getattr(result, "stderr", "")
+            if not result.success and not output:
+                output = getattr(result, "stderr", "")
+            snippet = truncate(output, max_len=1000)
+
+            if result.success:
+                observation = f"[PASS] {step[:80]}\n  tool: {tool_call.tool}\n  exit: {result.returncode}\n  output: {snippet}"
+            else:
+                observation = f"[FAIL] {step[:80]}\n  tool: {tool_call.tool}\n  exit: {result.returncode}\n  error: {snippet}"
+
             state.past_steps.append(step)
             state.observations.append(observation)
-            state.execution_results.append(
-                output if result.success else f"[Error] {output or 'No output'}"
-            )
-            # Advance the cursor and checkpoint the completed step.
+            state.execution_results.append(output if result.success else f"[Error] {output or 'No output'}")
             state.current_plan_index += 1
             self._save_checkpoint(state)
 
         state.final_output = "\n".join(state.execution_results)
         return state
+
+    def _check_interrupted_or_hitl(self, state: DeepAgentState, step: str, idx: int, resuming: bool) -> tuple[bool, bool]:
+        """Check whether to skip or break execution for resume interruptions or HITL rejections."""
+        if resuming:
+            if idx < len(state.past_steps):
+                state.current_plan_index += 1
+                self._save_checkpoint(state)
+                return True, False
+            state.past_steps.append(step)
+            interrupted_obs = (
+                f"[INTERRUPTED] {step[:80]}\n"
+                f"  tool: (unknown — killed mid-dispatch before result)\n"
+                f"  Note: skipped re-dispatch to avoid non-idempotent replay."
+            )
+            state.observations.append(interrupted_obs)
+            state.execution_results.append("[Interrupted] step killed before result")
+            state.errors.append(f"LMK_INTERRUPT: step '{step[:60]}'")
+            state.current_plan_index += 1
+            self._save_checkpoint(state)
+            return False, True
+
+        if self._is_sensitive_action(step) or state.critique:
+            bus.emit("hitl_triggered", {"step": step, "iteration": state.iteration})
+            if self.hitl_callback and not self.hitl_callback(step):
+                state.critique = f"User rejected step: '{step}'. Re-plan alternative path."
+                state.errors.append("USER_REJECTION")
+                state.current_plan_index += 1
+                self._save_checkpoint(state)
+                return False, True
+        return False, False
+
+    def _attempt_tool_dispatch(self, state: DeepAgentState, step: str, idx: int, messages: list) -> tuple[Optional[Any], Optional[Any]]:
+        """Try up to 3 attempts to get a valid tool call and dispatch it."""
+        result = None
+        tool_call = None
+        for attempt in range(3):
+            try:
+                response = self.llm(messages)
+            except Exception as exc:
+                state.errors.append(f"LLM_ERROR: {exc}")
+                continue
+
+            tool_call = extract_command(response)
+            if tool_call is None:
+                state.errors.append(f"PARSE_FAILURE: LLM did not produce a tool call for step '{step[:60]}'")
+                continue
+
+            v_res = validate_tool_call({"tool": tool_call.tool, "args": tool_call.args})
+            if not v_res.ok:
+                state.errors.append(f"SECURITY_REJECT: Schema validation failed for '{tool_call.tool}': {v_res.error}")
+                continue
+
+            state.current_plan_index = idx
+            self._save_checkpoint(state)
+
+            result = None
+            if ConsentManager().requires_confirmation(tool_call.tool, tool_call.args):
+                blocked = ConsentManager().confirm(tool_call.tool, tool_call.args)
+                if blocked is not None:
+                    result = blocked
+
+            if result is None:
+                try:
+                    result = self.dispatcher.dispatch(tool_call.tool, tool_call.args)
+                    if result is None:
+                        result = ToolResult(success=False, stderr="Dispatcher returned None", returncode=-1)
+                    cmd_summary = (
+                        tool_call.args.get("command")
+                        or tool_call.args.get("path")
+                        or tool_call.args.get("query")
+                        or str(tool_call.args)[:60]
+                    )
+                    self.evidence_log.record(
+                        tool=tool_call.tool,
+                        command_or_path=cmd_summary,
+                        success=getattr(result, "success", False),
+                        output_snippet=getattr(result, "output", "") or getattr(result, "stderr", ""),
+                    )
+                    self._save_checkpoint(state)
+                    break
+                except Exception as exc:
+                    state.errors.append(f"DISPATCH_ERROR: {exc}")
+                    continue
+        return result, tool_call
 
     def _tool_schemas_summary(self) -> str:
         """Return a compact summary of available tools for the execute prompt."""
@@ -698,7 +670,7 @@ class NativeDeepAgent:
     def run(self, task: str) -> str:
         """Main Native Deep Agent loop: Plan -> Clarify -> Execute -> Review -> Replan.
 
-        After the review loop passes, runs EvidenceLog.verify() as a final
+        After the review loop passes, runs evidence_log.verify(require_tools=True) via helper as a final
         gate before returning the output — same as ExecutionLoop's no-tool-call
         path.  If verification fails, raises VerifierError (propagated as
         ToolRequiredError by the caller).
@@ -709,28 +681,17 @@ class NativeDeepAgent:
           screen, one internal) would cause confusion.  The ExecutionLoop path
           owns TodoManager; the deep agent path owns DeepAgentState.plan.
         """
-        # Resume if a stale checkpoint exists for this workspace.
         restored = self._load_checkpoint()
         if restored is not None:
             state = restored
-            # Phase3.1 replay-safety: remount from the slim ledger ONLY. Never
-            # re-expand raw history — the checkpoint mirrors the compacted view,
-            # so an LMK recovery does not re-inflate the context.
             self._restore_evidence_from_ledger(state)
-            # Phase5 (GoalSpec): re-inject the checkpointed objective into the
-            # live runtime_state so the verifiable exit gate fires on resume.
             self._reconcile_goal_with_checkpoint(state)
             bus.emit("deep_resume", {"task": state.task, "iteration": state.iteration})
         else:
             state = DeepAgentState(task=task)
-            # Phase5 (GoalSpec): mirror any active objective into the checkpoint
-            # so it is serialized and survives an LMK kill from the very first
-            # node transition.
             if self.runtime_state.active_goal is not None:
                 state.goal = self.runtime_state.active_goal
 
-        # Checkpoint helper: run a node, then persist atomically. This is the
-        # LMK guard — every node transition leaves a clean, resumable snapshot.
         def _step(node_fn, label):
             nonlocal state
             state = node_fn(state)
@@ -738,20 +699,17 @@ class NativeDeepAgent:
             return state
 
         if restored is not None:
-            # Replay-safe resume: the plan/clarify nodes are already persisted in
-            # the checkpoint, so re-running them would duplicate historical turn
-            # processing. Jump straight into the loop at the interrupted node
-            # selected by the explicit cursor (Phase3.2) — no re-planning.
-            # Flag execute_node so its mid-EXECUTE re-dispatch guard fires once.
             self._resume_mode = True
         else:
             _step(self.plan_node, "plan")
             _step(self.clarify_node, "clarify")
 
+        state = self._run_iteration_loop(state, restored, _step)
+        return self._verify_final_output_gate(state, _step)
+
+    def _run_iteration_loop(self, state: DeepAgentState, restored: Optional[DeepAgentState], _step) -> DeepAgentState:
+        """Execute plan, review, and replan iterations until review passes or iterations max out."""
         while not state.review_passed and state.iteration < self.max_iterations:
-            # Phase3.2: on a resumed run, honor the explicit node cursor so we
-            # re-enter exactly where the LMK kill happened (EXECUTE/REVIEW/REPLAN)
-            # rather than blindly re-running EXECUTE. A fresh run always executes.
             if restored is not None and state.current_node != "EXECUTE":
                 if state.current_node == "REVIEW":
                     _step(self.review_node, "review")
@@ -759,9 +717,6 @@ class NativeDeepAgent:
                     state.iteration += 1
                     _step(self.replan_node, "replan")
                 else:
-                    # PLAN/CLARIFY or unknown cursor → safest is to re-execute
-                    # from the current plan index (execute_node self-heals via the
-                    # mid-EXECUTE re-dispatch guard).
                     _step(self.execute_node, "execute")
             else:
                 _step(self.execute_node, "execute")
@@ -770,32 +725,25 @@ class NativeDeepAgent:
             if self.should_replan(state) and state.iteration < self.max_iterations - 1:
                 state.iteration += 1
                 _step(self.replan_node, "replan")
+        return state
 
-        # Check chitchat first
+    def _verify_final_output_gate(self, state: DeepAgentState, _step) -> str:
+        """Verify final output and perform self-correction retries if verifier or goal gate fails."""
         from core.constants import is_chitchat
-        is_chat, _ = is_chitchat(task)
+        is_chat, _ = is_chitchat(state.task)
         if is_chat and not state.past_steps:
             self._clear_checkpoint()
             return state.final_output
 
-        # Final evidence verification gate with self-correction
         retry_count = 0
         MAX_SELF_CORRECT = 3
         while retry_count <= MAX_SELF_CORRECT:
             try:
                 self.evidence_log.verify(require_tools=True, claim=state.final_output)
-                # Phase5 (GoalSpec): verifiable exit condition.
-                # Even though the generic verifier (L0/L1) passed, a GoalSpec is a
-                # STRICTER gate: the agent may not return "Success" unless the goal
-                # verifier explicitly proves every success criterion against live
-                # evidence. On failure we raise so the existing except branch
-                # issues a goal critique and re-enters the plan/execute loop.
                 goal = self.runtime_state.active_goal
                 from engine.state import GoalSpec
                 from engine.goal_verifier import evaluate_goal_exit
                 if isinstance(goal, GoalSpec) and goal.raw_prompt.strip():
-                    # Signal the Kinetic UX that the Verifier is evaluating the
-                    # objective before the strict exit gate resolves.
                     bus.emit("goal_verify", {
                         "session_id": self.runtime_state.session_id,
                         "raw_prompt": goal.raw_prompt,
@@ -809,8 +757,6 @@ class NativeDeepAgent:
                         raise VerifierError(gres.to_critique())
                     goal.is_met = True
                     self.runtime_state.active_goal = goal
-                    # Keep the checkpoint's goal in sync so a later resume (if the
-                    # clear below is skipped) reflects the proven objective.
                     state.goal = goal
                 self._clear_checkpoint()
                 return state.final_output

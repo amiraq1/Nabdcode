@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Dict, Final, Optional, Set
+from typing import Dict, Final, Set
 
 
 class ProviderGateway(enum.Enum):

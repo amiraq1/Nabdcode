@@ -8,7 +8,6 @@ test_project_root_guard.py
 
 import os
 import pytest
-from pathlib import Path
 
 from core.project_root_guard import (
     EvidenceRecord,

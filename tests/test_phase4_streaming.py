@@ -10,8 +10,6 @@ Verifies:
 
 import sys
 import os
-import json
-import threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.llm import LocalClient, LocalConfig

@@ -162,128 +162,59 @@ def _validate_path(path: str) -> bool:
         return False
 
 
-def validate_tool_call(payload: Any) -> ValidationResult:
+def _parse_payload(payload: Any) -> tuple[Optional[dict], Optional[ValidationResult]]:
+    """Parse string JSON payload or validate dict object structure."""
     if isinstance(payload, str):
         payload_clean = sanitize(payload)
         try:
             obj = json.loads(payload_clean)
         except json.JSONDecodeError as e:
-            return ValidationResult(
-                False,
-                None,
-                f"Invalid JSON: {e.msg}",
-            )
+            return None, ValidationResult(False, None, f"Invalid JSON: {e.msg}")
     else:
         obj = payload
-
     if not isinstance(obj, dict):
-        return ValidationResult(
-            False,
-            None,
-            "Root must be a JSON object.",
-        )
+        return None, ValidationResult(False, None, "Root must be a JSON object.")
+    return obj, None
 
-    tool = obj.get("tool")
-    args = obj.get("args")
 
-    if not isinstance(tool, str):
-        return ValidationResult(
-            False,
-            None,
-            "'tool' must be a string.",
-        )
-
-    if not isinstance(args, dict):
-        return ValidationResult(
-            False,
-            None,
-            "'args' must be an object.",
-        )
-
-    schema = TOOL_SCHEMAS.get(tool)
-
-    if schema is None:
-        return ValidationResult(
-            False,
-            None,
-            f"Unknown tool '{tool}'.",
-        )
-
+def _validate_schema_args(tool: str, args: dict, schema: dict) -> Optional[ValidationResult]:
+    """Validate arguments against required/optional schema types and constraints."""
     required = schema["required"]
     optional = schema.get("optional", {})
     allowed = set(required) | set(optional)
-
     for key in args:
         if key not in allowed:
-            return ValidationResult(
-                False,
-                None,
-                f"Unexpected argument '{key}'.",
-            )
-
+            return ValidationResult(False, None, f"Unexpected argument '{key}'.")
     for key, typ in required.items():
         if key not in args:
-            return ValidationResult(
-                False,
-                None,
-                f"Missing required argument '{key}'.",
-            )
-
+            return ValidationResult(False, None, f"Missing required argument '{key}'.")
         if not isinstance(args[key], typ):
-            return ValidationResult(
-                False,
-                None,
-                f"Argument '{key}' must be {typ.__name__}.",
-            )
-
+            return ValidationResult(False, None, f"Argument '{key}' must be {typ.__name__}.")
     for key, typ in optional.items():
         if key in args and not isinstance(args[key], typ):
-            return ValidationResult(
-                False,
-                None,
-                f"Argument '{key}' must be {typ.__name__}.",
-            )
-
-    # ── Constraints (max_length, etc.) ──────────────────────────────────────
+            return ValidationResult(False, None, f"Argument '{key}' must be {typ.__name__}.")
     constraints = schema.get("constraints", {})
     for arg_key, constraint_set in constraints.items():
-        if arg_key in args:
-            if "max_length" in constraint_set:
-                max_len = constraint_set["max_length"]
-                val = args[arg_key]
-                if isinstance(val, str) and len(val) > max_len:
-                    return ValidationResult(
-                        False,
-                        None,
-                        f"Argument '{arg_key}' exceeds maximum length ({len(val)} > {max_len}).",
-                    )
+        if arg_key in args and "max_length" in constraint_set:
+            max_len = constraint_set["max_length"]
+            val = args[arg_key]
+            if isinstance(val, str) and len(val) > max_len:
+                return ValidationResult(False, None, f"Argument '{arg_key}' exceeds maximum length ({len(val)} > {max_len}).")
+    return None
 
+
+def _validate_tool_specific(tool: str, args: dict, schema: dict) -> Optional[ValidationResult]:
+    """Validate tool-specific constraints for file_system and todo_write tools."""
     if tool == "file_system":
         action = args.get("action")
         valid_actions = schema["actions"]
-
         if action not in valid_actions:
-            return ValidationResult(
-                False,
-                None,
-                f"Unsupported action '{action}'.",
-            )
-
+            return ValidationResult(False, None, f"Unsupported action '{action}'.")
         for field in valid_actions[action]:
             if field not in args:
-                return ValidationResult(
-                    False,
-                    None,
-                    f"Action '{action}' requires '{field}'.",
-                )
-
+                return ValidationResult(False, None, f"Action '{action}' requires '{field}'.")
         if not _validate_path(args["path"]):
-            return ValidationResult(
-                False,
-                None,
-                "Path escapes workspace.",
-            )
-
+            return ValidationResult(False, None, "Path escapes workspace.")
     if tool == "todo_write":
         todos = args.get("todos", [])
         if not isinstance(todos, list):
@@ -293,12 +224,31 @@ def validate_tool_call(payload: Any) -> ValidationResult:
                 return ValidationResult(False, None, "Each item in 'todos' must have 'task' and 'status'.")
             if item["status"] not in {"pending", "in_progress", "done"}:
                 return ValidationResult(False, None, f"Invalid todo status: {item['status']}.")
+    return None
 
-    return ValidationResult(
-        True,
-        obj,
-        None,
-    )
+
+def validate_tool_call(payload: Any) -> ValidationResult:
+    """Validate a tool call payload against defined schemas."""
+    obj, err = _parse_payload(payload)
+    if err:
+        return err
+    assert obj is not None
+    tool = obj.get("tool")
+    args = obj.get("args")
+    if not isinstance(tool, str):
+        return ValidationResult(False, None, "'tool' must be a string.")
+    if not isinstance(args, dict):
+        return ValidationResult(False, None, "'args' must be an object.")
+    schema = TOOL_SCHEMAS.get(tool)
+    if schema is None:
+        return ValidationResult(False, None, f"Unknown tool '{tool}'.")
+    err = _validate_schema_args(tool, args, schema)
+    if err:
+        return err
+    err = _validate_tool_specific(tool, args, schema)
+    if err:
+        return err
+    return ValidationResult(True, obj, None)
 
 
 # ---------------------------------------------------------------------

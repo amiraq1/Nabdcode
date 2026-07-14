@@ -20,7 +20,7 @@ local engine.state types and core.evidence, keeping it decoupled and testable.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from engine.state import GoalSpec
 from core.evidence import EvidenceLog, VerifierError

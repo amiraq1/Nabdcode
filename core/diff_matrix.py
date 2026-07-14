@@ -15,7 +15,7 @@ Architectural DNA inspired by professional terminal diff renderers (The Diff Mat
 from __future__ import annotations
 
 import difflib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List
 from core.sanitize import sanitize
 

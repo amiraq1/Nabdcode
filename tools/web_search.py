@@ -15,7 +15,6 @@ from core.sanitize import sanitize
 
 def _is_online(timeout: float = 1.5) -> bool:
     """Quick network reachability check."""
-    import urllib.request
     try:
         urllib.request.urlopen(
             "https://api.duckduckgo.com",
@@ -180,8 +179,6 @@ class WebSearchTool(BaseTool):
             )
 
     def _fallback_search(self, query: str, max_results: int) -> ToolResult:
-        import urllib.request
-        import urllib.parse
         import json
         import re
 

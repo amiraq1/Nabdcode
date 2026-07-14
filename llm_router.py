@@ -2,7 +2,6 @@ from __future__ import annotations
 import os, time, json
 from dataclasses import dataclass
 from typing import Any
-import core._env
 from core.llm import OpenRouterClient
 try:
     from core.llm import NvidiaClient

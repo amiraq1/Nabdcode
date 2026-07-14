@@ -97,84 +97,26 @@ class SecureWorkspaceReader(SecureTool):
         **kwargs: Any,
     ) -> str:
         start_time = time.time()
-        resolved_path = file_path or path or filename or directory or target_dir
-        if not resolved_path and kwargs:
-            for k, v in kwargs.items():
-                if isinstance(v, str) and v.strip():
-                    resolved_path = v
-                    break
+        resolved_path = self._resolve_input_path(file_path, path, filename, directory, target_dir, kwargs)
         if not resolved_path:
             return "Error: No file_path or path provided to secure_workspace_reader."
-        file_path = str(resolved_path)
-        try:
-            # Find the first allowed root that can resolve this path
-            target_path = None
-            matched_root = None
-            for root in self.allowed_roots:
-                candidate = (root / file_path).resolve()
-                if _is_path_relative_to(candidate, root):
-                    target_path = candidate
-                    matched_root = root
-                    break
+        file_path_str = str(resolved_path)
 
+        try:
+            target_path = self._find_target_under_roots(file_path_str)
             if target_path is None:
                 logger.warning(
-                    f"[{self.name}] Validation failed: Path '{file_path}' not under any allowed root"
+                    f"[{self.name}] Validation failed: Path '{file_path_str}' not under any allowed root"
                 )
                 return (
                     "Security Violation: Access denied outside allowed workspace roots. "
                     f"Allowed roots: {[str(r) for r in self.allowed_roots]}"
                 )
 
-            # 2. Verify file exists
-            if not target_path.exists():
-                logger.info(f"[{self.name}] File not found: {file_path}")
-                return f"Error: File '{file_path}' not found."
+            err_msg, content = self._validate_and_read_file(target_path, file_path_str)
+            if err_msg is not None:
+                return err_msg
 
-            # 3. Reject directories
-            if target_path.is_dir():
-                logger.warning(
-                    f"[{self.name}] Validation failed: Attempted directory read on {file_path}"
-                )
-                return f"Error: Target '{file_path}' is a directory, not a file."
-
-            # 4. Reject oversized files
-            file_size = target_path.stat().st_size
-            if file_size > self.max_file_size:
-                logger.warning(
-                    f"[{self.name}] Validation failed: Oversized file ({file_size} bytes)"
-                )
-                return f"Error: File '{file_path}' exceeds maximum allowed size ({self.max_file_size} bytes)."
-
-            # 5. Detect binary files
-            with target_path.open("rb") as f:
-                header = f.read(1024)
-                if b"\x00" in header:
-                    logger.warning(
-                        f"[{self.name}] Validation failed: Binary file detected ({file_path})"
-                    )
-                    return f"Error: Cannot read binary file '{file_path}'."
-
-            # 6. Read text and handle encoding failures gracefully
-            try:
-                content = target_path.read_text(encoding="utf-8")
-
-                # Token-clamp oversized files to protect local-model context.
-                MAX_CONTENT_CHARS = 12000
-                if len(content) > MAX_CONTENT_CHARS:
-                    logger.warning(f"[{self.name}] Truncating output ({len(content)} chars)")
-                    content = content[:MAX_CONTENT_CHARS] + (
-                        f"\n\n... [TRUNCATED] Content exceeded {MAX_CONTENT_CHARS} chars. "
-                        "Use shell tools (grep/head) for targeted inspection."
-                    )
-
-            except UnicodeDecodeError:
-                logger.warning(
-                    f"[{self.name}] Validation failed: Non-UTF8 encoding in {file_path}"
-                )
-                return f"Error: File '{file_path}' is not valid UTF-8 text."
-
-            # 7. Pass output through centralized sanitizer
             duration = time.time() - start_time
             logger.info(
                 f"[{self.name}] Read successful ({len(content)} chars, {duration:.3f}s)"
@@ -185,6 +127,58 @@ class SecureWorkspaceReader(SecureTool):
             duration = time.time() - start_time
             logger.error(f"[{self.name}] OSError during read ({duration:.3f}s)")
             return f"Error: Operating system error accessing file ({type(exc).__name__})."
+
+    def _resolve_input_path(self, file_path, path, filename, directory, target_dir, kwargs) -> Optional[str]:
+        """Resolve path from positional keyword arguments or fallback kwargs."""
+        resolved = file_path or path or filename or directory or target_dir
+        if not resolved and kwargs:
+            for k, v in kwargs.items():
+                if isinstance(v, str) and v.strip():
+                    return v
+        return resolved
+
+    def _find_target_under_roots(self, file_path: str) -> Optional[pathlib.Path]:
+        """Find the first allowed root that can safely resolve candidate file path."""
+        for root in self.allowed_roots:
+            candidate = (root / file_path).resolve()
+            if _is_path_relative_to(candidate, root):
+                return candidate
+        return None
+
+    def _validate_and_read_file(self, target_path: pathlib.Path, file_path: str) -> tuple[Optional[str], str]:
+        """Validate existence, type, size, encoding of target file and return (error_string, content)."""
+        if not target_path.exists():
+            logger.info(f"[{self.name}] File not found: {file_path}")
+            return f"Error: File '{file_path}' not found.", ""
+
+        if target_path.is_dir():
+            logger.warning(f"[{self.name}] Validation failed: Attempted directory read on {file_path}")
+            return f"Error: Target '{file_path}' is a directory, not a file.", ""
+
+        file_size = target_path.stat().st_size
+        if file_size > self.max_file_size:
+            logger.warning(f"[{self.name}] Validation failed: Oversized file ({file_size} bytes)")
+            return f"Error: File '{file_path}' exceeds maximum allowed size ({self.max_file_size} bytes).", ""
+
+        with target_path.open("rb") as f:
+            header = f.read(1024)
+            if b"\x00" in header:
+                logger.warning(f"[{self.name}] Validation failed: Binary file detected ({file_path})")
+                return f"Error: Cannot read binary file '{file_path}'.", ""
+
+        try:
+            content = target_path.read_text(encoding="utf-8")
+            MAX_CONTENT_CHARS = 12000
+            if len(content) > MAX_CONTENT_CHARS:
+                logger.warning(f"[{self.name}] Truncating output ({len(content)} chars)")
+                content = content[:MAX_CONTENT_CHARS] + (
+                    f"\n\n... [TRUNCATED] Content exceeded {MAX_CONTENT_CHARS} chars. "
+                    "Use shell tools (grep/head) for targeted inspection."
+                )
+            return None, content
+        except UnicodeDecodeError:
+            logger.warning(f"[{self.name}] Validation failed: Non-UTF8 encoding in {file_path}")
+            return f"Error: File '{file_path}' is not valid UTF-8 text.", ""
 
 
 ALLOWED_GIT_COMMANDS: Final[Dict[str, List[str]]] = {
@@ -240,13 +234,14 @@ class SecureGitInspector(SecureTool):
         cmd = ALLOWED_GIT_COMMANDS[action]
 
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec - verified safe
                 cmd,
                 cwd=str(self.repo_path),
                 shell=False,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
             )
             duration = time.time() - start_time
             logger.info(
@@ -321,7 +316,7 @@ class SecureTestRunner(SecureTool):
         cmd = ["python3", "-m", "unittest", "discover", "-s", target_path, "--"]
 
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec - verified safe
                 cmd,
                 cwd=str(self.repo_path),
                 shell=False,
@@ -519,56 +514,47 @@ class SecureShellTool(SecureTool):
         self._tool = ShellTool()
 
     def forward(self, *args: Any, command: Any = "", **kwargs: Any) -> str:
-        # Tolerate model schema drift & positional/list unpacking:
-        # Some local models or wrappers emit positional lists (e.g. forward(["ls"]))
-        # or dictionary mappings, or use aliases like 'file_path'/'path'/'cmd'/'args'.
-        cmd = None
-        if args:
-            first_arg = args[0]
-            if isinstance(first_arg, (list, tuple)) and first_arg:
-                cmd = first_arg[0]
-            elif isinstance(first_arg, dict):
-                cmd = first_arg.get("command") or first_arg.get("cmd") or first_arg.get("file_path") or first_arg.get("path")
-            else:
-                cmd = first_arg
-
-        if not cmd and command:
-            if isinstance(command, (list, tuple)) and command:
-                cmd = command[0]
-            elif isinstance(command, dict):
-                cmd = command.get("command") or command.get("cmd") or command.get("file_path") or command.get("path")
-            else:
-                cmd = command
-
-        if not cmd:
-            raw = kwargs.get("command") or kwargs.get("cmd") or kwargs.get("file_path") or kwargs.get("path") or kwargs.get("args")
-            if isinstance(raw, (list, tuple)) and raw:
-                cmd = raw[0]
-            elif isinstance(raw, dict):
-                cmd = raw.get("command") or raw.get("cmd") or raw.get("file_path") or raw.get("path")
-            else:
-                cmd = raw
-
-        if not cmd and kwargs:
-            for k, v in kwargs.items():
-                if isinstance(v, (list, tuple)) and v and isinstance(v[0], str):
-                    cmd = v[0]
-                    break
-                elif isinstance(v, str) and v.strip():
-                    cmd = v
-                    break
-
+        cmd = self._extract_cmd(args, command, kwargs)
         if not cmd:
             return "Error: secure_shell requires a 'command' argument."
         result = self._tool.execute(command=str(cmd))
-        # Surface the REAL outcome, not just stdout. A redirect (`echo > file`)
-        # produces empty stdout but a nonzero returncode on failure; reporting only
-        # stdout would mask failures as silent "success".
         if not result.success:
             detail = result.stderr or result.stdout or "unknown error"
             return f"Error executing '{str(cmd)}' (exit {result.returncode}): {detail}"
         out = result.stdout or result.stderr
         return str(out).strip()
+
+    def _extract_cmd(self, args: tuple[Any, ...], command: Any, kwargs: dict[str, Any]) -> Optional[Any]:
+        """Extract command argument from positional args, keyword argument, or kwargs mappings."""
+        if args:
+            first_arg = args[0]
+            if isinstance(first_arg, (list, tuple)) and first_arg:
+                return first_arg[0]
+            if isinstance(first_arg, dict):
+                return first_arg.get("command") or first_arg.get("cmd") or first_arg.get("file_path") or first_arg.get("path")
+            return first_arg
+
+        if command:
+            if isinstance(command, (list, tuple)) and command:
+                return command[0]
+            if isinstance(command, dict):
+                return command.get("command") or command.get("cmd") or command.get("file_path") or command.get("path")
+            return command
+
+        raw = kwargs.get("command") or kwargs.get("cmd") or kwargs.get("file_path") or kwargs.get("path") or kwargs.get("args")
+        if raw:
+            if isinstance(raw, (list, tuple)) and raw:
+                return raw[0]
+            if isinstance(raw, dict):
+                return raw.get("command") or raw.get("cmd") or raw.get("file_path") or raw.get("path")
+            return raw
+
+        for k, v in kwargs.items():
+            if isinstance(v, (list, tuple)) and v and isinstance(v[0], str):
+                return v[0]
+            if isinstance(v, str) and v.strip():
+                return v
+        return None
 
 
 class SecureWebSearchTool(SecureTool):

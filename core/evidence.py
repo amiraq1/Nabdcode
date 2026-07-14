@@ -245,6 +245,82 @@ class StructuralVerifier:
         return ids
 
     @classmethod
+    def _select_records(cls, claim: str, records: Dict[str, EvidenceRecord], max_records: int) -> tuple[Dict[str, EvidenceRecord], Optional[VerificationResult]]:
+        """Select relevant evidence records based on explicit E-id references or recent successes."""
+        explicit_ids = cls._extract_referenced_evidence_ids(claim)
+        if explicit_ids:
+            selected: Dict[str, EvidenceRecord] = {}
+            for eid in explicit_ids:
+                rec = records.get(eid)
+                if rec:
+                    selected[eid] = rec
+            if not selected:
+                return {}, VerificationResult(
+                    ok=False,
+                    findings=[f"Claim references evidence IDs {sorted(explicit_ids)} but none exist in the evidence log"],
+                    level="L1",
+                    scores={},
+                )
+            return selected, None
+        def _numeric_eid(r: EvidenceRecord) -> int:
+            m = re.search(r"(\d+)", r.evidence_id)
+            return int(m.group(1)) if m else -1
+        successful = sorted([r for r in records.values() if r.success], key=_numeric_eid, reverse=True)
+        return {r.evidence_id: r for r in successful[:max_records]}, None
+
+    @classmethod
+    def _check_corpus_and_output(cls, claim: str, selected: Dict[str, EvidenceRecord], is_final_claim: bool) -> tuple[str, list[str], Optional[VerificationResult]]:
+        """Build evidence corpus and check for empty outputs and count queries."""
+        evidence_parts: list[str] = []
+        empty_success: list[str] = []
+        for rec in selected.values():
+            if rec.success:
+                text = (rec.output_snippet + " " + rec.command_or_path).lower()
+                evidence_parts.append(text)
+                for subj in rec.covered_subjects:
+                    evidence_parts.append(subj)
+                if not rec.output_snippet.strip():
+                    empty_success.append(rec.evidence_id)
+        evidence_corpus = " ".join(evidence_parts)
+        has_output = any(r.output_snippet.strip() for r in selected.values() if r.success)
+        findings: list[str] = []
+        if empty_success:
+            findings.append(f"Successful evidence {'/'.join(empty_success)} has empty output content")
+        if not has_output or not evidence_corpus.strip() or evidence_corpus.strip() in ("", "0 lines", "[]"):
+            if not is_final_claim:
+                return "", findings, VerificationResult(ok=True, findings=findings + ["needs_more_evidence"], level="L1", scores={"matches": 0, "total": 1, "overlap": 0.0})
+            if any(k in claim.lower() for k in ("found", "there are", "total", "i counted", "enumeration result")):
+                return "", findings, VerificationResult(ok=False, findings=findings + ["Evidence output is empty for claim requiring output enumeration"], level="L1", scores={"matches": 0, "total": 1, "overlap": 0.0})
+        claim_low = claim.lower()
+        is_count_query = any(k in claim_low for k in ("how many", "count how many", "number of"))
+        evidence_low = evidence_corpus.lower()
+        if is_count_query and any(k in evidence_low for k in ("re.compile", "_pattern", "pattern")):
+            return evidence_low, findings, VerificationResult(ok=True, findings=["count_query_verified"], level="L1", scores={"matches": 1, "total": 1, "overlap": 1.0})
+        return evidence_low, findings, None
+
+    @classmethod
+    def _match_tokens(cls, claim: str, evidence_low: str, findings: list[str]) -> VerificationResult:
+        """Match technical anchors and tokens against lowercase evidence corpus."""
+        claim_tokens = _extract_technical_tokens(claim)
+        if not claim_tokens:
+            return VerificationResult(ok=False, findings=["Claim has no verifiable technical anchors; cite evidence or be specific."], level="L1", scores={})
+        def _token_in_evidence(t: str, ev: str) -> bool:
+            pattern = rf"(?<![\w.-]){re.escape(t)}(?![\w.-])"
+            return re.search(pattern, ev) is not None
+        matched_technical_anchors = [t for t in claim_tokens if ("_" in t or "." in t or "/" in t) and _token_in_evidence(t, evidence_low)]
+        matches = sum(1 for t in claim_tokens if _token_in_evidence(t, evidence_low))
+        total = len(claim_tokens) or 1
+        overlap = matches / total
+        req_matches = 1 if total <= 2 else max(1, total // 2)
+        if matches >= req_matches or overlap >= cls.OVERLAP_THRESHOLD or len(matched_technical_anchors) > 0:
+            findings.append(f"L1 pass: {matches}/{total} tokens matched (overlap={overlap:.2f})")
+            return VerificationResult(ok=True, findings=findings, level="L1", scores={"matches": matches, "total": total, "overlap": overlap})
+        unmatched = sorted(claim_tokens - {t for t in claim_tokens if _token_in_evidence(t, evidence_low)})
+        sample = unmatched[:10]
+        findings.append(f"Claim references {total} distinctive token(s) but only {matches} found in evidence output ({', '.join(sample)}{'...' if len(unmatched) > 10 else ''})")
+        return VerificationResult(ok=False, findings=findings, level="L1", scores={"matches": matches, "total": total, "overlap": overlap})
+
+    @classmethod
     def verify(cls, claim: str,
                records: Dict[str, EvidenceRecord],
                max_records: int = 10,
@@ -264,145 +340,13 @@ class StructuralVerifier:
                 level="L1",
                 scores={},
             )
-
-        # E-id selection policy
-        explicit_ids = cls._extract_referenced_evidence_ids(claim)
-        if explicit_ids:
-            selected: Dict[str, EvidenceRecord] = {}
-            for eid in explicit_ids:
-                rec = records.get(eid)
-                if rec:
-                    selected[eid] = rec
-            if not selected:
-                return VerificationResult(
-                    ok=False,
-                    findings=[
-                        f"Claim references evidence IDs {sorted(explicit_ids)}"
-                        f" but none exist in the evidence log"
-                    ],
-                    level="L1",
-                    scores={},
-                )
-        else:
-            # Last N successful records
-            def _numeric_eid(r: EvidenceRecord) -> int:
-                m = re.search(r"(\d+)", r.evidence_id)
-                return int(m.group(1)) if m else -1
-
-            successful = sorted(
-                [r for r in records.values() if r.success],
-                key=_numeric_eid,
-                reverse=True,
-            )
-            selected = {r.evidence_id: r for r in successful[:max_records]}
-
-        # Build evidence corpus from selected records only
-        evidence_parts: list[str] = []
-        empty_success: list[str] = []
-        for rec in selected.values():
-            if rec.success:
-                text = (rec.output_snippet + " " + rec.command_or_path).lower()
-                evidence_parts.append(text)
-                for subj in rec.covered_subjects:
-                    evidence_parts.append(subj)
-                if not rec.output_snippet.strip():
-                    empty_success.append(rec.evidence_id)
-
-        evidence_corpus = " ".join(evidence_parts)
-        has_output = any(r.output_snippet.strip() for r in selected.values() if r.success)
-
-        # Report empty-output findings
-        findings: list[str] = []
-        if empty_success:
-            findings.append(
-                f"Successful evidence {'/'.join(empty_success)} has empty output content"
-            )
-
-        if not has_output or not evidence_corpus.strip() or evidence_corpus.strip() in ("", "0 lines", "[]"):
-            if not is_final_claim:
-                return VerificationResult(
-                    ok=True,
-                    findings=findings + ["needs_more_evidence"],
-                    level="L1",
-                    scores={"matches": 0, "total": 1, "overlap": 0.0},
-                )
-            if any(k in claim.lower() for k in ("found", "there are", "total", "i counted", "enumeration result")):
-                return VerificationResult(
-                    ok=False,
-                    findings=findings + ["Evidence output is empty for claim requiring output enumeration"],
-                    level="L1",
-                    scores={"matches": 0, "total": 1, "overlap": 0.0},
-                )
-
-        claim_low = claim.lower()
-        is_count_query = any(k in claim_low for k in ("how many", "count how many", "number of"))
-        evidence_low = evidence_corpus.lower()
-
-        if is_count_query:
-            if any(k in evidence_low for k in ("re.compile", "_pattern", "pattern")):
-                return VerificationResult(
-                    ok=True,
-                    findings=["count_query_verified"],
-                    level="L1",
-                    scores={"matches": 1, "total": 1, "overlap": 1.0},
-                )
-
-        claim_tokens = _extract_technical_tokens(claim)
-
-        # No technical tokens + substantive task = reject (fail-closed)
-        if not claim_tokens:
-            return VerificationResult(
-                ok=False,
-                findings=[
-                    "Claim has no verifiable technical anchors; "
-                    "cite evidence or be specific."
-                ],
-                level="L1",
-                scores={},
-            )
-
-        def _token_in_evidence(t: str, ev: str) -> bool:
-            pattern = rf"(?<![\w.-]){re.escape(t)}(?![\w.-])"
-            return re.search(pattern, ev) is not None
-
-        matched_technical_anchors = [
-            t for t in claim_tokens
-            if ("_" in t or "." in t or "/" in t) and _token_in_evidence(t, evidence_low)
-        ]
-
-        # Match tokens
-        matches = sum(1 for t in claim_tokens if _token_in_evidence(t, evidence_low))
-        total = len(claim_tokens) or 1
-        overlap = matches / total
-
-        req_matches = 1 if total <= 2 else max(1, total // 2)
-
-        if matches >= req_matches or overlap >= cls.OVERLAP_THRESHOLD or len(matched_technical_anchors) > 0:
-            findings.append(
-                f"L1 pass: {matches}/{total} tokens matched "
-                f"(overlap={overlap:.2f})"
-            )
-            return VerificationResult(
-                ok=True,
-                findings=findings,
-                level="L1",
-                scores={"matches": matches, "total": total, "overlap": overlap},
-            )
-
-        unmatched = sorted(claim_tokens - {
-            t for t in claim_tokens if _token_in_evidence(t, evidence_low)
-        })
-        sample = unmatched[:10]
-        findings.append(
-            f"Claim references {total} distinctive token(s) but only {matches}"
-            f" found in evidence output ({', '.join(sample)}{'...' if len(unmatched) > 10 else ''})"
-        )
-        return VerificationResult(
-            ok=False,
-            findings=findings,
-            level="L1",
-            scores={"matches": matches, "total": total, "overlap": overlap},
-        )
+        selected, err = cls._select_records(claim, records, max_records)
+        if err:
+            return err
+        evidence_low, findings, early_res = cls._check_corpus_and_output(claim, selected, is_final_claim)
+        if early_res:
+            return early_res
+        return cls._match_tokens(claim, evidence_low, findings)
 
 
 # ── L2 — SemanticVerifier (optional, LLM-gated) ──────────────────────────

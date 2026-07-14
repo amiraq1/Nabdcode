@@ -16,7 +16,6 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.spinner import SPINNERS
-from rich.status import Status
 from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -25,7 +24,7 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from core.ui_bridge import get_bridge
 from core.context_manager import RepositoryContextManager
-from core.permissions import ShellPermissions, PermissionEngine
+from core.permissions import ShellPermissions
 from engine.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor, render_bento_badge
 
@@ -347,6 +346,37 @@ cyberpunk_style = Style.from_dict({
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".nabd_repl_history")
 
 
+def _dispatch_agent_event(event: dict, event_type: str, kinetic: Any, compressor: Any) -> None:
+    """Dispatch a single agent event to the kinetic engine, thought compressor, and console."""
+    if event_type == "done":
+        if kinetic:
+            kinetic.stop()
+    elif event_type == "thinking_start":
+        compressor.start()
+        if kinetic:
+            kinetic.start()
+    elif event_type == "thinking_stop":
+        compressor.stop()
+        if kinetic:
+            kinetic.stop()
+    elif event_type == "thought":
+        compressor.feed(event.get("content", ""))
+    elif event_type == "tool_start":
+        compressor.stop()
+        args = event.get("args", {})
+        summary = args if isinstance(args, str) else str(args)
+        badge = render_bento_badge(event.get("name", ""), summary)
+        console.print(badge)
+    elif event_type == "tool_end":
+        console.print(
+            f"[bold cyan]✅ Result:[/bold cyan] {event.get('summary')}"
+        )
+    elif event_type == "token":
+        content = event.get("content", "")
+        compressor.stop()
+        console.print(content, end="", style="white")
+
+
 async def render_agent_events(kinetic=None) -> None:
     """Async event consumer rendering agent stream events in Cyberpunk aesthetic.
 
@@ -376,9 +406,6 @@ async def render_agent_events(kinetic=None) -> None:
     except Exception:
         pass
 
-    # Live thought compressor (module-level so the Ctrl+O binding can read
-    # the same session_thoughts store). Collapses streaming reasoning into a
-    # single dynamic line and freezes an immutable placeholder.
     compressor = thought_compressor
 
     # Ctrl+O expand handler: dump the latest raw thought block on demand.
@@ -399,47 +426,7 @@ async def render_agent_events(kinetic=None) -> None:
             event = await bridge.get_event()
             if event is None:
                 continue
-
-            event_type = event.get("type")
-            if event_type == "done":
-                # Per-turn sentinel — stop kinetic when turn completes.
-                if kinetic:
-                    kinetic.stop()
-                continue
-            elif event_type == "thinking_start":
-                # Begin the compressed thinking line for this turn.
-                compressor.start()
-                if kinetic:
-                    kinetic.start()
-                continue
-            elif event_type == "thinking_stop":
-                # Conclude the thought phase (freeze placeholder + store raw).
-                compressor.stop()
-                if kinetic:
-                    kinetic.stop()
-                continue
-            elif event_type == "thought":
-                # Raw reasoning chunk: accumulate (do NOT stream multi-line).
-                compressor.feed(event.get("content", ""))
-                continue
-            elif event_type == "tool_start":
-                # Real work started: conclude any open thought phase, then
-                # render a single-line high-contrast bento badge.
-                compressor.stop()
-                args = event.get("args", {})
-                summary = args if isinstance(args, str) else str(args)
-                badge = render_bento_badge(event.get("name", ""), summary)
-                console.print(badge)
-            elif event_type == "tool_end":
-                console.print(
-                    f"[bold cyan]✅ Result:[/bold cyan] {event.get('summary')}"
-                )
-            elif event_type == "token":
-                content = event.get("content", "")
-                # The very first token means the agent began answering: stop
-                # the thinking line before printing the response.
-                compressor.stop()
-                console.print(content, end="", style="white")
+            _dispatch_agent_event(event, event.get("type", ""), kinetic, compressor)
     finally:
         # Defensive: guarantee no hanging live line on force-quit / shutdown.
         compressor.stop()

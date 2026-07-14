@@ -20,7 +20,6 @@ from engine.goal_verifier import evaluate_goal_exit
 from engine.loop import ExecutionLoop
 from engine.state import RuntimeState
 from core.evidence import EvidenceLog
-from tools.models import ToolResult
 
 
 # ── GoalSpec model ───────────────────────────────────────────────────────

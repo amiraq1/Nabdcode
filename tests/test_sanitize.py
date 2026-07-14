@@ -15,7 +15,7 @@ import time
 import unittest
 from io import StringIO
 
-from core.sanitize import sanitize, strip_ansi_sequences
+from core.sanitize import sanitize
 from core.parser import normalize, validate_tool_call
 from core.utils import safe_execute_command
 from engine.renderer import Renderer

@@ -5,7 +5,6 @@ ensuring path traversal protection, symlink escape protection, binary/oversized 
 command allowlisting, flag injection prevention, and timeout handling.
 """
 
-import os
 import pathlib
 import shutil
 import tempfile

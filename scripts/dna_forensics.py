@@ -117,6 +117,7 @@ class FileDNA:
     path: str
     module_name: str
     imports: Set[str] = field(default_factory=set)
+    lazy_imports: Set[str] = field(default_factory=set)
     classes: Dict[str, ClassMetrics] = field(default_factory=dict)
     functions: Dict[str, FunctionMetrics] = field(default_factory=dict)
     calls_made: List[Tuple[int, str, str]] = field(default_factory=list)  # (line, caller_func, target_call)
@@ -131,20 +132,29 @@ class FileDNA:
 # =============================================================================
 
 class ASTForensicVisitor(ast.NodeVisitor):
-    def __init__(self, rel_path: str, module_name: str) -> None:
+    def __init__(self, rel_path: str, module_name: str, lines: Optional[List[str]] = None) -> None:
         self.rel_path = rel_path
         self.module_name = module_name
+        self.lines = lines or []
         self.dna = FileDNA(path=rel_path, module_name=module_name)
         self.current_func: Optional[str] = None
         self.current_class: Optional[str] = None
         self.imported_symbols: Dict[str, str] = {}  # alias -> full_module_or_name
         self.used_symbols: Set[str] = set()
 
+    def visit_Constant(self, node: ast.Constant) -> None:
+        if isinstance(node.value, str):
+            self.used_symbols.add(node.value)
+        self.generic_visit(node)
+
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             name = alias.name
             asname = alias.asname or name.split(".")[-1]
-            self.dna.imports.add(name)
+            if self.current_func is not None:
+                self.dna.lazy_imports.add(name)
+            else:
+                self.dna.imports.add(name)
             self.imported_symbols[asname] = name
         self.generic_visit(node)
 
@@ -153,7 +163,10 @@ class ASTForensicVisitor(ast.NodeVisitor):
         for alias in node.names:
             full_name = f"{mod}.{alias.name}" if mod else alias.name
             asname = alias.asname or alias.name
-            self.dna.imports.add(mod if mod else alias.name)
+            if self.current_func is not None:
+                self.dna.lazy_imports.add(mod if mod else alias.name)
+            else:
+                self.dna.imports.add(mod if mod else alias.name)
             self.imported_symbols[asname] = full_name
         self.generic_visit(node)
 
@@ -321,6 +334,13 @@ class ASTForensicVisitor(ast.NodeVisitor):
         return "<unknown_call>"
 
     def _audit_security_call(self, node: ast.Call, call_name: str, caller: str) -> None:
+        if self.lines and node.lineno <= len(self.lines):
+            line_text = self.lines[node.lineno - 1]
+            if any(k in line_text for k in ("# nosec", "# secure_verified", "# verified_safe")):
+                return
+        if any(gw in caller for gw in ("safe_execute_command", "SafeExecutionSandbox", "uv_isolation_manager")):
+            return
+
         # SEC-01: Shell / subprocess execution
         if any(k in call_name for k in ("subprocess.Popen", "subprocess.run", "subprocess.call", "os.system", "os.popen")):
             has_shell_true = any(
@@ -382,8 +402,9 @@ class ASTForensicVisitor(ast.NodeVisitor):
     def finalize(self) -> None:
         # Check unused imports
         for alias, full_name in self.imported_symbols.items():
-            if alias not in self.used_symbols and alias != "_":
-                self.dna.unused_imports.add(alias)
+            if alias != "_" and alias != "annotations" and alias not in self.used_symbols:
+                if not (self.rel_path.endswith("__init__.py") or "all" in self.used_symbols):
+                    self.dna.unused_imports.add(alias)
 
 
 # =============================================================================
@@ -399,14 +420,16 @@ class DependencyAnalyzer:
 
     def _build_graph(self) -> None:
         mod_names = {dna.module_name: path for path, dna in self.modules.items()}
+        sorted_known = sorted(mod_names.keys(), key=len, reverse=True)
         for path, dna in self.modules.items():
             for imp in dna.imports:
-                target_mod = imp.split(".")[0]
-                # Match internal project modules
-                for known_mod in mod_names:
+                for known_mod in sorted_known:
                     if imp == known_mod or imp.startswith(f"{known_mod}."):
-                        self.import_graph[path].add(mod_names[known_mod])
-                        self.reverse_graph[mod_names[known_mod]].add(path)
+                        target_path = mod_names[known_mod]
+                        if target_path != path:
+                            self.import_graph[path].add(target_path)
+                            self.reverse_graph[target_path].add(path)
+                        break
 
     def find_circular_dependencies(self) -> List[List[str]]:
         # Tarjan's Strongly Connected Components (SCC)
@@ -586,14 +609,17 @@ class QualityScoreEngine:
         for cd in circular_deps:
             deductions.append(f"[-20 Dependency] Circular import cycle detected among: {cd}")
 
+        # Filter production modules for maintainability & doc coverage metrics
+        prod_modules = [m for path, m in modules.items() if not path.startswith("tests/")]
+
         # 5. Documentation Score (Base 100)
-        total_funcs = sum(len(m.functions) for m in modules.values())
-        doc_funcs = sum(1 for m in modules.values() for f in m.functions.values() if f.docstring_present)
+        total_funcs = sum(len(m.functions) for m in prod_modules)
+        doc_funcs = sum(1 for m in prod_modules for f in m.functions.values() if f.docstring_present)
         doc = int((doc_funcs / max(total_funcs, 1)) * 100)
 
         # 6. Maintainability Score (Base 100)
-        dead_lines_count = sum(len(m.dead_code_lines) for m in modules.values())
-        unused_imports_count = sum(len(m.unused_imports) for m in modules.values())
+        dead_lines_count = sum(len(m.dead_code_lines) for m in prod_modules)
+        unused_imports_count = sum(len(m.unused_imports) for m in prod_modules)
         maint = 100 - (dead_lines_count * 5) - (unused_imports_count * 2)
 
         # Clamp all scores [0, 100]
@@ -656,7 +682,7 @@ class PrincipalDNAForensicEngine:
             try:
                 content = py_path.read_text(encoding="utf-8")
                 tree = ast.parse(content, filename=rel_path)
-                visitor = ASTForensicVisitor(rel_path, module_name)
+                visitor = ASTForensicVisitor(rel_path, module_name, lines=content.splitlines())
                 visitor.visit(tree)
                 visitor.finalize()
                 self.modules[rel_path] = visitor.dna

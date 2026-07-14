@@ -1,4 +1,3 @@
-import os
 
 def query_user_profile(user_id):
     # ثغرة حقن استعلامات واضحة عبر دمج النصوص مباشرة

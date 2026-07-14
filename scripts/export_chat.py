@@ -6,7 +6,6 @@ Formats all user prompts, forensic analyses, architectural blueprints, and model
 
 import json
 import os
-import sys
 
 LOG_DIR = "/data/data/com.termux/files/home/.gemini/antigravity-cli/brain/fa5566e6-f46a-461c-a143-7496e8f0ed74/.system_generated/logs"
 TRANSCRIPT_PATH = os.path.join(LOG_DIR, "transcript.jsonl")

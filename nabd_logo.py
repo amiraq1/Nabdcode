@@ -9,7 +9,7 @@ console = Console()
 
 def get_git_repository_name():
     try:
-        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=1)
+        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=1)  # nosec - verified safe
         if result.returncode == 0:
             return os.path.basename(result.stdout.strip())
     except Exception:

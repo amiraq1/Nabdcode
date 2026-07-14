@@ -2,8 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Any
-from smolagents import Tool
+from typing import Any, Dict
+
+
+class Tool:
+    """Base class for smolagents Tool wrapper."""
+    name: str = ""
+    description: str = ""
+    inputs: Dict[str, Any] = {}
+    output_type: str = "string"
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError
 
 
 class FinalAnswerTool(Tool):

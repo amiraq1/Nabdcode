@@ -11,11 +11,10 @@ Inspired by professional terminal agent streaming architectures:
 
 from __future__ import annotations
 
-import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from core.ui_bridge import get_bridge
 from core.sanitize import sanitize

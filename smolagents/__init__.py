@@ -17,21 +17,7 @@ logger = logging.getLogger("smolagents")
 _MAX_RESPONSE_CHARS = 4000
 
 
-class Tool:
-    """Base class for smolagents Tool wrapper."""
-    name: str = ""
-    description: str = ""
-    inputs: Dict[str, Any] = {}
-    output_type: str = "string"
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        pass
-
-    def forward(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError
-
-
-from smolagents.tools import FinalAnswerTool
+from smolagents.tools import Tool, FinalAnswerTool
 
 
 class LiteLLMModel:
@@ -247,58 +233,9 @@ class CodeAgent(BaseAgent):
             return str(result)
 
         # ── Fast-path keyword shortcuts ────────────────────────────────
-        lower_task = task.lower()
-
-        memory_tool = self.tools.get("secure_semantic_memory")
-        if memory_tool and ("memory" in lower_task or "lesson" in lower_task):
-            action = "store" if "store" in lower_task or "save" in lower_task else "search"
-            return str(memory_tool.forward(action=action, text=task)).strip()
-
-        if "test" in lower_task or "unittest" in lower_task:
-            test_tool = self.tools.get("secure_test_runner")
-            if test_tool:
-                target = "tests"
-                m = re.search(r"(tests/[\w\.-]+\.py|tests)", task)
-                if m:
-                    target = m.group(1)
-                return str(test_tool.forward(test_target=target)).strip()
-
-        if "git" in lower_task or "status" in lower_task or "diff" in lower_task:
-            git_tool = self.tools.get("secure_git_inspector")
-            if git_tool:
-                action = "diff" if "diff" in lower_task and "status" not in lower_task else "status"
-                return str(git_tool.forward(action=action)).strip()
-
-        # Fast-path: extract file path ONLY when the task explicitly asks
-        # to read/inspect it. A bare filename mention (e.g. a task that
-        # says "write calc_math.py") must NOT be hijacked into a read
-        # that fails and short-circuits the ReAct loop (Tool Fixation).
-        target_file = None
-        if any(k in lower_task for k in ("read", "show", "inspect", "view", "cat", "print the file", "content of")):
-            match = re.search(r"([\w\./-]+\.(?:json|py|txt|md))", task)
-            if match:
-                target_file = match.group(1).lstrip("/")
-        reader_tool = self.tools.get("secure_workspace_reader")
-        if not reader_tool and self.tools:
-            reader_tool = next(iter(self.tools.values()))
-        if reader_tool and target_file:
-            raw_content = reader_tool.forward(file_path=target_file)
-            if str(raw_content).startswith("Error: File") and "/" not in target_file:
-                alt_content = reader_tool.forward(file_path=f"engine/{target_file}")
-                if not str(alt_content).startswith("Error:"):
-                    target_file = f"engine/{target_file}"
-                    raw_content = alt_content
-            if str(raw_content).startswith("Security Violation:") or str(raw_content).startswith("Error:"):
-                return raw_content
-            if "fix" in lower_task or "replace" in lower_task:
-                return f"Surgical fix verified on {target_file}: file read successfully and confirmed clean."
-            if target_file.endswith(".json"):
-                try:
-                    parsed = json.loads(raw_content)
-                    return json.dumps(parsed, indent=2, ensure_ascii=False)
-                except Exception:
-                    return raw_content.strip()
-            return str(raw_content).strip()
+        fast_result = self._try_fast_paths(task)
+        if fast_result is not None:
+            return fast_result
 
         # ── ReAct reasoning loop ──────────────────────────────────────
         logger.info("No fast-path match. Entering ReAct reasoning loop...")
@@ -306,10 +243,6 @@ class CodeAgent(BaseAgent):
         tool_schemas = _build_tool_schemas(self.tools)
         sa_path = os.path.expanduser("~/smart-agent")
         na_path = os.path.expanduser("~/9router")
-        # Derive the reader/shell tool names from the ACTUAL registered tools
-        # so the prompt can never drift from the real toolset (was previously
-        # hardcoding a non-existent "secure_workspace_reader"). Falls back to
-        # the first tool / the secure_shell name if discovery fails.
         reader_tool = next(
             (n for n in self.tools if "reader" in n or "file_system" in n or "workspace" in n),
             next(iter(self.tools), "secure_file_system"),
@@ -336,32 +269,12 @@ class CodeAgent(BaseAgent):
 
         for step in range(self.max_steps):
             logger.info(f"ReAct step {step + 1}/{self.max_steps}")
-            # Call LLM
             response = self.model.chat(messages)
             if not response or not response.strip():
                 messages.append({"role": "user", "content": "Your response was empty. Please make a tool call."})
                 continue
 
-            # ── Thought Emitter (Dependency Inversion) ────────────────
-            # Surface the agent's free-form reasoning (the text that precedes
-            # the JSON tool call) to the abstract UI bridge in real time. The
-            # bridge is a no-op unless a concrete controller is injected via
-            # core.ui_bridge.set_bridge(). Guarded so a bridge failure can
-            # never break the agent loop.
-            try:
-                _m = _TOOL_CALL_PATTERN.search(response)
-                extracted_thought = response[: _m.start()].strip() if _m else response.strip()
-                clean_thought = (
-                    extracted_thought[:500] + "..."
-                    if len(extracted_thought) > 500
-                    else extracted_thought
-                )
-                if clean_thought:
-                    from core.ui_bridge import get_bridge
-                    get_bridge().on_agent_thought(clean_thought)
-            except Exception as _emit_exc:
-                logger.warning(f"UI bridge (thought) emit failed: {_emit_exc}")
-
+            self._emit_thought(response)
             tool_call = _extract_tool_call(response)
 
             if tool_call is None:
@@ -389,34 +302,7 @@ class CodeAgent(BaseAgent):
                 })
                 continue
 
-            try:
-                logger.info(f"Executing tool: {tool_name}")
-                # ── ReAct Emitter (Dependency Inversion) ────────────────
-                # Broadcast the tool call through the abstract UI bridge so
-                # the core backend never imports Textual/ui directly. The
-                # bridge is a no-op unless a concrete controller is injected
-                # via core.ui_bridge.set_bridge(). Guarded so a bridge
-                # failure can never break the agent loop.
-                if tool_name not in ("final_answer",):
-                    try:
-                        from core.ui_bridge import get_bridge
-                        get_bridge().on_action_triggered(
-                            tool_name.upper(), str(tool_args)
-                        )
-                    except Exception as _emit_exc:
-                        logger.warning(f"UI bridge emit failed: {_emit_exc}")
-                if isinstance(tool_args, dict):
-                    result = tool_obj.forward(**tool_args)
-                elif isinstance(tool_args, (list, tuple)):
-                    result = tool_obj.forward(*tool_args)
-                else:
-                    result = tool_obj.forward(tool_args)
-                result_str = str(result)[:_MAX_RESPONSE_CHARS]
-                logger.info(f"Tool {tool_name} returned {len(result_str)} chars")
-            except Exception as exc:
-                result_str = f"Error executing '{tool_name}': {exc}"
-                logger.error(result_str)
-
+            result_str = self._execute_tool_and_emit(tool_name, tool_args, tool_obj)
             messages.append({"role": "assistant", "content": str(response)[:_MAX_RESPONSE_CHARS]})
             messages.append({
                 "role": "tool",
@@ -432,3 +318,104 @@ class CodeAgent(BaseAgent):
         if tool_call and tool_call.get("tool") == "final_answer":
             return str(tool_call.get("args", {}).get("answer", ""))[:_MAX_RESPONSE_CHARS]
         return str(final_response)[:_MAX_RESPONSE_CHARS]
+
+    def _try_fast_paths(self, task: str) -> Optional[str]:
+        """Check fast-path shortcuts for common tasks without entering full ReAct loop."""
+        lower_task = task.lower()
+        res = self._try_tool_shortcuts(task, lower_task)
+        if res is not None:
+            return res
+        return self._try_file_read_shortcut(task, lower_task)
+
+    def _try_tool_shortcuts(self, task: str, lower_task: str) -> Optional[str]:
+        """Check memory, test, and git tool shortcuts."""
+        memory_tool = self.tools.get("secure_semantic_memory")
+        if memory_tool and ("memory" in lower_task or "lesson" in lower_task):
+            action = "store" if "store" in lower_task or "save" in lower_task else "search"
+            return str(memory_tool.forward(action=action, text=task)).strip()
+
+        if "test" in lower_task or "unittest" in lower_task:
+            test_tool = self.tools.get("secure_test_runner")
+            if test_tool:
+                target = "tests"
+                m = re.search(r"(tests/[\w\.-]+\.py|tests)", task)
+                if m:
+                    target = m.group(1)
+                return str(test_tool.forward(test_target=target)).strip()
+
+        if "git" in lower_task or "status" in lower_task or "diff" in lower_task:
+            git_tool = self.tools.get("secure_git_inspector")
+            if git_tool:
+                action = "diff" if "diff" in lower_task and "status" not in lower_task else "status"
+                return str(git_tool.forward(action=action)).strip()
+        return None
+
+    def _try_file_read_shortcut(self, task: str, lower_task: str) -> Optional[str]:
+        """Check workspace reader file inspection shortcuts."""
+        target_file = None
+        if any(k in lower_task for k in ("read", "show", "inspect", "view", "cat", "print the file", "content of")):
+            match = re.search(r"([\w\./-]+\.(?:json|py|txt|md))", task)
+            if match:
+                target_file = match.group(1).lstrip("/")
+        reader_tool = self.tools.get("secure_workspace_reader")
+        if not reader_tool and self.tools:
+            reader_tool = next(iter(self.tools.values()))
+        if reader_tool and target_file:
+            raw_content = reader_tool.forward(file_path=target_file)
+            if str(raw_content).startswith("Error: File") and "/" not in target_file:
+                alt_content = reader_tool.forward(file_path=f"engine/{target_file}")
+                if not str(alt_content).startswith("Error:"):
+                    target_file = f"engine/{target_file}"
+                    raw_content = alt_content
+            if str(raw_content).startswith("Security Violation:") or str(raw_content).startswith("Error:"):
+                return raw_content
+            if "fix" in lower_task or "replace" in lower_task:
+                return f"Surgical fix verified on {target_file}: file read successfully and confirmed clean."
+            if target_file.endswith(".json"):
+                try:
+                    parsed = json.loads(raw_content)
+                    return json.dumps(parsed, indent=2, ensure_ascii=False)
+                except Exception:
+                    return raw_content.strip()
+            return str(raw_content).strip()
+        return None
+
+    def _emit_thought(self, response: str) -> None:
+        """Surface agent reasoning to the abstract UI bridge if available."""
+        try:
+            _m = _TOOL_CALL_PATTERN.search(response)
+            extracted_thought = response[: _m.start()].strip() if _m else response.strip()
+            clean_thought = (
+                extracted_thought[:500] + "..."
+                if len(extracted_thought) > 500
+                else extracted_thought
+            )
+            if clean_thought:
+                from core.ui_bridge import get_bridge
+                get_bridge().on_agent_thought(clean_thought)
+        except Exception as _emit_exc:
+            logger.warning(f"UI bridge (thought) emit failed: {_emit_exc}")
+
+    def _execute_tool_and_emit(self, tool_name: str, tool_args: Any, tool_obj: Any) -> str:
+        """Execute tool and emit UI bridge notifications."""
+        try:
+            logger.info(f"Executing tool: {tool_name}")
+            if tool_name not in ("final_answer",):
+                try:
+                    from core.ui_bridge import get_bridge
+                    get_bridge().on_action_triggered(tool_name.upper(), str(tool_args))
+                except Exception as _emit_exc:
+                    logger.warning(f"UI bridge emit failed: {_emit_exc}")
+            if isinstance(tool_args, dict):
+                result = tool_obj.forward(**tool_args)
+            elif isinstance(tool_args, (list, tuple)):
+                result = tool_obj.forward(*tool_args)
+            else:
+                result = tool_obj.forward(tool_args)
+            result_str = str(result)[:_MAX_RESPONSE_CHARS]
+            logger.info(f"Tool {tool_name} returned {len(result_str)} chars")
+            return result_str
+        except Exception as exc:
+            result_str = f"Error executing '{tool_name}': {exc}"
+            logger.error(result_str)
+            return result_str

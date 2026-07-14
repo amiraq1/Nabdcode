@@ -1,5 +1,5 @@
-import concurrent.futures
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from engine.events import bus
 from engine.tool_registry import registry
 from engine.state import RuntimeState
@@ -8,7 +8,7 @@ from tools.models import ToolResult
 
 # Shared thread pool — avoids per-call allocation overhead
 _MAX_WORKERS: int = 4
-_SHARED_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_WORKERS)
+_SHARED_POOL = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
 # Admission control: only allow _MAX_WORKERS pending tasks at a time.
 # This prevents unbounded queue growth when all workers are busy.
 _POOL_SEMAPHORE = threading.BoundedSemaphore(_MAX_WORKERS)
