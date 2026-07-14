@@ -1,0 +1,10 @@
+# Nabd Agent OS — Python dependencies
+# Install with: pip install -r requirements.txt
+# Interactive REPL TUI (Sequential Mode for Termux)
+prompt_toolkit>=3.0.0
+rich>=13.0.0
+# LLM provider SDKs used by core.llm / smolagents
+# (uncomment the ones you actually use)
+# litellm
+# openai
+# duckduckgo_search

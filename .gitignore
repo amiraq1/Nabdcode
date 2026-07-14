@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Local model weights (too large for GitHub; keep them local-only)
+models/
+*.gguf
+*.bin
+*.safetensors
+*.onnx
+
+# Runtime / session state
+.nabd/
+.nabd_agent_state.json
+agent_memory.json
+workspace_semantic_memory.json
+workspace_memory.db
+*.db
+*.db-shm
+*.db-wal
+.cache/
+.pytest_cache/
+NabdBootloader/*.log
+logs/
+*.log
+sessions/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Scratch / debug / reports
+report.txt
+report.txt23
+dna_report.json
+debug_agent.py
+test_openai.py
+build_litert_rag.py
+
+# Internal agent config (taste, session memory)
+.commandcode/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+textual/
+core/state/*.json
+*.jsonl
+workspace/config.json

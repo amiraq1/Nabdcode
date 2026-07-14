@@ -1,0 +1,5 @@
+#!/data/data/com.termux/files/usr/bin/bash
+
+# الانتقال للمحرك وتشغيله في الشاشة القياسية لدعم التمرير (Scroll)
+cd /data/data/com.termux/files/home/smart-agent
+exec python3 main.py "$@"

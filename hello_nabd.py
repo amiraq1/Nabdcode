@@ -1,0 +1,1 @@
+print('NABD OS Architecture: Secure & Online')
