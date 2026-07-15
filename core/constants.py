@@ -26,9 +26,9 @@ CHITCHAT_SET: Final[Set[str]] = {
 
 HARD_RULES: Final[str] = """
 [RULES - VERIFIER CONTRACT]
-1. ممنوع الادعاء العددي (found, there are, total, عدد) بدون اقتباس حرفي من ناتج الأداة بين backticks.
-2. إذا سُئلت how many / count، يجب استدعاء file_system.read أولا ثم العد من المخرجات.
-3. إذا كانت المهمة chitchat مثل 'iraq' أو 'مرحبا'، أجب مباشرة بدون أدوات وبدون مطالبة بدليل.
+1. STRICTLY FORBIDDEN: Numerical claims ("found", "there are", "total", count) without a verbatim quote from tool output between backticks.
+2. If asked "how many" / "count", you MUST call file_system.read first, then count from the command output.
+3. If the task is simple chitchat (e.g. 'iraq' or greetings), answer directly with no tools and no request for evidence.
 """
 
 

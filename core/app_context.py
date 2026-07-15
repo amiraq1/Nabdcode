@@ -18,6 +18,20 @@ from core.metrics import MetricsEngine
 from core.memory import MemoryManager
 from core.parser import pin_workspace_root
 from core.session import SessionManager
+
+
+class _KernelSecurityEngine:
+    """Adapter wrapping core.security.validate into SecurityEngineProtocol.
+
+    Injected into ShellTool at construction time (via DI) so the tools layer
+    receives the real kernel security engine directly, not the lazy fallback.
+    """
+
+    __slots__ = ()
+
+    def validate(self, command: str) -> tuple[bool, str]:
+        from core.security import validate
+        return validate(command)
 from core.todo import TodoManager
 from engine.renderer import Renderer
 from engine.tool_registry import registry
@@ -53,6 +67,7 @@ class AppContext:
         evidence_log = EvidenceLog(max_evidence_records=config.max_evidence_records)
 
         # Register all tools
+        _security_engine = _KernelSecurityEngine()
         for tool_cls in [ShellTool, FileSystemTool, WebSearchTool,
                          SearchMemoryTool, TodoWriteTool, TermuxMonitorTool]:
             tool = (
@@ -62,6 +77,8 @@ class AppContext:
                 if tool_cls is SearchMemoryTool
                 else TodoWriteTool(todo_manager=todo_manager)
                 if tool_cls is TodoWriteTool
+                else ShellTool(security_engine=_security_engine)
+                if tool_cls is ShellTool
                 else tool_cls()
             )
             try:

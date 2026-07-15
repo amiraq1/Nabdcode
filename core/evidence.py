@@ -678,3 +678,23 @@ class EvidenceLog:
     def counter(self) -> int:
         """Expose counter for verification in tests."""
         return self._counter
+
+
+class EvidenceStore(EvidenceLog):
+    """Compatibility store wrapper for critical evidence tracking."""
+    def add(self, rec_or_tool: Any, output: str = "", success: bool = True) -> EvidenceRecord:
+        if isinstance(rec_or_tool, EvidenceRecord):
+            return super().add(rec_or_tool)
+        tool_name = rec_or_tool.get("tool", "unknown") if isinstance(rec_or_tool, dict) else getattr(rec_or_tool, "tool", str(rec_or_tool))
+        eid = f"ev_{self._counter}"
+        self._counter += 1
+        rec = EvidenceRecord(
+            evidence_id=eid,
+            tool=tool_name,
+            output_snippet=output,
+            success=success,
+            critical=False
+        )
+        object.__setattr__(rec, "output", output)
+        self._records[eid] = rec
+        return rec

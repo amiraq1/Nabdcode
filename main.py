@@ -8,21 +8,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import signal
-import termios
-
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import InMemoryHistory
-from prompt_toolkit.formatted_text import ANSI, HTML
-
-from engine.state import RuntimeState
-from engine.loop import ExecutionLoop, ToolRequiredError
-from engine.events import bus
-from engine.renderer import Renderer
-from core.app_context import AppContext
-from core.constants import TODO_DISCIPLINE
-from core.sanitize import sanitize
-from core.parser import normalize
 
 
 # ── Tool output summariser ─────────────────────────────────────────────────
@@ -117,10 +102,12 @@ def _extract_final_answer_text(raw: str) -> str:
 
 def wire_events(ctx: AppContext) -> None:
     """Subscribe all event handlers. Every output goes through renderer."""
+    from engine.events import bus
+    from engine.ui_theme import map_tool_to_badge, select_status_verb
+
     renderer = ctx.renderer
     metrics = ctx.metrics
     todo_manager = ctx.todo_manager
-    from engine.ui_theme import map_tool_to_badge, select_status_verb
 
     _last_tool_args: dict = {}
     _streaming: bool = False
@@ -128,21 +115,36 @@ def wire_events(ctx: AppContext) -> None:
     _last_tool_name: str = ""
     _turn_index: int = 0
 
+    _token_buf: str = ""
+    _held_buf: str = ""
+
     def _on_llm_started(p: dict) -> None:
-        nonlocal _streaming, _turn_index
+        nonlocal _streaming, _turn_index, _token_buf, _held_buf
         _streaming = False
+        _token_buf = ""
+        _held_buf = ""
         _turn_index += 1
         verb = select_status_verb(stage=_last_stage, last_tool=_last_tool_name, turn_index=_turn_index)
         renderer.status_start(verb)
         renderer.thought_start()
 
     def _on_llm_token(p: dict) -> None:
-        nonlocal _streaming
+        nonlocal _streaming, _token_buf, _held_buf
+        content = p.get("token", "")
+        _token_buf += content
+        stripped = _token_buf.lstrip()
+        if stripped.startswith("{") or stripped.startswith("final_answer"):
+            return
+        if "final_answer".startswith(stripped):
+            _held_buf += content
+            return
+        to_print = _held_buf + content
+        _held_buf = ""
         if not _streaming:
             _streaming = True
             renderer.status_end()
             renderer.think_end()
-        renderer.stream_chunk(p.get("token", ""))
+        renderer.stream_chunk(to_print)
 
     def _on_llm_completed(p: dict) -> None:
         renderer.thought_end()
@@ -278,6 +280,38 @@ def wire_events(ctx: AppContext) -> None:
 def main() -> None:
     sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
+    # Fast check for basic flags before loading heavy modules or initializing agents
+    if any(flag in sys.argv[1:] for flag in ("--version", "-v")):
+        sys.stdout.write("Nabd OS (nabdcode) v1.0.0\n")
+        sys.exit(0)
+    if any(flag in sys.argv[1:] for flag in ("--help", "-h")):
+        sys.stdout.write(
+            "NABD Agent OS — Mobile-first AI CLI agent for Termux.\n\n"
+            "Usage:\n"
+            "  nabdcode [options] [query...]\n"
+            "  python3 main.py [options] [query...]\n\n"
+            "Options:\n"
+            "  -h, --help       Show this help message and exit\n"
+            "  -v, --version    Show program version and exit\n"
+        )
+        sys.exit(0)
+
+    import signal
+    import termios
+
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import InMemoryHistory
+    from prompt_toolkit.formatted_text import ANSI, HTML
+
+    from engine.state import RuntimeState
+    from engine.loop import ExecutionLoop, ToolRequiredError
+    from engine.events import bus
+    from ui.repl_termux import TerminalVisualizer
+    from core.app_context import AppContext
+    from core.constants import TODO_DISCIPLINE
+    from core.sanitize import sanitize
+    from core.parser import normalize
+
     # One-time splash
     try:
         import nabd_logo  # type: ignore[import-untyped]
@@ -307,6 +341,7 @@ def main() -> None:
             except Exception as exc:
                 sys.stderr.write(f"[Warning] Session restore failed: {exc}\n")
     wire_events(ctx)
+    visualizer = TerminalVisualizer(event_bus=bus, state=state)
 
     # Isolate provider state file per session
     from llm_router import router as _provider_router
@@ -321,6 +356,7 @@ def main() -> None:
         ctx.session_manager.save()
         ctx.memory_manager.close()
         ctx.logger.shutdown()
+        visualizer.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _shutdown_handler)
@@ -418,85 +454,90 @@ def main() -> None:
     # Flush any setup output before first prompt
     ctx.renderer.flush()
 
-    while True:
-        try:
-            user_input = input_session.prompt(
-                ANSI("\033[36m❯ \033[0m"),
-                bottom_toolbar=_bottom_toolbar,
-                placeholder=HTML('<style fg="#555">Ask your question...</style>'),
-            ).strip()
-        except (KeyboardInterrupt, EOFError):
-            break
-
-        if not user_input:
-            continue
-
-        if user_input.lower() in ("exit", "quit"):
-            break
-
-        if user_input.lower() == "clear":
-            # Replace the prompt line with a background-highlighted version
-            sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ clear\033[0m\n")
-            sys.stdout.flush()
-            state.set_messages([{"role": "system", "content": base_inst}])
-            state.reset_step_count()
-            continue
-
-        # Replace the prompt_toolkit line with a background-highlighted version
-        # so the user's input is visually distinct from the agent response.
-        safe_display = sanitize(user_input)
-        sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {safe_display}\033[0m\n")
-        sys.stdout.flush()
-
-        clean_prompt = normalize(user_input)[:10000]
-
-        state.reset_step_count()
-        engine = ExecutionLoop(
-            state=state,
-            max_output_len=ctx.config.max_output,
-            evidence_log=ctx.evidence_log,
-        )
-
-        fd = sys.stdin.fileno()
-        old_termios = None
-        try:
-            old_termios = termios.tcgetattr(fd)
-            new = list(old_termios)
-            new[3] = new[3] & ~termios.ECHO
-            termios.tcsetattr(fd, termios.TCSANOW, new)
-            engine.run(clean_prompt)
-        except KeyboardInterrupt:
-            ctx.renderer.think_end()
-            ctx.renderer.flush()
-        except ToolRequiredError as exc:
-            # ToolRequiredError: The LLM answered without using required tools.
-            # Strip the fabricated response, add newline separator after any
-            # partial streaming output, and show the verifier's rejection.
-            _cleanup_after_streamed_failure(state, ctx, exc)
-        except Exception as exc:
-            # Error already rendered by _on_loop_error via event bus
-            ctx.logger.error(f"Execution failed: {exc}")
-        finally:
-            if old_termios is not None:
-                termios.tcsetattr(fd, termios.TCSANOW, old_termios)
+    try:
+        while True:
             try:
-                termios.tcflush(fd, termios.TCIFLUSH)
-            except Exception:
-                pass
+                user_input = input_session.prompt(
+                    ANSI("\033[36m❯ \033[0m"),
+                    bottom_toolbar=_bottom_toolbar,
+                    placeholder=HTML('<style fg="#555">Ask your question...</style>'),
+                ).strip()
+            except (KeyboardInterrupt, EOFError):
+                break
 
-        # Save session — messages, todos, evidence audit trail
-        ctx.session_manager.messages = state.get_messages()
-        ctx.session_manager.todos = ctx.todo_manager.to_serializable()
-        ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
-        ctx.session_manager.save()
+            if not user_input:
+                continue
 
-        # Print assistant response — no badge, just content
-        last_msg = state.get_last_message()
-        if last_msg and last_msg.get("role") == "assistant":
-            rendered = _extract_final_answer_text(last_msg.get("content", ""))
-            for line in rendered.splitlines():
-                ctx.renderer.agent_text(line)
-            ctx.renderer.flush()
+            if user_input.lower() in ("exit", "quit"):
+                break
+
+            if user_input.lower() == "clear":
+                # Replace the prompt line with a background-highlighted version
+                sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ clear\033[0m\n")
+                sys.stdout.flush()
+                state.set_messages([{"role": "system", "content": base_inst}])
+                state.reset_step_count()
+                continue
+
+            # Replace the prompt_toolkit line with a background-highlighted version
+            # so the user's input is visually distinct from the agent response.
+            safe_display = sanitize(user_input)
+            sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {safe_display}\033[0m\n")
+            sys.stdout.flush()
+
+            clean_prompt = normalize(user_input)[:10000]
+
+            state.reset_step_count()
+            engine = ExecutionLoop(
+                state=state,
+                max_output_len=ctx.config.max_output,
+                evidence_log=ctx.evidence_log,
+            )
+
+            fd = sys.stdin.fileno()
+            old_termios = None
+            try:
+                old_termios = termios.tcgetattr(fd)
+                new = list(old_termios)
+                new[3] = new[3] & ~termios.ECHO
+                termios.tcsetattr(fd, termios.TCSANOW, new)
+                engine.run(clean_prompt)
+            except KeyboardInterrupt:
+                ctx.renderer.think_end()
+                ctx.renderer.flush()
+            except ToolRequiredError as exc:
+                # ToolRequiredError: The LLM answered without using required tools.
+                # Strip the fabricated response, add newline separator after any
+                # partial streaming output, and show the verifier's rejection.
+                _cleanup_after_streamed_failure(state, ctx, exc)
+            except Exception as exc:
+                # Error already rendered by _on_loop_error via event bus
+                ctx.logger.error(f"Execution failed: {exc}")
+            finally:
+                if old_termios is not None:
+                    termios.tcsetattr(fd, termios.TCSANOW, old_termios)
+                try:
+                    termios.tcflush(fd, termios.TCIFLUSH)
+                except Exception:
+                    pass
+
+            # Save session — messages, todos, evidence audit trail
+            ctx.session_manager.messages = state.get_messages()
+            ctx.session_manager.todos = ctx.todo_manager.to_serializable()
+            ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
+            ctx.session_manager.save()
+
+            # Print assistant response — no badge, just content if not already streamed as prose
+            last_msg = state.get_last_message()
+            if last_msg and last_msg.get("role") == "assistant" and not _streaming:
+                rendered = _extract_final_answer_text(last_msg.get("content", ""))
+                if rendered and rendered.strip():
+                    for line in rendered.splitlines():
+                        ctx.renderer.agent_text(line)
+                    ctx.renderer.flush()
+
+    finally:
+        visualizer.stop()
 
 
 if __name__ == "__main__":

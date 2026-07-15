@@ -149,6 +149,20 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "required": {},
         "optional": {},
     },
+    "browser_action": {
+        "required": {
+            "action": str,
+        },
+        "optional": {
+            "url": str,
+        },
+        "actions": {
+            "navigate": [
+                "url",
+            ],
+            "get_text": [],
+        },
+    },
 }
 
 
@@ -162,7 +176,7 @@ def _validate_path(path: str) -> bool:
         return False
 
 
-def validate_tool_call(payload: Any) -> ValidationResult:
+def validate_tool_call(payload: Any, available_tools: Optional[dict[str, Any]] = None) -> ValidationResult:
     if isinstance(payload, str):
         payload_clean = sanitize(payload)
         try:
@@ -183,6 +197,9 @@ def validate_tool_call(payload: Any) -> ValidationResult:
             "Root must be a JSON object.",
         )
 
+    if "arguments" in obj and "args" not in obj:
+        obj["args"] = obj.pop("arguments")
+
     tool = obj.get("tool")
     args = obj.get("args")
 
@@ -200,7 +217,8 @@ def validate_tool_call(payload: Any) -> ValidationResult:
             "'args' must be an object.",
         )
 
-    schema = TOOL_SCHEMAS.get(tool)
+    schema_dict = available_tools if available_tools is not None else TOOL_SCHEMAS
+    schema = schema_dict.get(tool)
 
     if schema is None:
         return ValidationResult(
@@ -283,6 +301,25 @@ def validate_tool_call(payload: Any) -> ValidationResult:
                 None,
                 "Path escapes workspace.",
             )
+
+    if tool == "browser_action":
+        action = args.get("action")
+        valid_actions = schema["actions"]
+
+        if action not in valid_actions:
+            return ValidationResult(
+                False,
+                None,
+                f"Unsupported browser action '{action}'. Must be one of {list(valid_actions.keys())}.",
+            )
+
+        for field in valid_actions[action]:
+            if field not in args or not args[field]:
+                return ValidationResult(
+                    False,
+                    None,
+                    f"Action '{action}' requires non-empty argument '{field}'.",
+                )
 
     if tool == "todo_write":
         todos = args.get("todos", [])

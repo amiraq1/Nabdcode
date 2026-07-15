@@ -204,6 +204,11 @@ class RuntimeState:
     # Stored on RuntimeState so the PermissionEngine can read it from the shell
     # gate; intentionally NOT persisted to disk — reset on a hard restart.
     shell_permissions: "ShellPermissions" = field(default_factory=ShellPermissions)
+    is_fallback_mode_active: bool = False
+    provider_fail_streak: int = 0
+    past_steps_summary: str = ""
+    compacted_memory: List[str] = field(default_factory=list)
+    tool_interactions: list = field(default_factory=list)
 
     def get_lock(self) -> Lock:
         """Expose the internal lock for compound operations by the owner."""

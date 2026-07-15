@@ -9,11 +9,16 @@ class ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, BaseTool] = {}
 
-    def register(self, tool: BaseTool):
+    def register(self, name_or_tool: Any, tool: Optional[Any] = None, **kwargs):
         """Register a new tool in the system."""
-        if tool.name in self._tools:
-            raise ValueError(f"Tool '{tool.name}' is already registered.")
-        self._tools[tool.name] = tool
+        if tool is None:
+            tool_obj = name_or_tool
+        else:
+            tool_obj = tool
+        name = getattr(tool_obj, "name", None) or (name_or_tool if isinstance(name_or_tool, str) else str(tool_obj))
+        if name in self._tools and kwargs.get("overwrite", False) is False:
+            raise ValueError(f"Tool '{name}' is already registered.")
+        self._tools[name] = tool_obj
 
     def get_tool(self, tool_name: str) -> BaseTool:
         """Look up a tool by name."""
@@ -26,7 +31,8 @@ class ToolRegistry:
 
     def get_all_schemas(self) -> list:
         """Return all tool schemas to inform the LLM of available capabilities."""
-        return [tool.get_schema() for tool in self._tools.values()]
+        return [tool.get_schema() if hasattr(tool, "get_schema") else {"name": getattr(tool, "name", str(tool)), "description": getattr(tool, "description", "")} for tool in self._tools.values()]
 
 # Global singleton instance
 registry = ToolRegistry()
+tool_registry = registry

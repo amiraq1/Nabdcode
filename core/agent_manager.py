@@ -13,10 +13,26 @@ from tools.secure_tools import (
     SecureFileSystemTool,
     SecureShellTool,
     SecureWebSearchTool,
+    SecureBrowserTool,
 )
 from core.llm import get_secure_model
 from core.parser import pin_workspace_root
 from core.repo_scanner import SECURE_REPO_SCANNER
+
+
+class _KernelSecurityEngine:
+    """Adapter wrapping core.security.validate into SecurityEngineProtocol.
+
+    Injected into SecureShellTool at construction time so the tools layer
+    receives the real kernel security engine directly — never the lazy
+    fallback — breaking the circular-import cycle permanently (Phase 3 DI).
+    """
+
+    __slots__ = ()
+
+    def validate(self, command: str) -> tuple[bool, str]:
+        from core.security import validate
+        return validate(command)
 
 
 # ── Phase 1: Spatial Awareness & Persona Injection (OpenCode DNA port) ──
@@ -79,6 +95,11 @@ _BASE_PERSONA = (
     "Zero-Trust mobile architecture.\n"
     "CRITICAL RULE: You MUST answer ALL user queries strictly and exclusively in English. "
     "Never use Arabic or any other language in your responses, regardless of the user's input language.\n"
+    "ORCHESTRATOR ROLE: You are the ORCHESTRATOR. You are STRICTLY FORBIDDEN from calling "
+    "execute_shell. You must ALWAYS delegate code generation and system tasks to the CODER "
+    "agent using the proper handoff mechanism (emit an agent_handoff with to_role='CODER'). "
+    "Never emit an execute_shell tool call yourself; such calls are rejected by the security "
+    "gate and will not execute.\n"
 )
 
 _PHASE1_DIRECTIVES = (
@@ -127,8 +148,9 @@ def initialize_secure_agent(workspace_path: str = ".") -> CodeAgent:
             SecureSemanticMemoryTool(),
             # Real edit/exec capability so the Executor description is truthful.
             SecureFileSystemTool(workspace=workspace_path),
-            SecureShellTool(),
+            SecureShellTool(security_engine=_KernelSecurityEngine()),
             SecureWebSearchTool(),
+            SecureBrowserTool(workspace_dir=workspace_path),
             # Read-only workspace map/search (excludes heavy dirs + .gguf).
             SECURE_REPO_SCANNER(),
             # Dynamically discovered skills (BaseSkill -> Tool via adapter).
@@ -176,6 +198,18 @@ def initialize_secure_agent(workspace_path: str = ".") -> CodeAgent:
         max_steps=5,
         system_prompt=_build_system_prompt(workspace_path),
     )
+
+    # Memory store in workspace
+    try:
+        from tools.search_memory import SearchMemoryTool
+        from engine.tool_registry import tool_registry
+        memory_dir = Path(workspace_path) / ".nabd" / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        search_memory = SearchMemoryTool(memory_dir)
+        if "search_memory" not in tool_registry:
+            tool_registry.register("search_memory", search_memory, profile="executor")
+    except Exception:
+        pass
 
     return manager_agent
 

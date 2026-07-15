@@ -89,7 +89,7 @@ class LiveThoughtCompressor:
         # Erase the live spinner line entirely, then freeze the clean,
         # immutable placeholder onto its own line (no thought leakage).
         if self._ansi:
-            sys.stdout.write(f"\r\033[K* Thought for {total_time} seconds [ctrl+o to expand]\n")
+            sys.stdout.write(f"\r\033[K\033[2m* Thought for {total_time} seconds [ctrl+o to expand]\033[0m\n")
         else:
             sys.stdout.write(f"* Thought for {total_time} seconds [ctrl+o to expand]\n")
         sys.stdout.flush()

@@ -34,43 +34,4 @@ def execute_search_memory(args: dict, memory_manager: Any) -> str:
     return memory_report.strip()
 
 
-class SearchMemoryTool(BaseTool):
-    """
-    Deep memory retrieval tool for the agent, uses MemoryManager hybrid search.
-    """
-
-    name: Final[str] = "search_memory"
-    description: Final[str] = (
-        "Search deep semantic memory and past conversation context using hybrid search."
-    )
-
-    def __init__(self, memory_manager: Any = None):
-        super().__init__()
-        self.memory_manager = memory_manager
-
-    def execute(self, **kwargs) -> ToolResult:
-        query = kwargs.get("query")
-
-        if not isinstance(query, str) or not query.strip():
-            return ToolResult(
-                success=False,
-                stderr="Missing or invalid 'query' argument for search_memory.",
-                returncode=-1,
-                status="error",
-            )
-
-        try:
-            report = execute_search_memory(kwargs, self.memory_manager)
-            return ToolResult(
-                success=True,
-                stdout=report,
-                returncode=0,
-                status="success",
-            )
-        except Exception as exc:
-            return ToolResult(
-                success=False,
-                stderr=f"Error executing search_memory: {exc}",
-                returncode=-1,
-                status="error",
-            )
+from tools.search_memory import SearchMemoryTool

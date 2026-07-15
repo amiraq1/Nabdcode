@@ -7,12 +7,17 @@ Sequential Cyberpunk REPL Mode for Termux (prompt_toolkit + Rich).
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import shutil
 import sys
+import time
 from pathlib import Path
 from rich.align import Align
+from rich.box import ROUNDED
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.spinner import SPINNERS
@@ -392,6 +397,8 @@ async def render_agent_events(kinetic=None) -> None:
         except Exception:
             pass
 
+    token_buf = ""
+    held_buf = ""
     try:
         while True:
             # Periodically refresh the elapsed counter on the live line.
@@ -405,12 +412,18 @@ async def render_agent_events(kinetic=None) -> None:
                 # Per-turn sentinel — stop kinetic when turn completes.
                 if kinetic:
                     kinetic.stop()
+                token_buf = ""
+                held_buf = ""
                 continue
             elif event_type == "thinking_start":
                 # Begin the compressed thinking line for this turn.
                 compressor.start()
                 if kinetic:
                     kinetic.start()
+                token_buf = ""
+                held_buf = ""
+                if hasattr(bridge, "_tokens_streamed"):
+                    bridge._tokens_streamed = False
                 continue
             elif event_type == "thinking_stop":
                 # Conclude the thought phase (freeze placeholder + store raw).
@@ -426,20 +439,34 @@ async def render_agent_events(kinetic=None) -> None:
                 # Real work started: conclude any open thought phase, then
                 # render a single-line high-contrast bento badge.
                 compressor.stop()
+                token_buf = ""
+                held_buf = ""
                 args = event.get("args", {})
                 summary = args if isinstance(args, str) else str(args)
                 badge = render_bento_badge(event.get("name", ""), summary)
                 console.print(badge)
             elif event_type == "tool_end":
-                console.print(
-                    f"[bold cyan]✅ Result:[/bold cyan] {event.get('summary')}"
-                )
+                # Avoid redundant double printing if TermuxBridgeUI on_tool_completed handles completion.
+                summary = str(event.get("summary", "")).strip()
+                if summary and not summary.startswith("✓ Tool") and not getattr(bridge, "_on_tool_completed_active", False):
+                    console.print(f"   [dim]↳ {summary}[/dim]")
             elif event_type == "token":
                 content = event.get("content", "")
+                token_buf += content
+                stripped = token_buf.lstrip()
+                if stripped.startswith("{") or stripped.startswith("final_answer"):
+                    continue
+                if "final_answer".startswith(stripped):
+                    held_buf += content
+                    continue
+                to_print = held_buf + content
+                held_buf = ""
                 # The very first token means the agent began answering: stop
                 # the thinking line before printing the response.
                 compressor.stop()
-                console.print(content, end="", style="white")
+                if hasattr(bridge, "_tokens_streamed"):
+                    bridge._tokens_streamed = True
+                console.print(to_print, end="", style="white")
     finally:
         # Defensive: guarantee no hanging live line on force-quit / shutdown.
         compressor.stop()
@@ -574,6 +601,11 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 await bridge.emit_thinking_start()
                 kinetic.start()
 
+                # Reset final answer rendered tracker before each turn
+                bus_ref = getattr(agent, "bus", None) or getattr(bridge, "event_bus", None)
+                if bus_ref:
+                    bus_ref._final_answer_rendered = False
+
                 # Offload the blocking agent.run to a worker thread so the
                 # event loop keeps streaming tool/token events concurrently.
                 try:
@@ -606,13 +638,16 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     kinetic.stop()
                     thought_compressor.stop()
 
-                console.print(
-                    Panel(
-                        Markdown(str(response_text)),
-                        border_style="#2A9D8F",
-                        title="[#20B2AA]◈ Agent[/]",
-                    )
-                )
+                if not (bus_ref and getattr(bus_ref, "_final_answer_rendered", False)) and not (bus_ref and getattr(bus_ref, "_tokens_streamed", False)):
+                    clean_resp = extract_clean_answer(response_text)
+                    if clean_resp:
+                        console.print(
+                            Panel(
+                                Markdown(clean_resp),
+                                border_style="#2A9D8F",
+                                title="[#20B2AA]◈ Agent[/]",
+                            )
+                        )
 
                 # Call 2 (Finish): transition the task to Completed immediately
                 # after the agent's response is rendered. Best-effort + guarded.
@@ -640,6 +675,193 @@ async def run_repl(agent, agent_runner_func=None) -> None:
 
 
 main = run_repl
+
+
+def extract_clean_answer(raw_text: Any) -> str:
+    """استخراج النص النقي والمصفى من أي رد سواء كان JSON أو Dict أو نص مهيكل"""
+    if raw_text is None:
+        return ""
+    if isinstance(raw_text, dict):
+        if "answer" in raw_text:
+            return str(raw_text["answer"])
+        if "output" in raw_text:
+            return str(raw_text["output"])
+        for sub_key in ("args", "arguments"):
+            sub = raw_text.get(sub_key)
+            if isinstance(sub, dict) and "answer" in sub:
+                return str(sub["answer"])
+        return str(raw_text)
+
+    text = str(raw_text).strip()
+    if not text:
+        return ""
+
+    # 1. محاولة فك تشفير النص كـ JSON كامل
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            if "answer" in parsed:
+                return str(parsed["answer"])
+            if "output" in parsed:
+                return str(parsed["output"])
+            for sub_key in ("args", "arguments"):
+                sub = parsed.get(sub_key)
+                if isinstance(sub, dict) and "answer" in sub:
+                    return str(sub["answer"])
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # 2. إذا فشل، نستخدم Regex ذكي لالتقاط المحتوى داخل مفتاح "answer"
+    match = re.search(r'["\']answer["\']\s*:\s*["\'](.*?)["\'](?:\s*[,}\]])', text, re.DOTALL)
+    if not match:
+        match = re.search(r'["\']answer["\']\s*:\s*["\'](.*?)["\']\s*$}?', text, re.DOTALL)
+    if match:
+        val = match.group(1)
+        val = val.replace('\\n', '\n').replace('\\"', '"').replace("\\'", "'")
+        return val
+
+    return text
+
+
+class TerminalVisualizer:
+    """المسؤول عن التقاط أحداث الـ Event Bus وتحويلها إلى لوحات بصرية متحركة داخل Termux"""
+
+    def __init__(self, event_bus, state):
+        self.event_bus = event_bus
+        self.state = state
+        self.live_context = None
+        if self.event_bus:
+            self.event_bus._final_answer_rendered = False
+        self._register_listeners()
+
+    def _register_listeners(self):
+        """ربط الأحداث بالدالات البصرية المناسبة لها مع دعم دالتي on و subscribe"""
+        register_fn = getattr(self.event_bus, "on", None) or getattr(self.event_bus, "subscribe", None)
+        if register_fn:
+            self.event_bus._on_tool_completed_active = True
+            register_fn("tool_started", self.on_tool_started)
+            register_fn("tool_completed", self.on_tool_completed)
+            register_fn("agent_handoff", self.on_agent_handoff)
+            register_fn("tool_auth_violation", self.on_tool_auth_violation)
+            register_fn("show_final_answer", self.on_final_answer)
+
+    def on_tool_started(self, data: dict):
+        """إظهار سبينر متحرك عند بدء تشغيل أي أداة بناءً على دور الوكيل"""
+        self.stop()  # إيقاف أي سياق عرض نشط أولاً
+
+        role = data.get("role", "ORCHESTRATOR")
+        tool_name = data.get("tool_name", "tool")
+
+        # اختيار لون السبينر حسب قبعة الوكيل الحالي
+        color = "cyan" if role == "ORCHESTRATOR" else "green" if role == "CODER" else "yellow"
+
+        spinner = Spinner("dots", text=Text(f" [{role}] Running tool: {tool_name}...", style=f"bold {color}"))
+
+        # تفعيل العرض الحي المتحرك في الطرفية بشكل مؤقت
+        self.live_context = Live(spinner, console=console, refresh_per_second=10, transient=True)
+        self.live_context.start()
+
+    def on_tool_completed(self, data: dict):
+        """إيقاف السبينر وطباعة نتيجة الأداة بنجاح"""
+        self.stop()
+        tool_name = data.get("tool_name")
+        console.print(f"[bold green]✓[/bold green] Tool [bold white]{tool_name}[/] completed successfully.")
+
+    def on_agent_handoff(self, data: dict):
+        """طباعة لوحة أنيقة توضح انتقال "الوعي" والمسؤولية بين الوكلاء"""
+        self.stop()
+
+        from_role = data.get("from_role")
+        to_role = data.get("to_role")
+        payload = data.get("payload", "")
+
+        handoff_text = Text()
+        handoff_text.append("🔄 Handoff Protocol: ", style="bold white")
+        handoff_text.append(f"{from_role}", style="bold cyan" if from_role == "ORCHESTRATOR" else "bold green")
+        handoff_text.append(" ➡️ ", style="bold blink white")
+        handoff_text.append(f"{to_role}\n\n", style="bold yellow" if to_role == "AUDITOR" else "bold green")
+        handoff_text.append("📋 Payload:\n", style="dim white")
+        handoff_text.append(f"\"{payload}\"", style="italic dim")
+
+        panel = Panel(handoff_text, border_style="bold blue", title="[Agent Context Handoff]")
+        console.print(panel)
+
+    def on_tool_auth_violation(self, data: dict):
+        """وميض تحذيري أحمر صارم عند محاولة خرق الصلاحيات"""
+        self.stop()
+
+        error_msg = data.get("error", "Unknown Violation")
+        role = data.get("role")
+        tool = data.get("tool_name")
+
+        violation_text = (
+            "[bold white on red] 🚨 EXECUTION GATE BLOCK [/bold white on red]\n\n"
+            "[bold red]Security Violation Detected![/bold red]\n"
+            f"• Agent: [bold yellow]{role}[/]\n"
+            f"• Forbidden Tool: [bold cyan]{tool}[/]\n"
+            f"• Details: [dim]{error_msg}[/]"
+        )
+        panel = Panel(violation_text, border_style="red", expand=False)
+        console.print(panel)
+
+    def on_final_answer(self, data: dict):
+        """طباعة الرد النهائي الموجه لك بتأثير الكتابة التدريجية الحي والتهوية البصرية"""
+        self.stop()
+
+        raw_output = data.get("output", data.get("answer", ""))
+        output = extract_clean_answer(raw_output)
+        if not output:
+            return
+
+        if self.event_bus:
+            self.event_bus._final_answer_rendered = True
+
+        # 1. حساب العرض الآمن والمناسب لشاشة الهاتف في Termux (نترك هامش 4 أحرف لمنع الالتصاق)
+        safe_width = min(console.size.width - 4, 80)
+
+        # 2. تهيئة الإطار الفارغ مع التنسيقات المستديرة والهوامش الداخلية
+        current_text = ""
+        panel = Panel(
+            Markdown(current_text),
+            border_style="bold green",
+            box=ROUNDED,                         # حواف مستديرة ناعمة وفخمة
+            padding=(1, 2),                      # هوامش داخلية (أعلى/أسفل، وجانبين) مريحة جداً للعين
+            width=safe_width,
+            title="[bold green]🌿 Nabd OS[/bold green]",
+            subtitle="[dim]Task completed successfully[/dim]",
+            title_align="left",
+            subtitle_align="right"
+        )
+
+        console.print("\n")  # سطر فارغ لتهوية الجزء العلوي قبل انبثاق اللوحة
+
+        # 3. تأثير التدفق التدريجي (Streaming Effect)
+        # نقوم بتقسيم النص إلى كلمات وطباعتها على دفعات خفيفة للحفاظ على جمالية الماركدوان والسرعة
+        words = output.split(" ")
+        chunk_size = 3  # عدد الكلمات المطبوعة في كل نبضة
+
+        with Live(panel, console=console, auto_refresh=False) as live:
+            for i in range(0, len(words), chunk_size):
+                chunk = " ".join(words[i:i + chunk_size])
+                current_text += (" " if current_text else "") + chunk
+
+                # تحديث عرض الماركدوان تدريجياً داخل لوحة العرض الحي
+                panel.renderable = Markdown(current_text)
+                live.update(panel, refresh=True)
+
+                # تأخير زمني بسيط بالملي ثانية ليحاكي سرعة الاستجابة الحية
+                time.sleep(0.04)
+
+        console.print("\n")  # سطر فارغ لتهوية الجزء السفلي بعد اكتمال اللوحة
+
+    def stop(self):
+        """🔒 إغلاق آمن لعرض الـ Live لمنع تعليق الطرفية"""
+        if self.live_context:
+            try:
+                self.live_context.stop()
+            except Exception:
+                pass
+            self.live_context = None
 
 
 if __name__ == "__main__":

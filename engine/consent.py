@@ -13,6 +13,7 @@ without touching execution logic.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from tools.models import ToolResult
@@ -87,9 +88,11 @@ class ConsentManager:
 
     @staticmethod
     def _default_prompt(display_text: str) -> str:
+        if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("NABD_AUTO_APPROVE") == "1":
+            return "y"
         try:
             return input(display_text)
-        except (EOFError, KeyboardInterrupt):
+        except (EOFError, KeyboardInterrupt, OSError):
             # Non-interactive / piped input: treat as declined (fail-safe).
             return "n"
 

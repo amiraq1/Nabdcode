@@ -17,13 +17,14 @@ from typing import Any, Callable, Final, Optional
 # engine/__init__ -> engine.loop -> llm_router -> core -> engine.events to
 # re-enter mid-import. Injecting the dispatcher via DI + a Protocol keeps the
 # module-level import graph acyclic.
+from engine.consent import ConsentManager
 from engine.events import bus
 from engine.interfaces import DispatcherProtocol
 from engine.state import RuntimeState, GoalSpec, parse_goal_command, build_goal_block
 from engine.goal_verifier import evaluate_goal_exit, MAX_GOAL_RETRIES
 from core.permissions import PermissionEngine, PermissionDecision
 
-from core.parser import extract_command, extract_json_from_response, validate_tool_call, ToolCall
+from core.parser import extract_command, extract_json_from_response, validate_tool_call, ToolCall, TOOL_SCHEMAS
 from core.security import is_safe_command
 from core.utils import truncate
 from pathlib import Path
@@ -33,6 +34,8 @@ from core.memory import load_memory, write_lesson
 from core.workspace import load_workspace_context
 from core.sanitize import sanitize
 from core.ui_bridge import get_bridge, _TIMEOUT_REPLY
+from core.prompts import BROWSER_FEWSHOT_EXAMPLES, FALLBACK_RESTRICTED_PROMPT
+from core.context_compactor import ContextCompactor, CompactionConfig
 
 
 # ---------------------------------------------------------------------
@@ -56,6 +59,7 @@ TOOL_FEWSHOT_FALLBACK: Final[str] = (
     '{"tool": "execute_shell", "args": {"command": "ls -la"}}\n\n'
     "Example 2 — finish a conversational reply:\n"
     '{"tool": "final_answer", "args": {"answer": "Here is your answer."}}\n\n'
+    f"{BROWSER_FEWSHOT_EXAMPLES}\n\n"
     "Output ONLY one JSON object. No prose."
 )
 
@@ -155,6 +159,8 @@ def _is_thought_only(response_text: str) -> bool:
 MAX_SELF_CORRECT: Final[int] = 3
 MAX_BUDGET_SECONDS: Final[int] = 180  # سقف الميزانية: 3 دقائق لكل مهمة على Termux
 MAX_BUDGET_TOKENS: Final[int] = 12000  # سقف التوكنات التقريبي
+MAX_PROVIDER_FAIL_STREAK: Final[int] = 3
+FALLBACK_ALLOWED_TOOLS: Final[set[str]] = {"final_answer", "search_memory", "todo_write"}
 
 # Phase4: in casual chat (no active goal) the compaction engine must still
 # surface the recent conversation, not just the frozen first user prompt. This
@@ -325,6 +331,7 @@ class ExecutionLoop:
         self._recent_calls: deque[ToolCall] = deque(maxlen=16)
         self.evidence_log = evidence_log or EvidenceLog()
         self._self_correct_count = 0
+        self._provider_fail_streak = 0
         # Phase2: the active model identifier. Injected by callers that know the
         # resolved model (e.g. the router); defaults to the env-configured model
         # so existing callers that omit it still get a meaningful identifier.
@@ -341,6 +348,8 @@ class ExecutionLoop:
         self._workspace_context: str = ""
         # Per-run context; allocated in run() before the loop begins.
         self._ctx: Optional[_LoopCtx] = None
+        self.all_tools = TOOL_SCHEMAS
+        self._compactor = ContextCompactor()
 
     def _is_small_or_fallback_model(self) -> bool:
         """Return True when the active model is a small/local/fallback tier.
@@ -353,6 +362,23 @@ class ExecutionLoop:
         if not ident:
             return False
         return any(keyword in ident for keyword in _SMALL_FALLBACK_MODEL_KEYWORDS)
+
+    def get_available_tools(self) -> dict:
+        """Filter tools based on fallback mode"""
+        if getattr(self.state, "is_fallback_mode_active", False):
+            filtered = {
+                name: schema
+                for name, schema in self.all_tools.items()
+                if name in FALLBACK_ALLOWED_TOOLS
+            }
+            if "final_answer" in FALLBACK_ALLOWED_TOOLS and "final_answer" not in filtered:
+                filtered["final_answer"] = {
+                    "description": "Terminate task and return final answer to the user.",
+                    "required": {"answer": str},
+                    "optional": {},
+                }
+            return filtered
+        return self.all_tools
 
     def _build_critique(self, result: Any, last_tool_call: Any = None) -> str:
         findings_str = str(getattr(result, "findings", result))
@@ -559,6 +585,50 @@ class ExecutionLoop:
             return _LoopSignal.TERMINATE
         return _LoopSignal.PROCEED
 
+    def _note_provider_failure(self, err: str) -> _LoopSignal:
+        """Increment the provider fail streak, activate fallback restrictions, and terminate on threshold."""
+        self._provider_fail_streak += 1
+        self.state.provider_fail_streak = self._provider_fail_streak
+        preview = str(err)[:200]
+        bus.emit(
+            "provider_failed",
+            {
+                "error": preview,
+                "streak": self._provider_fail_streak,
+                "step": self.state.step_count,
+            },
+        )
+        if self._provider_fail_streak >= 2 and not getattr(self.state, "is_fallback_mode_active", False):
+            self.state.is_fallback_mode_active = True
+            bus.emit("fallback_mode_activated", {
+                "streak": self._provider_fail_streak,
+                "allowed_tools": sorted(FALLBACK_ALLOWED_TOOLS)
+            })
+
+        if self._provider_fail_streak >= MAX_PROVIDER_FAIL_STREAK:
+            msg = "[Error: Connection lost. Exiting cleanly to protect context.]"
+            self.state.update_status("FAILED")
+            ctx_prompt = self._ctx.user_prompt if self._ctx else ""
+            safe_msg = self._safe_shutdown(
+                ctx_prompt,
+                f"Connection lost or repeated provider failure after {self._provider_fail_streak} attempts: {preview}",
+            )
+            bus.emit(
+                "loop_completed",
+                {"reason": "connection_lost", "output": safe_msg or msg},
+            )
+            return _LoopSignal.TERMINATE
+        return _LoopSignal.CONTINUE
+
+    def _note_provider_success(self) -> None:
+        """Reset the provider fail streak upon receiving valid non-empty model text."""
+        if self._provider_fail_streak > 0 or getattr(self.state, "provider_fail_streak", 0) > 0:
+            self._provider_fail_streak = 0
+            self.state.provider_fail_streak = 0
+            if getattr(self.state, "is_fallback_mode_active", False):
+                self.state.is_fallback_mode_active = False
+                bus.emit("fallback_mode_deactivated")
+
     def _invoke_llm_and_normalize(self) -> tuple[str, str]:
         """Invoke the LLM provider and strip formatting / forbidden thought prefixes.
 
@@ -572,11 +642,26 @@ class ExecutionLoop:
         if compacted and compacted[0].get("role") == "system":
             compacted = self._inject_runtime_context(compacted)
 
-        started = time.perf_counter()
-        response = self.llm_provider(compacted)
-        elapsed = time.perf_counter() - started
+        try:
+            started = time.perf_counter()
+            response = self.llm_provider(compacted)
+            elapsed = time.perf_counter() - started
+        except (TimeoutError, ConnectionError, OSError) as exc:
+            if self._note_provider_failure(f"{type(exc).__name__}: {exc}") is _LoopSignal.TERMINATE:
+                return "", ""
+            time.sleep(self.POLL_DELAY)
+            return "", ""
 
         response_text = response.strip()
+
+        # Prompt Leak Detector: check if raw model response leaked structural system markers
+        if any(marker in response_text for marker in ("## TODO Discipline", "<hard_rules>", "<system_instructions>")):
+            leak_preview = response_text[:200]
+            if self._note_provider_failure(f"Prompt Leak detected: {leak_preview}") is _LoopSignal.TERMINATE:
+                return "", ""
+            time.sleep(self.POLL_DELAY)
+            return "", ""
+
         normalized_resp = _normalize_response(response_text)
 
         if not response_text:
@@ -594,6 +679,7 @@ class ExecutionLoop:
             time.sleep(self.POLL_DELAY)
             return response_text, normalized_resp
 
+        self._note_provider_success()
         self.state.append_message({"role": "assistant", "content": response})
         bus.emit(
             "llm_request_completed",
@@ -680,7 +766,9 @@ class ExecutionLoop:
         # Phase 2: small / fallback models get a tight few-shot anchor so they
         # emit a single clean JSON tool call instead of prose. Capable models
         # are left untouched to avoid context bloat.
-        if self._is_small_or_fallback_model():
+        if getattr(self.state, 'is_fallback_mode_active', False):
+            system_content += f"\n\n{FALLBACK_RESTRICTED_PROMPT}"
+        if self._is_small_or_fallback_model() or getattr(self.state, 'is_fallback_mode_active', False):
             system_content += f"\n\n{TOOL_FEWSHOT_FALLBACK}"
 
         return [
@@ -759,19 +847,34 @@ class ExecutionLoop:
                 self._last_response = final_answer
                 return None, _LoopSignal.TERMINATE
 
-            is_valid, parsed, error = validate_tool_call(raw_json)
+            is_valid, parsed, error = validate_tool_call(raw_json, available_tools=self.get_available_tools())
             if not is_valid:
                 bus.emit("ui_validation_failed", {"error": error, "step": self.state.step_count})
                 bus.emit(
                     "tool_validation_failed",
                     {"error": error, "raw_json": raw_json, "step": self.state.step_count},
                 )
-                if self._is_small_or_fallback_model():
+                attempt_tool = ""
+                if isinstance(parsed, dict):
+                    attempt_tool = parsed.get("tool", "")
+                elif isinstance(raw_json, str) and "browser_action" in raw_json:
+                    attempt_tool = "browser_action"
+
+                if attempt_tool == "browser_action" or (isinstance(raw_json, str) and "browser_action" in raw_json and "query" in raw_json):
+                    correction_prompt = (
+                        "❌ Invalid browser_action payload.\n"
+                        'Use EXACTLY: {"tool": "browser_action", "args": {"action": "navigate", "url": "https://url.com"}}\n'
+                        "Strictly FORBIDDEN: 'query' field, 'search' action, or local file_system substitution."
+                    )
+                elif self._is_small_or_fallback_model():
                     # Phase 2: small/fallback models get a terse micro-correction
                     # instead of the verbose error trace — one exact example line.
+                    # CRITICAL: never model execute_shell as the example, since the
+                    # ORCHESTRATOR is forbidden from calling it (security gate blocks
+                    # it) and suggesting it loops the model back into a blocked call.
                     correction_prompt = (
                         'Invalid tool call. Output ONE line only, exactly like: '
-                        '{"tool":"execute_shell","args":{"command":"ls"}}'
+                        '{"tool":"file_system","args":{"action":"read","path":"main.py"}}'
                     )
                 else:
                     correction_prompt = (
@@ -781,13 +884,16 @@ class ExecutionLoop:
                         "<tool_error_data>\n"
                         f"{error}\n"
                         "</tool_error_data>\n\n"
-                        "Output ONLY one valid JSON object.\n\n"
-                        "Allowed tools:\n\n"
-                        "execute_shell\n"
+                        "You are the ORCHESTRATOR and are STRICTLY FORBIDDEN from calling "
+                        "execute_shell. If you need code generation or system work, delegate "
+                        "to the CODER agent via the proper handoff mechanism — do NOT emit "
+                        "execute_shell yourself. Output ONLY one valid JSON object.\n\n"
+                        "Allowed tools (Orchestrator may call all except execute_shell):\n\n"
                         "file_system\n"
                         "web_search\n"
                         "search_memory\n"
-                        "termux_monitor\n\n"
+                        "termux_monitor\n"
+                        "execute_shell  (FORBIDDEN for Orchestrator — will be blocked)\n\n"
                         "Do not explain.\n"
                         "Do not use markdown.\n"
                         "Do not wrap inside ```.\n\n"
@@ -946,6 +1052,7 @@ class ExecutionLoop:
         # now safe to emit (the goal gate set is_met=True on its own path).
         self.state.update_status("COMPLETED")
         bus.emit("loop_completed", {"reason": "no_tool_call", "output": self._last_response})
+        bus.emit("show_final_answer", {"output": self._last_response})
         return _LoopSignal.TERMINATE
 
     def _handle_cycle_and_security(self, tool_call: ToolCall) -> _LoopSignal:
@@ -989,6 +1096,11 @@ class ExecutionLoop:
             if not is_safe_command(command):
                 bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count})
                 bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count})
+                bus.emit("tool_auth_violation", {
+                    "role": "ORCHESTRATOR",
+                    "tool_name": tool_name,
+                    "error": "shell command violated security policy",
+                })
                 # Phase4.1 Auto-Critical (b): a security denial/block is frozen.
                 self._flag_latest_evidence_critical()
                 self.state.append_message(
@@ -1278,6 +1390,17 @@ class ExecutionLoop:
         if self._check_budget_and_guards() is _LoopSignal.TERMINATE:
             return
 
+        if hasattr(self, "_compactor") and self._compactor.should_compact(self.state.messages):
+            self.state.messages = self._compactor.compact(
+                self.state.messages,
+                self.state,
+                getattr(self, "evidence_log", None) or getattr(self, "_evidence", None)
+            )
+            bus.emit("context_compacted", {
+                "messages_after": len(self.state.messages),
+                "tokens_saved_estimate": self._estimate_tokens_saved()
+            })
+
         response_text, normalized_resp = self._invoke_llm_and_normalize()
         if not response_text:
             return
@@ -1326,3 +1449,9 @@ class ExecutionLoop:
             if rec.success:
                 self.evidence_log.flag_critical(rec.evidence_id)
                 return
+
+    def _estimate_tokens_saved(self) -> int:
+        """Rough token savings estimate"""
+        before = sum(len(str(m.get("content", ""))) for m in self.state.messages)
+        after = sum(len(json.dumps(m)) for m in self.state.messages)
+        return max(0, (before - after) // 4)

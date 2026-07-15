@@ -14,7 +14,16 @@ import subprocess
 import time
 from typing import Any, Dict, Final, List, Optional
 from smolagents import Tool
-from core.sanitize import sanitize
+
+# ── Lazy sanitizer ────────────────────────────────────────────────────────
+# Imported lazily inside each method that needs it so the tools/ package
+# never forces the core/ module graph to load at import time.
+
+
+def _sanitize(text: str, **kwargs) -> str:
+    from core.sanitize import sanitize as _do_sanitize
+    return _do_sanitize(text, **kwargs)
+
 
 # Setup logger for SecureTools
 logger = logging.getLogger("SecureTools")
@@ -179,7 +188,7 @@ class SecureWorkspaceReader(SecureTool):
             logger.info(
                 f"[{self.name}] Read successful ({len(content)} chars, {duration:.3f}s)"
             )
-            return sanitize(content)
+            return _sanitize(content)
 
         except (PermissionError, OSError) as exc:
             duration = time.time() - start_time
@@ -253,8 +262,8 @@ class SecureGitInspector(SecureTool):
                 f"[{self.name}] Execution finished (exit code {result.returncode}, {duration:.3f}s)"
             )
 
-            out_sanitized = sanitize(result.stdout)
-            err_sanitized = sanitize(result.stderr)
+            out_sanitized = _sanitize(result.stdout)
+            err_sanitized = _sanitize(result.stderr)
 
             if result.returncode != 0:
                 return f"Error executing git {action}: {err_sanitized or 'Unknown error'}"
@@ -334,8 +343,8 @@ class SecureTestRunner(SecureTool):
                 f"[{self.name}] Execution finished (exit code {result.returncode}, {duration:.3f}s)"
             )
 
-            out_sanitized = sanitize(result.stdout)
-            err_sanitized = sanitize(result.stderr)
+            out_sanitized = _sanitize(result.stdout)
+            err_sanitized = _sanitize(result.stderr)
 
             combined = f"{out_sanitized}\n{err_sanitized}".strip()
             return combined if combined else "Tests executed, but no output was returned."
@@ -380,8 +389,8 @@ class SecureSemanticMemoryTool(SecureTool):
         self.memory = memory_pipeline or SemanticMemoryPipeline()
 
     def forward(self, action: str, text: str) -> str:
-        clean_action = sanitize(action).strip().lower()
-        clean_text = sanitize(text).strip()
+        clean_action = _sanitize(action).strip().lower()
+        clean_text = _sanitize(text).strip()
 
         if clean_action not in ["search", "store"]:
             return "Security Violation: Invalid action. Only 'search' or 'store' are allowed."
@@ -497,6 +506,10 @@ class SecureShellTool(SecureTool):
 
     Delegates to ShellTool.execute (security validation + safe_execute_command +
     stdout/stderr token clamp), exposed via the smolagents ``forward`` contract.
+
+    Accepts optional Dependency Injection for the underlying ShellTool's
+    security engine, sanitizer, and command executor. When omitted, default
+    implementations from core/ are lazily loaded (backward compatible).
     """
 
     name = "secure_shell"
@@ -513,10 +526,18 @@ class SecureShellTool(SecureTool):
     }
     output_type = "string"
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        security_engine: Any = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         from tools.shell import ShellTool
-        self._tool = ShellTool()
+        if security_engine is not None:
+            self._tool = ShellTool(security_engine=security_engine)
+        else:
+            self._tool = ShellTool()
 
     def forward(self, *args: Any, command: Any = "", **kwargs: Any) -> str:
         # Tolerate model schema drift & positional/list unpacking:
@@ -593,7 +614,51 @@ class SecureWebSearchTool(SecureTool):
         q = query or kwargs.get("query") or kwargs.get("q")
         if not q:
             return "Error: web_search requires a 'query' argument."
-        result = self._tool.execute(query=sanitize(str(q)[:500]))
+        result = self._tool.execute(query=_sanitize(str(q)[:500]))
         return result.output if hasattr(result, "output") else str(result)
+
+
+class SecureBrowserTool(SecureTool):
+    """Securely interacts with Lightpanda MCP adapter to navigate webpages and extract text."""
+
+    name = "browser_action"
+    description = (
+        "تصفح الويب، استخراج النصوص المنسقة، والتعامل مع صفحات الإنترنت بصمت وخفة "
+        "عبر مهايئ Lightpanda MCP. استخدم هذه الأداة حصراً عندما يطلب المستخدم معلومات حديثة من الإنترنت، "
+        "أو قراءة توثيق (Documentation) لرابط معين، أو البحث أونلاين."
+    )
+    inputs = {
+        "action": {
+            "type": "string",
+            "description": "اسم الأداة الفرعية لـ MCP. الخيارات المتاحة: 'navigate' لزيارة الرابط، أو 'get_text' لاستخراج النصوص النظيفة.",
+            "required": True,
+        },
+        "url": {
+            "type": "string",
+            "description": "الرابط الكامل للموقع المراد زيارته (مطلوب فقط عند استخدام action: 'navigate').",
+            "required": False,
+            "nullable": True,
+        },
+    }
+    output_type = "string"
+
+    def __init__(self, workspace_dir: str = ".", *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        from tools.browser_tool import BrowserTool
+        self._tool = BrowserTool(workspace_dir=workspace_dir)
+
+    def forward(self, action: str = "", url: str = "", **kwargs: Any) -> str:
+        act = action or kwargs.get("action", "")
+        if not act:
+            return "Error: browser_action requires an 'action' argument ('navigate' or 'get_text')."
+        exec_kwargs = {}
+        if url or kwargs.get("url"):
+            exec_kwargs["url"] = url or kwargs.get("url")
+        exec_kwargs.update({k: v for k, v in kwargs.items() if k not in ("action", "url")})
+        result = self._tool.execute(action=str(act), **exec_kwargs)
+        if not result.success:
+            return f"Error ({result.returncode}): {result.stderr or result.stdout}"
+        return str(result.stdout or result.stderr).strip()
+
 
 

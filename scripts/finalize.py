@@ -124,8 +124,7 @@ def generate_readme(golden_rules: list[str]) -> None:
 
 ### التشغيل
 ```bash
-python3 -m multi_agent.orchestrator "حلل core/sanitize.py"
-python3 core/dashboard.py # نافذة ثانية
+python3 core/multi_agent_orchestrator.py "Analyze core/sanitize.py"
 PYTHONPATH=. python3 -m unittest discover tests
 ```
 """

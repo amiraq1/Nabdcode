@@ -6,8 +6,8 @@ scratchpad and routes the task to a specialized CoderAgent, then hands the
 emitted payload to a VerifierAgent (the Stage 4 strict auditor). Rejections
 loop back to the CoderAgent for a rewrite (up to max_retries).
 
-This file is intentionally independent of multi_agent/orchestrator.py so the
-two orchestration stacks do not collide. All cross-agent handoffs are
+This is the SINGLE authoritative orchestration layer (the legacy
+multi_agent/ package has been removed). All cross-agent handoffs are
 broadcast through the safe UIBridge fan-out so logs capture the loop.
 """
 
@@ -37,6 +37,7 @@ from core.tool_factory import build_skill_tools
 from core.context_manager import RepositoryContextManager
 from core.ui_bridge import get_bridge
 from core.uv_isolation_manager import UvIsolationManager
+from engine.events import bus
 from tools.secure_tools import (
     SecureFileSystemTool,
     SecureWebSearchTool,
@@ -44,7 +45,7 @@ from tools.secure_tools import (
 
 # Local package roots that are NOT third-party (treat as internal, never
 # route through uv). Extend here if more first-party namespaces appear.
-_LOCAL_NAMESPACES = {"core", "skills", "engine", "ui", "tools", "multi_agent", "smolagents"}
+_LOCAL_NAMESPACES = {"core", "skills", "engine", "ui", "tools", "smolagents"}
 
 
 # ── Behavioral prompt templates (Stage: Cognitive Behavior Upgrade) ──────
@@ -276,6 +277,11 @@ class OrchestratorAgent:
 
             # 2. Coding phase assigned to the CoderAgent.
             _broadcast_orch("CODER_START", f"attempt {attempt}/{max_retries}")
+            bus.emit("agent_handoff", {
+                "from_role": "ORCHESTRATOR",
+                "to_role": "CODER",
+                "payload": task,
+            })
             last_payload = self.coder.code(brief)
             self.scratchpad["payload"] = last_payload
             _broadcast_orch("CODER_SUCCESS", f"attempt {attempt}")
@@ -342,6 +348,11 @@ class OrchestratorAgent:
             # 3. Sandbox passed -> route payload to the VerifierAgent for
             # strict semantic + security evaluation (+ goal + history).
             _broadcast_orch("VERIFIER_EVALUATE", f"attempt {attempt}")
+            bus.emit("agent_handoff", {
+                "from_role": "CODER",
+                "to_role": "AUDITOR",
+                "payload": last_payload[:2000],
+            })
             verdict = self.verifier.evaluate(task, last_payload)
 
             if verdict["passed"]:
@@ -364,6 +375,11 @@ class OrchestratorAgent:
                 pass
             MemoryStore.log_failure(f"orch:{task[:80]}", reasons)
             _broadcast_orch("VERIFIER_REJECT", f"attempt {attempt}: {reasons}")
+            bus.emit("agent_handoff", {
+                "from_role": "AUDITOR",
+                "to_role": "CODER",
+                "payload": reasons,
+            })
             brief = (
                 f"PREVIOUS ATTEMPT REJECTED BY VERIFIER.\n"
                 f"REASONS: {reasons}\n"
