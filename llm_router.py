@@ -82,13 +82,36 @@ class ProviderRouter:
         except Exception:
             # Fail-open: never let state restore break provider routing.
             pass
-    def set_state_key(self, key: str) -> None:
-        self.state_key = key
-        self._restore_state()
     def _sorted(self): return [p for p in self.providers if p.is_available()]
-    def generate_stream(self, messages, **kwargs):
+    def generate_stream(self, messages, logger=None, **kwargs):
+        available = self._sorted()
+        if not available:
+            # No provider is currently usable: either every provider is on
+            # cooldown, was disabled by a 404 (model-not-found), or none were
+            # configured at startup. Distinguish this from "all attempted and
+            # failed" so the operator gets an actionable message instead of a
+            # bare "All failed: None".
+            disabled = [p.name for p in self.providers if not p.enabled]
+            cooled = [
+                p.name for p in self.providers
+                if p.enabled and time.time() < p.cooldown_until
+            ]
+            if disabled:
+                detail = (
+                    f"all providers disabled (model-not-found or config error): "
+                    f"{', '.join(disabled)}"
+                )
+            elif cooled:
+                detail = (
+                    f"all providers on cooldown (retry after "
+                    f"{max(int(p.cooldown_until - time.time()) for p in self.providers if p.enabled)}s): "
+                    f"{', '.join(cooled)}"
+                )
+            else:
+                detail = "no providers configured"
+            raise RuntimeError(f"All failed: {detail}")
         last = None
-        for p in self._sorted():
+        for p in available:
             try:
                 res = p.client.generate_response(messages, **kwargs)
                 p.record_success()
@@ -99,7 +122,30 @@ class ProviderRouter:
                 rate = is_rate_limit(e)
                 nf = is_not_found(e)
                 p.record_failure(rate=rate, notfound=nf)
-                print(f"[fallback] {p.name} {'RATE-LIMIT' if rate else '404' if nf else 'FAIL'} -> next")
+                # Route provider fallback through the caller's logger instead of
+                # printing raw text to stdout (which pollutes the REPL UI). When
+                # no logger is supplied (e.g. isolated unit tests) fall back to
+                # the stdlib root logger so output stays decoupled but visible.
+                err_text = str(e) if str(e) else repr(e)
+                log_msg = (
+                    f"[LLM Router Fallback] Provider '{p.name}' failed"
+                    f"{' (rate-limited)' if rate else ' (model not found)' if nf else ''}"
+                    f": {err_text}. Transitioning to next provider..."
+                )
+                if logger is not None:
+                    logger.warning(log_msg)
+                    # Best-effort immediate flush so the session log reflects the
+                    # failure even if the process is killed moments later. The
+                    # Logger wrapper exposes flush(); stdlib loggers flush too.
+                    flush = getattr(logger, "flush", None)
+                    if callable(flush):
+                        try:
+                            flush()
+                        except Exception:
+                            pass
+                else:
+                    import logging as _logging
+                    _logging.warning(log_msg)
                 if rate and ("openrouter" in p.name.lower() or "OR-" in p.name):
                     # If free OR account is rate-limited, put all OR-* on 65s cooldown and jump straight to NVIDIA
                     for op in self.providers:
@@ -107,8 +153,9 @@ class ProviderRouter:
                             op.cooldown_until = time.time() + 65
                     continue
                 continue
-        raise RuntimeError(f"All failed: {last}")
-    def generate_response(self, m, **kwargs): return "".join(self.generate_stream(m, **kwargs))
+        raise RuntimeError(f"All failed: {str(last) if last is not None else 'no providers attempted'}")
+    def generate_response(self, m, logger=None, **kwargs):
+        return "".join(self.generate_stream(m, logger=logger, **kwargs))
 
 base_model = os.getenv("OPENROUTER_MODEL", "tencent/hunyuan-3:free")
 FALLBACK_MODELS = [
@@ -144,7 +191,7 @@ for i, mdl in enumerate(FREE_FALLBACK, start=2):
 
 router = ProviderRouter(providers)
 
-def execute_agent_with_memory(state_or_messages: Any, **kwargs: Any) -> str:
+def execute_agent_with_memory(state_or_messages: Any, logger=None, **kwargs: Any) -> str:
     if isinstance(state_or_messages, list):
         messages = state_or_messages
     elif hasattr(state_or_messages, "messages"):
@@ -153,4 +200,4 @@ def execute_agent_with_memory(state_or_messages: Any, **kwargs: Any) -> str:
         messages = state_or_messages["messages"]
     else:
         messages = str(state_or_messages)
-    return router.generate_response(messages, **kwargs)
+    return router.generate_response(messages, logger=logger, **kwargs)

@@ -1,7 +1,7 @@
 # core/hybrid_retriever.py
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Tuple, Optional
-from core.memory_store import MemoryStore, MemoryChunk
+from core.storage import MemoryStore, MemoryChunk
 from core.semantic_index import TfIdfIndex
 
 
@@ -82,7 +82,9 @@ class HybridRetriever:
         """Calculate age in hours from ISO timestamp"""
         try:
             ts = datetime.fromisoformat(timestamp)
-            delta = datetime.utcnow() - ts
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            delta = datetime.now(timezone.utc) - ts
             return max(0.0, delta.total_seconds() / 3600.0)
         except Exception:
             return 0.0

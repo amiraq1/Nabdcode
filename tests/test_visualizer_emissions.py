@@ -88,7 +88,7 @@ class TestAgentHandoffEmission(unittest.TestCase):
 class TestToolAuthViolationEmission(unittest.TestCase):
     def test_unsafe_shell_command_emits_auth_violation(self):
         """When is_safe_command rejects an execute_shell command, the loop must
-        emit tool_auth_violation with role/tool_name/error."""
+        emit tool_auth_violation with role/tool/error."""
         from engine.loop import ExecutionLoop
         from engine.state import RuntimeState
 
@@ -114,7 +114,7 @@ class TestToolAuthViolationEmission(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         v = violations[0]
         self.assertEqual(v["role"], "ORCHESTRATOR")
-        self.assertEqual(v["tool_name"], "execute_shell")
+        self.assertEqual(v["tool"], "execute_shell")
         self.assertTrue(v["error"])
 
 

@@ -10,6 +10,18 @@ from tools.termux_monitor import TermuxMonitorTool
 from core.parser import TOOL_SCHEMAS, validate_tool_call
 
 
+class _MockRegistry:
+    """Minimal registry adapter wrapping a real tool."""
+    def __init__(self, tool):
+        self._tool = tool
+
+    def __contains__(self, name):
+        return True
+
+    def get_tool(self, name):
+        return self._tool
+
+
 FREE_SAMPLE = (
     "               total        used        free      shared  buff/cache   available\n"
     "Mem:           3834        2012         412         180        1410        1389\n"
@@ -92,15 +104,15 @@ class TestTermuxMonitorSchemaRegression(unittest.TestCase):
 
     def test_termux_monitor_schema_validation(self):
         """Exact LLM payload must pass the strict gatekeeper (ok=True)."""
-        res = validate_tool_call({"tool": "termux_monitor", "args": {}})
-        self.assertTrue(res.ok, msg=f"validation failed: {res.error}")
-        self.assertEqual(res.data["tool"], "termux_monitor")
-        self.assertEqual(res.data["args"], {})
+        registry = _MockRegistry(TermuxMonitorTool())
+        ok, err = validate_tool_call({"tool": "termux_monitor", "args": {}}, registry)
+        self.assertTrue(ok, msg=f"validation failed: {err}")
 
     def test_termux_monitor_schema_validation_as_json_string(self):
         """Forgiving/raw-JSON path also accepts the exact payload string."""
-        res = validate_tool_call('{"tool": "termux_monitor", "args": {}}')
-        self.assertTrue(res.ok, msg=f"validation failed: {res.error}")
+        registry = _MockRegistry(TermuxMonitorTool())
+        ok, err = validate_tool_call('{"tool": "termux_monitor", "args": {}}', registry)
+        self.assertTrue(ok, msg=f"validation failed: {err}")
 
     def test_termux_monitor_tool_instantiates(self):
         """Class is importable and instantiates without constructor args."""

@@ -14,7 +14,7 @@ import shutil
 import tempfile
 import unittest
 
-from core.memory import PurePythonEmbedder, SemanticMemoryPipeline
+from core.storage import PurePythonEmbedder, SemanticMemoryPipeline
 
 
 class TestPurePythonEmbedder(unittest.TestCase):

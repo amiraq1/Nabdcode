@@ -144,7 +144,7 @@ class TestSecureTestRunner(unittest.TestCase):
 
 class TestSecureSemanticMemoryTool(unittest.TestCase):
     def setUp(self):
-        from core.memory import SemanticMemoryPipeline
+        from core.storage import SemanticMemoryPipeline
         self.temp_dir = tempfile.mkdtemp()
         self.store_path = pathlib.Path(self.temp_dir) / "tool_memory.json"
         pipeline = SemanticMemoryPipeline(store_path=str(self.store_path))

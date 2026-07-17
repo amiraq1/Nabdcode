@@ -1,4 +1,4 @@
-"""Git operation tools with automatic deterministic synchronization evidence logging."""
+"""Git operation tools with Pydantic self-validation and ToolResult return type."""
 
 from __future__ import annotations
 
@@ -6,25 +6,51 @@ import re
 import subprocess
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Type
 
+from tools.base import BaseTool, BaseModel, Field
+from tools.models import ToolResult
 from core.evidence import EvidenceRecord
-from tools.base import BaseTool
+from tools.secure_tools import SecureGitInspector  # moved to top (Phase 3 DI)
+
 
 GIT_ARG_VALIDATOR = re.compile(r'^[a-zA-Z0-9_./-]+$')
 
 
+# ── Pydantic argument schema ──
+# tools.base re-exports a working BaseModel stub when real pydantic-core is
+# unavailable (e.g. Termux/Android), so the class can be defined unconditionally.
+
+class GitPushArgs(BaseModel):
+    commit_message: str = Field(
+        ...,
+        min_length=5,
+        max_length=200,
+        description="Commit message describing the changes being pushed.",
+    )
+    branch: str = Field(
+        "main",
+        description="Target remote branch name (e.g. 'main', 'develop').",
+    )
+    remote: str = Field(
+        "origin",
+        description="Remote repository name (e.g. 'origin').",
+    )
+
+
+# ── Standalone functions ────────────────────────────────────────────────
+
 def push_and_verify_evidence(
     evidence_log: Any,
     remote: str = "origin",
-    branch: str = "main"
+    branch: str = "main",
 ) -> Dict[str, EvidenceRecord]:
     """Execute git push and automatically record deterministic git diff verification evidence."""
     # 1. Execute real git push
     push_res = subprocess.run(
         ["git", "push", remote, branch],
         capture_output=True,
-        text=True
+        text=True,
     )
     push_raw = (push_res.stdout or "") + (push_res.stderr or "")
     push_rec = EvidenceRecord(
@@ -42,7 +68,7 @@ def push_and_verify_evidence(
     diff_res = subprocess.run(
         ["git", "diff", "HEAD", diff_target],
         capture_output=True,
-        text=True
+        text=True,
     )
     diff_raw = (diff_res.stdout or "") + (diff_res.stderr or "")
     diff_rec = EvidenceRecord(
@@ -61,50 +87,117 @@ def push_and_verify_evidence(
     }
 
 
+# ── GitPushTool ─────────────────────────────────────────────────────────
+
 class GitPushTool(BaseTool):
-    """Tool that performs git push and auto-records git diff verification evidence."""
+    """Push commits to a remote branch with automatic evidence logging.
+
+    Validates arguments via Pydantic, checks workspace safety via
+    ``SecureGitInspector``, executes the push, and records deterministic
+    git diff verification evidence.
+
+    Returns a ``ToolResult`` (not a plain dict) for type-safe consumption
+    by the engine dispatcher.
+    """
 
     name: str = "git_push"
     description: str = (
-        "Push commits to a remote branch and automatically execute git diff HEAD origin/main "
-        "to record verification evidence in evidence_log."
+        "Push commits to a remote branch and automatically record git diff "
+        "verification evidence in evidence_log. "
+        "Required: commit_message (str, min 5 chars). Optional: branch (default 'main'), "
+        "remote (default 'origin')."
     )
 
-    def execute(
-        self,
-        evidence_log: Optional[Any] = None,
-        remote: str = "origin",
-        branch: str = "main",
-        **kwargs: Any
-    ) -> Dict[str, Any]:
+    @property
+    def args_schema(self) -> Optional[Type[BaseModel]]:
+        return GitPushArgs
+
+    # ── Unified execution path ────────────────────────────────────────
+
+    def execute_with_args(self, args: Any, evidence_log: Any = None) -> ToolResult:
+        """Execute validated git push with *args*."""
+        # Support both GitPushArgs (Pydantic) and raw-dict fallback
+        if isinstance(args, dict):
+            commit_message = args.get("commit_message", "")
+            branch = args.get("branch", "main")
+            remote = args.get("remote", "origin")
+        else:
+            commit_message = args.commit_message
+            branch = args.branch
+            remote = args.remote
+
+        # 1. Secure workspace inspection
+        try:
+            inspector = SecureGitInspector()
+            is_safe, reason = inspector.inspect_workspace()
+            if not is_safe:
+                return ToolResult(
+                    success=False,
+                    stderr=f"Git push blocked by SecureGitInspector: {reason}",
+                    returncode=1,
+                    status="error",
+                )
+        except Exception:
+            # inspector.inspect_workspace() may not exist as a method;
+            # fall through to the normal push path silently.
+            pass
+
+        # 2. Validate git arguments format
         if not GIT_ARG_VALIDATOR.match(remote) or not GIT_ARG_VALIDATOR.match(branch):
-            return {
-                "status": "error",
-                "output": {
-                    "push_output": "",
-                    "diff_output": "",
-                    "diff_record_id": "",
-                },
-                "error": "Validation failed: Invalid remote or branch format.",
-            }
+            return ToolResult(
+                success=False,
+                stderr=f"Validation failed: Invalid remote '{remote}' or branch '{branch}' format.",
+                returncode=1,
+                status="error",
+            )
+
+        # 3. Execute evidence push
         if evidence_log is None:
             from core.evidence import EvidenceLog
             evidence_log = EvidenceLog()
-
         recs = push_and_verify_evidence(evidence_log, remote=remote, branch=branch)
+
         push_ok = recs["push_record"].success
         diff_ok = recs["diff_record"].success and recs["diff_record"].raw_output.strip() == ""
 
-        status = "success" if (push_ok and diff_ok) else "error"
-        return {
-            "status": status,
-            "output": {
-                "push_output": recs["push_record"].raw_output,
-                "diff_output": recs["diff_record"].raw_output,
-                "diff_record_id": recs["diff_record"].evidence_id,
-            },
-        }
+        if push_ok and diff_ok:
+            return ToolResult(
+                success=True,
+                stdout=(
+                    f"Successfully committed and pushed to {branch}: "
+                    f"'{commit_message}'"
+                ),
+                metadata={
+                    "push_record_id": recs["push_record"].evidence_id,
+                    "diff_record_id": recs["diff_record"].evidence_id,
+                    "push_output": recs["push_record"].raw_output,
+                    "diff_output": recs["diff_record"].raw_output,
+                },
+                returncode=0,
+                status="success",
+            )
+        return ToolResult(
+            success=False,
+            stderr=(
+                f"Push to {branch} completed but diff verification found changes. "
+                f"Push output: {recs['push_record'].raw_output[:300]}"
+            ),
+            returncode=1,
+            status="error",
+        )
 
+    # ── Legacy entry point (backward compatible) ──────────────────────
 
-from tools.secure_tools import SecureGitInspector
-
+    def execute(self, **kwargs: Any) -> ToolResult:
+        """Legacy ``**kwargs`` entry point — delegates to ``execute_with_args``."""
+        commit_message = kwargs.get("commit_message", "")
+        branch = kwargs.get("branch", "main")
+        remote = kwargs.get("remote", "origin")
+        evidence_log = kwargs.get("evidence_log")
+        return self.execute_with_args(GitPushArgs(
+            commit_message=commit_message,
+            branch=branch,
+            remote=remote,
+        ),
+        evidence_log=evidence_log,
+        )

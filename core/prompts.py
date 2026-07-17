@@ -61,3 +61,10 @@ You are operating in emergency fallback mode with severely limited capabilities.
 - If the user asks for something outside these tools, politely explain the limitation and stop.
 Do not attempt to work around these restrictions. Do not invent tools.
 """.strip()
+
+CRITICAL_RULES_FOR_TOOL_CALLING: Final[str] = """
+CRITICAL RULES FOR TOOL CALLING:
+1. You MUST emit ONLY ONE tool call per turn.
+2. NEVER generate the word "Observation:". You must stop generating text immediately after your tool call and wait for the system to provide the real observation.
+3. Use the exact tool names provided (e.g., "web_search"). Do not invent tool names like "browser_action".
+""".strip()

@@ -1,13 +1,14 @@
-from typing import Dict
-from tools.base import BaseTool
+from typing import Any, Dict, Optional
+from core.kernel.protocols import ToolCallable
 
 class ToolRegistry:
     """
     Tool registry and manager.
     Allows adding new tools without modifying the core engine.
+    Supports dynamic schema generation from Pydantic ``args_schema``.
     """
     def __init__(self):
-        self._tools: Dict[str, BaseTool] = {}
+        self._tools: Dict[str, ToolCallable] = {}
 
     def register(self, name_or_tool: Any, tool: Optional[Any] = None, **kwargs):
         """Register a new tool in the system."""
@@ -20,7 +21,7 @@ class ToolRegistry:
             raise ValueError(f"Tool '{name}' is already registered.")
         self._tools[name] = tool_obj
 
-    def get_tool(self, tool_name: str) -> BaseTool:
+    def get_tool(self, tool_name: str) -> ToolCallable:
         """Look up a tool by name."""
         if tool_name not in self._tools:
             raise KeyError(f"Tool '{tool_name}' not found in registry.")
@@ -30,8 +31,27 @@ class ToolRegistry:
         return tool_name in self._tools
 
     def get_all_schemas(self) -> list:
-        """Return all tool schemas to inform the LLM of available capabilities."""
-        return [tool.get_schema() if hasattr(tool, "get_schema") else {"name": getattr(tool, "name", str(tool)), "description": getattr(tool, "description", "")} for tool in self._tools.values()]
+        """Return all tool schemas to inform the LLM of available capabilities.
+
+        When a tool declares a Pydantic ``args_schema``, the JSON Schema
+        is generated automatically via ``model_json_schema()``.  Tools
+        without Pydantic schemas fall back to ``get_schema()`` (name + desc).
+        """
+        schemas = []
+        for tool in self._tools.values():
+            schema = tool.get_schema() if hasattr(tool, "get_schema") else {
+                "name": getattr(tool, "name", str(tool)),
+                "description": getattr(tool, "description", ""),
+            }
+            schemas.append(schema)
+        return schemas
+
+    def __len__(self) -> int:
+        return len(self._tools)
+
+    def __iter__(self):
+        return iter(self._tools.items())
+
 
 # Global singleton instance
 registry = ToolRegistry()

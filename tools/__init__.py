@@ -1,120 +1,75 @@
 # tools/__init__.py
-"""Tools package initialization.
+"""
+Tools package — full PEP 562 dynamic lazy imports.
 
-ARCHITECTURAL CONSTRAINT (Phase 3 DI): This __init__.py MUST NOT import any
-core/ module at module load time. All core-dependent symbols are either
-imported lazily inside factory functions or exposed via Protocol interfaces.
+ARCHITECTURAL CONSTRAINT (Phase 3 DI + Phase 6 Kernel Island):
+This __init__.py MUST NOT import any core/ or tools/ submodule at
+module load time.  Every symbol is resolved lazily via __getattr__
+(PEP 562), so ``import tools`` or ``from tools import ShellTool``
+triggers zero side-effect imports until the specific symbol is
+actually accessed.
 
-Exports at module level:
-  • BaseTool, ToolResult, FileAction — pure tools-layer symbols
-  • ShellTool, FileSystemTool, etc. — tool classes (lazy-initialized)
-  • Protocol classes from tools.protocols
+Usage::
+
+    from tools import ShellTool          # lazy — loads tools.shell
+    from tools import BaseTool           # lazy — loads tools.base
+    from tools import ToolResult         # lazy — loads tools.models
+    from tools import SecureShellTool    # lazy — loads tools.secure_tools
 """
 
-from __future__ import annotations
+import importlib
+from typing import Any, Dict
 
-from tools.base import BaseTool
-from tools.models import ToolResult
-from tools.protocols import (
-    SecurityEngineProtocol,
-    SanitizerProtocol,
-    CommandExecutorProtocol,
-    PermissionEngineProtocol,
-)
-
-# ── Lazy tool accessors ───────────────────────────────────────────────────
-# These factory functions ensure core/ modules are ONLY imported when the
-# corresponding tool is first constructed or called — never at import time.
-
-def _shell() -> type:
-    from tools.shell import ShellTool
-    return ShellTool
-
-
-def _web_search() -> type:
-    from tools.web_search import WebSearchTool
-    return WebSearchTool
-
-
-def _file_system() -> type:
-    from tools.file_system import FileSystemTool
-    return FileSystemTool
-
-
-def _search_memory() -> type:
-    from tools.search_memory import SearchMemoryTool
-    return SearchMemoryTool
-
-
-def _secure_web_search() -> type:
-    from tools.secure_tools import SecureWebSearchTool
-    return SecureWebSearchTool
-
-
-def _termux_monitor() -> type:
-    from tools.termux_monitor import TermuxMonitorTool
-    return TermuxMonitorTool
+# ── Lazy mapping: symbol name → relative submodule ────────────────────────
+# Only tools/ submodules are referenced here — zero core/ dependencies.
+_TOOL_MAPPING: Dict[str, str] = {
+    # Base classes & models
+    "BaseTool": ".base",
+    "ToolResult": ".models",
+    "FileAction": ".file_system",
+    # Protocols (pure typing, no core/ imports)
+    "SecurityEngineProtocol": ".protocols",
+    "SanitizerProtocol": ".protocols",
+    "CommandExecutorProtocol": ".protocols",
+    "PermissionEngineProtocol": ".protocols",
+    # Concrete tools
+    "ShellTool": ".shell",
+    "FileSystemTool": ".file_system",
+    "WebSearchTool": ".web_search",
+    "SearchMemoryTool": ".search_memory",
+    "TodoWriteTool": ".todo",
+    "TermuxMonitorTool": ".termux_monitor",
+    "BrowserTool": ".browser_tool",
+    "GitPushTool": ".git_tool",
+    # Secure wrappers
+    "SecureTool": ".secure_tools",
+    "SecureShellTool": ".secure_tools",
+    "SecureFileSystemTool": ".secure_tools",
+    "SecureWebSearchTool": ".secure_tools",
+    "SecureBrowserTool": ".secure_tools",
+    "SecureWorkspaceReader": ".secure_tools",
+    "SecureGitInspector": ".secure_tools",
+    "SecureTestRunner": ".secure_tools",
+    "SecureSemanticMemoryTool": ".secure_tools",
+    # Pure function (no core/ dep)
+    "execute_search_memory": ".memory",
+}
 
 
-def _browser() -> type:
-    from tools.browser_tool import BrowserTool
-    return BrowserTool
+def __getattr__(name: str) -> Any:
+    """PEP 562 dynamic lazy import — loads submodule on first access."""
+    if name in _TOOL_MAPPING:
+        module_path = _TOOL_MAPPING[name]
+        module = importlib.import_module(module_path, __package__)
+        return getattr(module, name)
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def _secure_shell() -> type:
-    from tools.secure_tools import SecureShellTool
-    return SecureShellTool
+def __dir__() -> list:
+    """Support dir(tools) for IDE discovery."""
+    return list(_TOOL_MAPPING.keys())
 
 
-# ── Directly importable pure-tools symbols ───────────────────────────────
-# These have NO core/ dependency and can be imported eagerly.
-from tools.memory import execute_search_memory
-
-
-# ── Backwards-compatible module-level names (lazy) ───────────────────────
-# These resolve at first access, preserving the existing import API
-# (``from tools import ShellTool``) while never importing core/ at load time.
-
-def _file_action():
-    from tools.file_system import FileAction
-    return FileAction
-
-
-def __getattr__(name: str):
-    _lazy_map = {
-        "FileAction": _file_action,
-        "ShellTool": _shell,
-        "WebSearchTool": _web_search,
-        "FileSystemTool": _file_system,
-        "SearchMemoryTool": _search_memory,
-        "SecureWebSearchTool": _secure_web_search,
-        "SecureShellTool": _secure_shell,
-        "TermuxMonitorTool": _termux_monitor,
-        "BrowserTool": _browser,
-    }
-    if name in _lazy_map:
-        return _lazy_map[name]()
-    raise AttributeError(f"module 'tools' has no attribute '{name}'")
-
-
-__all__ = [
-    "BaseTool",
-    "ToolResult",
-    # Protocols
-    "SecurityEngineProtocol",
-    "SanitizerProtocol",
-    "CommandExecutorProtocol",
-    "PermissionEngineProtocol",
-    # Pure symbols (directly imported above)
-    "execute_search_memory",
-    # Tools (resolved via __getattr__)
-    "FileAction",
-    "ShellTool",
-    "SecureShellTool",
-    "WebSearchTool",
-    "SecureWebSearchTool",
-    "FileSystemTool",
-    "SearchMemoryTool",
-    "TermuxMonitorTool",
-    "BrowserTool",
-]
+# For IDE autocomplete and static analysis
+__all__ = list(_TOOL_MAPPING.keys())

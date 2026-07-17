@@ -1,3 +1,15 @@
+# core/parser.py
+"""
+Tool call parsing, JSON extraction, forgiving fallback for small/fallback models.
+
+**Phase 10 — validate_tool_call CC refactor:**
+The orchestrator ``validate_tool_call`` has been decomposed into two pure
+helper functions (CC ≤ 3 each) that delegate self-validation entirely to
+the tool's own ``validate_and_parse`` via the ``ToolCallable`` protocol.
+The legacy ``TOOL_SCHEMAS`` path is preserved as a fallback but is rarely
+reached in modern code paths.
+"""
+
 from __future__ import annotations
 
 import json
@@ -5,28 +17,16 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, Optional
+from typing import Any, Final, Optional, Tuple
 
 from core.sanitize import sanitize
 
-# Pinned workspace root — set once by AppContext.build(), never re-evaluated.
-# Falls back to Path.cwd() if not explicitly set.
-_WORKSPACE_ROOT: Optional[Path] = None
-
-
-def pin_workspace_root(root: Path) -> None:
-    """Pin the workspace root for all subsequent path validation.
-
-    Called once by AppContext.build() at startup.  After this, all
-    _validate_path calls use this value regardless of later chdir calls.
-    """
-    global _WORKSPACE_ROOT
-    _WORKSPACE_ROOT = root.resolve()
-
-
-def get_workspace_root() -> Path:
-    """Return the pinned workspace root, or cwd as fallback."""
-    return _WORKSPACE_ROOT.resolve() if _WORKSPACE_ROOT else Path.cwd().resolve()
+# ── Workspace root — delegated to core.kernel.security (single source of truth)
+from core.kernel.security import (  # noqa: F401
+    pin_workspace_root,
+    get_workspace_root,
+    _validate_path,
+)
 
 # ---------------------------------------------------------------------
 # Regular Expressions
@@ -71,78 +71,31 @@ class ToolCall:
     args: dict[str, Any]
 
 
-@dataclass(slots=True)
-class ValidationResult:
-    ok: bool
-    data: dict[str, Any] | None
-    error: str | None = None
-
-    def __iter__(self):
-        return iter((self.ok, self.data, self.error))
-
-
 # ---------------------------------------------------------------------
-# Tool Schemas & Gatekeeper
+# Tool Schemas (legacy fallback)
 # ---------------------------------------------------------------------
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "execute_shell": {
-        "required": {
-            "command": str,
-        },
-        "optional": {
-            "timeout": int,
-        },
-        "constraints": {
-            "command": {
-                "max_length": 4096,
-            },
-        },
+        "required": {"command": str},
+        "optional": {"timeout": int},
+        "constraints": {"command": {"max_length": 4096}},
     },
     "web_search": {
-        "required": {
-            "query": str,
-        },
-        "optional": {
-            "limit": int,
-        },
+        "required": {"query": str},
+        "optional": {"limit": int},
     },
     "file_system": {
-        "required": {
-            "action": str,
-            "path": str,
-        },
-        "optional": {
-            "content": str,
-            "old_text": str,
-            "new_text": str,
-        },
-        "actions": {
-            "read": [],
-            "write": [
-                "content",
-            ],
-            "append": [
-                "content",
-            ],
-            "replace": [
-                "old_text",
-                "new_text",
-            ],
-        },
+        "required": {"action": str, "path": str},
+        "optional": {"content": str, "old_text": str, "new_text": str},
+        "actions": {"read": [], "write": ["content"], "append": ["content"], "replace": ["old_text", "new_text"]},
     },
     "search_memory": {
-        "required": {
-            "query": str,
-        },
-        "optional": {
-            "limit": int,
-        },
+        "required": {"query": str},
+        "optional": {"limit": int},
     },
     "todo_write": {
-        "required": {
-            "todos": list,
-        },
+        "required": {"todos": list},
         "optional": {},
     },
     "termux_monitor": {
@@ -150,211 +103,145 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "optional": {},
     },
     "browser_action": {
-        "required": {
-            "action": str,
-        },
-        "optional": {
-            "url": str,
-        },
-        "actions": {
-            "navigate": [
-                "url",
-            ],
-            "get_text": [],
-        },
+        "required": {"action": str},
+        "optional": {"url": str},
+        "actions": {"navigate": ["url"], "get_text": []},
     },
 }
 
 
-def _validate_path(path: str) -> bool:
-    try:
-        root = get_workspace_root()
-        resolved = (root / path).resolve()
-        resolved.relative_to(root)
-        return True
-    except Exception:
-        return False
+# =========================================================================
+# validate_tool_call — pure structural gatekeeper (CC ≤ 3)
+# =========================================================================
 
+# --- Helper 1: Payload normalization (CC ~ 3) ---
 
-def validate_tool_call(payload: Any, available_tools: Optional[dict[str, Any]] = None) -> ValidationResult:
+def _parse_payload(payload: Any) -> tuple[Optional[dict], Optional[str]]:
+    """Normalise *payload* (string or dict) into a parsed tool-call dict.
+
+    Returns ``(parsed_dict, None)`` on success or ``(None, error_message)``.
+    The returned dict always has keys ``"tool"`` and ``"args"``.
+    """
     if isinstance(payload, str):
-        payload_clean = sanitize(payload)
         try:
-            obj = json.loads(payload_clean)
+            obj = json.loads(sanitize(payload))
         except json.JSONDecodeError as e:
-            return ValidationResult(
-                False,
-                None,
-                f"Invalid JSON: {e.msg}",
-            )
+            return None, f"Invalid JSON: {e.msg}"
     else:
         obj = payload
 
     if not isinstance(obj, dict):
-        return ValidationResult(
-            False,
-            None,
-            "Root must be a JSON object.",
-        )
+        return None, "Root must be a JSON object."
 
+    if "name" in obj and "tool" not in obj:
+        obj["tool"] = obj.pop("name")
+    if "action" in obj and "tool" not in obj and isinstance(obj["action"], str) and obj["action"] in (
+        "web_search", "execute_shell", "file_system", "search_memory", "todo_write", "termux_monitor", "browser_action", "final_answer"
+    ):
+        obj["tool"] = obj.pop("action")
     if "arguments" in obj and "args" not in obj:
         obj["args"] = obj.pop("arguments")
+    if "parameters" in obj and "args" not in obj:
+        obj["args"] = obj.pop("parameters")
 
     tool = obj.get("tool")
     args = obj.get("args")
 
     if not isinstance(tool, str):
-        return ValidationResult(
-            False,
-            None,
-            "'tool' must be a string.",
-        )
-
+        return None, "'tool' must be a string."
     if not isinstance(args, dict):
-        return ValidationResult(
-            False,
-            None,
-            "'args' must be an object.",
-        )
+        return None, "'args' must be an object."
 
-    schema_dict = available_tools if available_tools is not None else TOOL_SCHEMAS
-    schema = schema_dict.get(tool)
+    return obj, None
 
-    if schema is None:
-        return ValidationResult(
-            False,
-            None,
-            f"Unknown tool '{tool}'.",
-        )
 
-    required = schema["required"]
-    optional = schema.get("optional", {})
-    allowed = set(required) | set(optional)
+# --- Helper 2: Tool-existence check (CC = 2) ---
 
-    for key in args:
-        if key not in allowed:
-            return ValidationResult(
-                False,
-                None,
-                f"Unexpected argument '{key}'.",
-            )
+def _validate_tool_name(tool_name: str, registry: Any) -> Tuple[bool, str]:
+    """Check that *tool_name* is registered in *registry*.
 
-    for key, typ in required.items():
-        if key not in args:
-            return ValidationResult(
-                False,
-                None,
-                f"Missing required argument '{key}'.",
-            )
+    Returns ``(True, "")`` on success or ``(False, error_message)``.
+    """
+    if tool_name not in registry:
+        return False, f"Tool '{tool_name}' is not registered in the system"
+    return True, ""
 
-        if not isinstance(args[key], typ):
-            return ValidationResult(
-                False,
-                None,
-                f"Argument '{key}' must be {typ.__name__}.",
-            )
 
-    for key, typ in optional.items():
-        if key in args and not isinstance(args[key], typ):
-            return ValidationResult(
-                False,
-                None,
-                f"Argument '{key}' must be {typ.__name__}.",
-            )
+# --- Helper 3: Delegate to tool's own validate_and_parse (CC = 3) ---
 
-    # ── Constraints (max_length, etc.) ──────────────────────────────────────
-    constraints = schema.get("constraints", {})
-    for arg_key, constraint_set in constraints.items():
-        if arg_key in args:
-            if "max_length" in constraint_set:
-                max_len = constraint_set["max_length"]
-                val = args[arg_key]
-                if isinstance(val, str) and len(val) > max_len:
-                    return ValidationResult(
-                        False,
-                        None,
-                        f"Argument '{arg_key}' exceeds maximum length ({len(val)} > {max_len}).",
-                    )
+def _validate_tool_schema(tool: Any, args: dict) -> Tuple[bool, str]:
+    """Full delegation to the tool's own Pydantic schema (100% self-validation).
 
-    if tool == "file_system":
-        action = args.get("action")
-        valid_actions = schema["actions"]
+    The kernel trusts every registered tool to protect its own arguments via
+    ``validate_and_parse`` — no fallback, no escape hatch. Every tool inherits
+    ``validate_and_parse`` from ``BaseTool`` by default (even those without a
+    Pydantic ``args_schema``), so the ``hasattr`` guard is intentionally absent
+    (Type-Erasure: the kernel knows nothing about tool internals).
 
-        if action not in valid_actions:
-            return ValidationResult(
-                False,
-                None,
-                f"Unsupported action '{action}'.",
-            )
+    Returns ``(True, "")`` on success or ``(False, error_message)``.
+    """
+    try:
+        tool.validate_and_parse(args)
+        return True, ""
+    except ValueError as e:
+        return False, f"Schema constraint violation: {e}"
 
-        for field in valid_actions[action]:
-            if field not in args:
-                return ValidationResult(
-                    False,
-                    None,
-                    f"Action '{action}' requires '{field}'.",
-                )
 
-        if not _validate_path(args["path"]):
-            return ValidationResult(
-                False,
-                None,
-                "Path escapes workspace.",
-            )
+# --- 🎯 Orchestrator — pure & stateless (CC = 3) ---
 
-    if tool == "browser_action":
-        action = args.get("action")
-        valid_actions = schema["actions"]
+def validate_tool_call(
+    payload: Any,
+    registry: Any,
+) -> Tuple[bool, str]:
+    """Pure structural gatekeeper for tool-call payloads.
 
-        if action not in valid_actions:
-            return ValidationResult(
-                False,
-                None,
-                f"Unsupported browser action '{action}'. Must be one of {list(valid_actions.keys())}.",
-            )
+    **Responsibilities:**
 
-        for field in valid_actions[action]:
-            if field not in args or not args[field]:
-                return ValidationResult(
-                    False,
-                    None,
-                    f"Action '{action}' requires non-empty argument '{field}'.",
-                )
+    1. ``_parse_payload`` — normalise string/dict, extract tool + args.
+    2. ``_validate_tool_name`` — check the tool is registered.
+    3. ``_validate_tool_schema`` — delegate to tool's own ``validate_and_parse``.
 
-    if tool == "todo_write":
-        todos = args.get("todos", [])
-        if not isinstance(todos, list):
-            return ValidationResult(False, None, "Argument 'todos' must be a list.")
-        for item in todos:
-            if not isinstance(item, dict) or "task" not in item or "status" not in item:
-                return ValidationResult(False, None, "Each item in 'todos' must have 'task' and 'status'.")
-            if item["status"] not in {"pending", "in_progress", "done"}:
-                return ValidationResult(False, None, f"Invalid todo status: {item['status']}.")
+    **Non-responsibilities (enforced by the execution loop, not here):**
 
-    return ValidationResult(
-        True,
-        obj,
-        None,
-    )
+    * Security validation (path escaping, shell injection) → ``core.security``
+    * Permission authorisation (allow/deny policies) → ``core.permissions``
+    * Resource constraints → the tool's own Pydantic ``args_schema``
+
+    Returns ``(True, "")`` on success or ``(False, error_message)``.
+    """
+    # 1. Parse + normalise
+    parsed, err = _parse_payload(payload)
+    if err is not None:
+        return False, err
+
+    tool_name: str = parsed["tool"]
+    args: dict = parsed["args"]
+
+    # 2. Check tool exists in registry
+    name_ok, name_err = _validate_tool_name(tool_name, registry)
+    if not name_ok:
+        return False, name_err
+
+    # 3. Get tool and delegate schema validation entirely to validate_and_parse
+    tool = registry.get_tool(tool_name)
+    schema_ok, schema_err = _validate_tool_schema(tool, args)
+    if not schema_ok:
+        return False, schema_err
+
+    return True, ""
 
 
 # ---------------------------------------------------------------------
-# Validators
+# Internal validators (used by extract_command pipeline)
 # ---------------------------------------------------------------------
 
 
-def _validate_payload(payload: Any) -> ToolCall | None:
-    """
-    Validate a JSON tool payload using the strict schema gatekeeper.
-    """
-    res = validate_tool_call(payload)
-    if not res.ok or not res.data:
+def _validate_payload(payload: dict, registry: Any) -> ToolCall | None:
+    """Validate a *payload* dict and return a ``ToolCall`` or ``None``."""
+    ok, err = validate_tool_call(payload, registry)
+    if not ok:
         return None
-
-    return ToolCall(
-        tool=res.data["tool"],
-        args=res.data["args"],
-    )
+    return ToolCall(tool=payload["tool"], args=payload.get("args", {}))
 
 
 # ---------------------------------------------------------------------
@@ -362,18 +249,65 @@ def _validate_payload(payload: Any) -> ToolCall | None:
 # ---------------------------------------------------------------------
 
 
-def _parse_json(text: str) -> ToolCall | None:
+def _parse_json(text: str, registry: Any) -> ToolCall | None:
     match = JSON_PATTERN.search(text)
     if not match:
         return None
-
     try:
         inner = sanitize(match.group(1), strip_control=True)
         payload = json.loads(inner)
     except json.JSONDecodeError:
         return None
+    return _validate_payload(payload, registry)
 
-    return _validate_payload(payload)
+
+# ---------------------------------------------------------------------
+# Action: {JSON} Strategy (Simulated ReAct / Hallucination Interception)
+# ---------------------------------------------------------------------
+
+_ACTION_JSON_RE = re.compile(r"Action\s*:\s*(\{.*?\})", re.DOTALL | re.IGNORECASE)
+_ACTION_FENCE_RE = re.compile(r"Action\s*:\s*```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+
+
+def _parse_action_json(text: str, registry: Any) -> ToolCall | None:
+    """Catch simulated ReAct loops where the model outputs Action: {JSON} followed by hallucinated Observation:.
+    Extracts the JSON payload right after 'Action:' and dispatches it immediately, cutting off any fake observation chain.
+    """
+    m_fence = _ACTION_FENCE_RE.search(text)
+    if m_fence:
+        candidate = m_fence.group(1).strip()
+        try:
+            payload = json.loads(candidate)
+            res = _validate_payload(payload, registry)
+            if res is not None:
+                return res
+        except json.JSONDecodeError:
+            pass
+
+    pos = re.search(r"Action\s*:\s*", text, re.IGNORECASE)
+    if pos:
+        sub = text[pos.end():]
+        candidate = extract_first_json_object(sub)
+        if candidate:
+            try:
+                payload = json.loads(candidate)
+                res = _validate_payload(payload, registry)
+                if res is not None:
+                    return res
+            except json.JSONDecodeError:
+                pass
+
+        m = _ACTION_JSON_RE.search(text)
+        if m:
+            try:
+                payload = json.loads(m.group(1))
+                res = _validate_payload(payload, registry)
+                if res is not None:
+                    return res
+            except json.JSONDecodeError:
+                pass
+
+    return None
 
 
 # ---------------------------------------------------------------------
@@ -381,11 +315,7 @@ def _parse_json(text: str) -> ToolCall | None:
 # ---------------------------------------------------------------------
 
 TOOL_NAMES_IN_CODE: Final[tuple[str, ...]] = (
-    "todo_write",
-    "file_system",
-    "evidence_log",
-    "shell",
-    "execute_shell",
+    "todo_write", "file_system", "evidence_log", "shell", "execute_shell",
 )
 
 
@@ -395,78 +325,42 @@ def _is_hallucinated_python_tool_call(cmd: str) -> bool:
         return False
     if "import " in c and "(" in c and ")" in c:
         return True
-    if any(
-        f" {t}(" in c or f" {t}." in c or c.startswith(f"python {t}.")
-        for t in TOOL_NAMES_IN_CODE
-    ):
+    if any(f" {t}(" in c or f" {t}." in c or c.startswith(f"python {t}.") for t in TOOL_NAMES_IN_CODE):
         return True
     return False
 
 
-def _parse_bash(text: str) -> ToolCall | None:
+def _parse_bash(text: str, registry: Any) -> ToolCall | None:
     match = BASH_PATTERN.search(text)
     if not match:
         return None
-
     candidate = match.group(1).strip()
-    if not candidate:
+    if not candidate or _is_hallucinated_python_tool_call(candidate):
         return None
-
-    if _is_hallucinated_python_tool_call(candidate):
-        return None
-
     payload = {"tool": "execute_shell", "args": {"command": candidate}}
-    res = validate_tool_call(payload)
-    if not res.ok or not res.data:
+    ok, err = validate_tool_call(payload, registry)
+    if not ok:
         return None
-
-    return ToolCall(
-        tool="execute_shell",
-        args={"command": candidate},
-    )
+    return ToolCall(tool="execute_shell", args={"command": candidate})
 
 
 # ---------------------------------------------------------------------
-# Forgiving parser (small / fallback model hallucinations)
+# Forgiving parser
 # ---------------------------------------------------------------------
-#
-# Fallback models frequently bury a real tool call inside markdown essays,
-# conversational prose, or legacy Python-style helper calls.  The functions
-# below try to recover that call instead of giving up (which would otherwise
-# force the casual/verify path).  They are intentionally tolerant — they never
-# raise, and they only emit a ToolCall after the strict schema gatekeeper has
-# approved it.
 
-_FORGIVING_JSON_FENCE = re.compile(
-    r"```(?:json)?\s*(\{.*?\})\s*```",
-    re.DOTALL | re.IGNORECASE,
-)
-
+_FORGIVING_JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _LEGACY_SHELL_PATTERN = re.compile(
-    r"(?:shell|execute_shell)\s*\(\s*(?:cmd|command)\s*=\s*[\"'](.+?)[\"']\s*\)",
+    r"""(?:shell|execute_shell)\s*\(\s*(?:cmd|command)\s*=\s*["'](.+?)["']\s*\)""",
     re.IGNORECASE | re.DOTALL,
 )
 
 
 def extract_first_json_object(text: str) -> str | None:
-    """
-    Recover a raw JSON object string from a messy response.
-
-    Strategy:
-        1. Markdown ```json (or bare ```) fences first.
-        2. Otherwise scan for the first balanced ``{...}`` block that contains
-           the key ``"tool"`` (or ``'tool'``), which is the signature of a
-           tool call emitted in prose.
-
-    Returns the raw JSON string (still needs schema validation) or ``None``.
-    """
     if not text:
         return None
-
     m = _FORGIVING_JSON_FENCE.search(text)
     if m:
         return m.group(1).strip()
-
     start = text.find("{")
     while start != -1:
         depth = 0
@@ -477,7 +371,7 @@ def extract_first_json_object(text: str) -> str | None:
                 depth -= 1
                 if depth == 0:
                     candidate = text[start : i + 1]
-                    if '"tool"' in candidate or "'tool'" in candidate:
+                    if '"tool"' in candidate or "'tool'" in candidate or '"name"' in candidate or "'name'" in candidate or '"action"' in candidate or "'action'" in candidate:
                         return candidate
                     break
         start = text.find("{", start + 1)
@@ -485,20 +379,13 @@ def extract_first_json_object(text: str) -> str | None:
 
 
 def extract_legacy_shell(text: str) -> dict[str, Any] | None:
-    """
-    Catch legacy ``shell(cmd="...")`` / ``execute_shell(command="...")`` style
-    calls that small models emit instead of JSON tool calls.
-
-    Returns a validated-compatible payload dict, or ``None`` if absent.
-    """
     m = _LEGACY_SHELL_PATTERN.search(text)
     if not m:
         return None
     return {"tool": "execute_shell", "args": {"command": m.group(1).strip()}}
 
 
-def _forgiving_json_tool_call(text: str) -> ToolCall | None:
-    """Run the forgiving JSON scan and validate through the strict gatekeeper."""
+def _forgiving_json_tool_call(text: str, registry: Any) -> ToolCall | None:
     raw = extract_first_json_object(text)
     if not raw:
         return None
@@ -506,15 +393,89 @@ def _forgiving_json_tool_call(text: str) -> ToolCall | None:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return None
-    return _validate_payload(payload)
+    return _validate_payload(payload, registry)
 
 
-def _forgiving_legacy_shell(text: str) -> ToolCall | None:
-    """Run the legacy-shell scan and validate through the strict gatekeeper."""
+def _forgiving_legacy_shell(text: str, registry: Any) -> ToolCall | None:
     payload = extract_legacy_shell(text)
     if not payload:
         return None
-    return _validate_payload(payload)
+    return _validate_payload(payload, registry)
+
+
+# ---------------------------------------------------------------------
+# ReAct-style fallback (loose, model-tolerant)
+# ---------------------------------------------------------------------
+
+# Catches small/fallback models (e.g. Llama-3.1) that emit ReAct-style
+# actions like `SEARCH "python 3.12 feature"` or `FINAL_ANSWER "..."`
+# instead of the canonical JSON tool call. These would otherwise fail every
+# parser strategy and spin the model into a frustration loop. Accept optional
+# brackets / quotes / whitespace around the argument.
+
+_REACT_SEARCH_RE = re.compile(
+    r"""
+    \bSEARCH\b\s*
+    \[?
+    ['"]?
+    \s*
+    (.+?)
+    (?=\s*['"]?\s*\]?$)
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+_REACT_FINAL_RE = re.compile(
+    r"""
+    (?:FINAL_ANSWER|FINAL\s*ANSWER|Final\s*Answer)\b\s*
+    \[?
+    ['"]?
+    \s*
+    (.+?)
+    (?=\s*['"]?\s*\]?$)
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+# Bare "Final Answer: <text>" prose form (no brackets/quotes).
+_REACT_FINAL_PROSE_RE = re.compile(
+    r"""
+    (?:FINAL_ANSWER|FINAL\s*ANSWER|Final\s*Answer)\s*:\s*
+    (.+)
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def _parse_react_style(text: str, registry: Any) -> ToolCall | None:
+    """Last-resort parser for loose ReAct-style model output.
+
+    Converts ``SEARCH "query"`` → web_search tool call, and
+    ``FINAL_ANSWER "text"`` / ``Final Answer: text`` → final_answer termination.
+    Returns ``None`` when no recognizable action is present.
+
+    Note: ``final_answer`` is a termination convention, NOT a registered tool,
+    so we return the ToolCall directly (bypassing ``_validate_payload`` which
+    would reject it as an unknown tool and loop forever). ``web_search`` still
+    goes through validation so malformed queries are rejected cleanly.
+    """
+    # Try the explicit "Final Answer: <text>" prose form first (most precise),
+    # then the bracketed/quoted FINAL_ANSWER form, so the colon is consumed
+    # correctly rather than leaking into the captured answer.
+    final_match = _REACT_FINAL_PROSE_RE.search(text) or _REACT_FINAL_RE.search(text)
+    if final_match:
+        answer = final_match.group(1).strip()
+        if answer:
+            return ToolCall(tool="final_answer", args={"answer": answer})
+
+    search_match = _REACT_SEARCH_RE.search(text)
+    if search_match:
+        query = search_match.group(1).strip()
+        if query:
+            payload = {"tool": "web_search", "args": {"query": query}}
+            return _validate_payload(payload, registry)
+
+    return None
 
 
 # ---------------------------------------------------------------------
@@ -523,9 +484,6 @@ def _forgiving_legacy_shell(text: str) -> ToolCall | None:
 
 
 def extract_json_from_response(text: str) -> str | None:
-    """
-    Extract raw JSON string from an LLM response.
-    """
     if not text or not text.strip():
         return None
     text = normalize(text)
@@ -538,36 +496,42 @@ def extract_json_from_response(text: str) -> str | None:
     return None
 
 
-def extract_command(text: str) -> ToolCall | None:
-    """
-    Parse an LLM response and extract a tool call.
+def extract_command(text: str, registry: Any = None) -> ToolCall | None:
+    """Parse an LLM response and extract a tool call.
 
     Priority:
-        1. JSON Tool Call (clean ```json fence via strict matcher)
-        2. Bash Code Block (with hallucinated Python tool call guard)
-        3. Forgiving JSON scan (tool call buried in prose / markdown essay)
-        4. Forgiving legacy-shell scan (shell(cmd=...) / execute_shell(command=...))
-        5. None  -> caller runs the casual/verify path, never crashes
+        1. JSON Tool Call (clean ```json fence)
+        2. Bash Code Block (with hallucinated Python guard)
+        3. Forgiving JSON scan (tool call buried in prose)
+        4. Forgiving legacy-shell scan (shell(cmd=...))
+        5. None
+
+    *registry* defaults to the global ``engine.tool_registry.registry`` singleton
+    when not provided (backward-compatible).
     """
     if not text or not text.strip():
         return None
-
     text = normalize(text)
 
-    # Priority 1: JSON tool calls (clean fence)
-    result = _parse_json(text)
+    if registry is None:
+        from engine.tool_registry import registry as _reg
+        registry = _reg
+
+    result = _parse_json(text, registry)
     if result is not None:
         return result
-
-    # Priority 2: Bash blocks (with hallucinated Python guard)
-    result = _parse_bash(text)
+    result = _parse_action_json(text, registry)
     if result is not None:
         return result
-
-    # Priority 3: Forgiving JSON scan — recover a tool call buried in prose.
-    result = _forgiving_json_tool_call(text)
+    result = _parse_bash(text, registry)
     if result is not None:
         return result
-
-    # Priority 4: Legacy shell-style call emitted by small fallback models.
-    return _forgiving_legacy_shell(text)
+    result = _forgiving_json_tool_call(text, registry)
+    if result is not None:
+        return result
+    result = _forgiving_legacy_shell(text, registry)
+    if result is not None:
+        return result
+    # Last resort: loose ReAct-style output (SEARCH / FINAL_ANSWER) emitted by
+    # small/fallback models that deviate from the canonical JSON tool call.
+    return _parse_react_style(text, registry)

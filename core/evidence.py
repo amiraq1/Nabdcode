@@ -506,6 +506,12 @@ class EvidenceLog:
         self._counter: int = 0
         self._max_records: int = max_evidence_records
 
+    def clear(self) -> None:
+        """Clear all stored evidence records, findings, and reset ID counter."""
+        self._records.clear()
+        self._findings.clear()
+        self._counter = 0
+
     # ── record (write once) ─────────────────────────────────────────────
 
     def next_id(self) -> str:

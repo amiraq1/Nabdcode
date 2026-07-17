@@ -15,7 +15,7 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from core.ui_bridge import get_bridge
 from core.sanitize import sanitize

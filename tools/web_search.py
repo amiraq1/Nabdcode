@@ -8,7 +8,9 @@ except ImportError:
     class DuckDuckGoSearchException(Exception):
         pass
 
-from tools.base import BaseTool
+from typing import Optional, Type
+
+from tools.base import BaseTool, BaseModel, Field
 from tools.models import ToolResult
 from core.sanitize import sanitize
 
@@ -24,6 +26,11 @@ def _is_online(timeout: float = 1.5) -> bool:
         return True
     except Exception:
         return False
+
+
+class WebSearchArgs(BaseModel):
+    query: str = Field(..., min_length=3, max_length=150)
+    max_results: int = Field(5, ge=1, le=10)
 
 
 class WebSearchTool(BaseTool):
@@ -49,6 +56,10 @@ class WebSearchTool(BaseTool):
 
     DEFAULT_RESULTS: Final[int] = 3
     MAX_RESULTS: Final[int] = 10
+
+    @property
+    def args_schema(self) -> Optional[Type[BaseModel]]:
+        return WebSearchArgs
 
     def execute(self, **kwargs) -> ToolResult:
 

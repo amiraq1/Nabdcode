@@ -338,6 +338,25 @@ class NativeDeepAgent:
         except Exception:
             pass
 
+    def clear_session(self) -> None:
+        """Clear conversation context, evidence log, and checkpointed state for a clean fresh task start."""
+        if hasattr(self, "runtime_state") and self.runtime_state is not None:
+            if hasattr(self.runtime_state, "clear_context"):
+                self.runtime_state.clear_context()
+            else:
+                msgs = self.runtime_state.messages
+                sys_msgs = [m for m in msgs if m.get("role") == "system"] if msgs else []
+                self.runtime_state.set_messages(sys_msgs)
+                self.runtime_state.reset_step_count()
+
+        if hasattr(self, "evidence_log") and self.evidence_log is not None:
+            if hasattr(self.evidence_log, "clear"):
+                self.evidence_log.clear()
+            elif isinstance(self.evidence_log, list):
+                self.evidence_log.clear()
+
+        self._clear_checkpoint()
+
     def _detect_ambiguity(self, state: DeepAgentState) -> tuple[bool, str, list[str]]:
         """Detect ambiguous branching or missing architectural constraints requiring Interactive Steering."""
         for step in state.plan:
@@ -553,9 +572,10 @@ class NativeDeepAgent:
                     state.errors.append(f"PARSE_FAILURE: LLM did not produce a tool call for step '{step[:60]}'")
                     continue
 
-                v_res = validate_tool_call({"tool": tool_call.tool, "args": tool_call.args})
-                if not v_res.ok:
-                    state.errors.append(f"SECURITY_REJECT: Schema validation failed for '{tool_call.tool}': {v_res.error}")
+                from engine.tool_registry import registry as _registry
+                v_ok, v_err = validate_tool_call({"tool": tool_call.tool, "args": tool_call.args}, _registry)
+                if not v_ok:
+                    state.errors.append(f"SECURITY_REJECT: Schema validation failed for '{tool_call.tool}': {v_err}")
                     continue
 
                 # NOTE: no separate execute_shell safety pre-check here. Security

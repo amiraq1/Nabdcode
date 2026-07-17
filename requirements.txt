@@ -8,3 +8,7 @@ rich>=13.0.0
 # litellm
 # openai
 # duckduckgo_search
+
+# Self-validating tools: Pydantic schemas replace the central TOOL_SCHEMAS dict.
+# Used by tools/base.py for type-safe arg validation + LLM-readable errors.
+pydantic>=2.0

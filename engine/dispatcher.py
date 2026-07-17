@@ -3,6 +3,7 @@ import threading
 from engine.events import bus
 from engine.tool_registry import registry
 from engine.state import RuntimeState
+from core.kernel.protocols import ToolCallable
 
 from tools.models import ToolResult
 
@@ -54,9 +55,21 @@ class Dispatcher:
 
         try:
             # 3. Execute tool with timeout protection
-            future = _SHARED_POOL.submit(tool.execute, **kwargs)
+            # Use __call__ for self-validating entry point (Pydantic validation
+            # + UI bridge events). Falls through to execute() for tools without
+            # args_schema (backward compatible).
+            future = _SHARED_POOL.submit(tool, **kwargs)
             try:
                 result: ToolResult = future.result(timeout=timeout)
+                # Ensure result is always ToolResult (SecureTool.__call__ returns
+                # a string from forward(); the dispatcher expects ToolResult).
+                if not isinstance(result, ToolResult):
+                    result = ToolResult(
+                        success=not str(result).startswith(("Error:", "Security Violation:")),
+                        stdout=str(result),
+                        returncode=0,
+                        status="success",
+                    )
                 bus.emit(
                     "tool_completed",
                     {

@@ -10,28 +10,16 @@ from __future__ import annotations
 import atexit
 import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
 
 from core.config import AgentConfig
 from core.evidence import EvidenceLog
 from core.logger import Logger
 from core.metrics import MetricsEngine
-from core.memory import MemoryManager
+from core.storage import MemoryManager, SessionManager, UnifiedStorage
+from core.adapters import _KernelSecurityEngine
 from core.parser import pin_workspace_root
-from core.session import SessionManager
-
-
-class _KernelSecurityEngine:
-    """Adapter wrapping core.security.validate into SecurityEngineProtocol.
-
-    Injected into ShellTool at construction time (via DI) so the tools layer
-    receives the real kernel security engine directly, not the lazy fallback.
-    """
-
-    __slots__ = ()
-
-    def validate(self, command: str) -> tuple[bool, str]:
-        from core.security import validate
-        return validate(command)
 from core.todo import TodoManager
 from engine.renderer import Renderer
 from engine.tool_registry import registry
@@ -52,19 +40,22 @@ class AppContext:
     memory_manager: MemoryManager
     todo_manager: TodoManager
     evidence_log: EvidenceLog
+    storage: Optional[UnifiedStorage] = None
 
     @classmethod
     def build(cls) -> AppContext:
         """Create and wire every singleton. Register cleanup handlers."""
         config = AgentConfig()
         pin_workspace_root(config.workspace_root)
-        session_mgr = SessionManager(root=config.session_dir)
+        storage = UnifiedStorage(root_dir=Path(config.root_dir))
+        storage.set_sqlite_path(os.path.join(config.root_dir, "workspace_memory.db"))
+        session_mgr = storage._get_session_mgr()
+        memory_mgr = storage._get_memory_mgr()
+        todo_manager = storage._get_todo_mgr()
+        evidence_log = storage._get_evidence_log(max_records=config.max_evidence_records)
         logger = Logger(log_dir=config.log_dir)
         metrics = MetricsEngine()
-        memory_mgr = MemoryManager(db_path=os.path.join(config.root_dir, "workspace_memory.db"))
         renderer = Renderer()
-        todo_manager = TodoManager()
-        evidence_log = EvidenceLog(max_evidence_records=config.max_evidence_records)
 
         # Register all tools
         _security_engine = _KernelSecurityEngine()
@@ -95,10 +86,12 @@ class AppContext:
             memory_manager=memory_mgr,
             todo_manager=todo_manager,
             evidence_log=evidence_log,
+            storage=storage,
         )
 
         atexit.register(renderer.shutdown)
         atexit.register(logger.shutdown)
-        atexit.register(memory_mgr.close)
+        atexit.register(storage.close)
 
         return ctx
+

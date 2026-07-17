@@ -78,10 +78,29 @@ class NabdBootloader:
         self.boot_complete = True
         return True
 
-    def boot(self) -> bool:
-        """Execute full boot pipeline."""
+    def boot(self, ctx: Any = None) -> bool:
+        """Execute full boot pipeline.
+
+        The ``discover_skills`` import is deliberately **lazy** (inside the
+        method body) to break the circular dependency:
+
+            core.bootloader → core.skills → core.bootloader
+
+        By deferring the import to runtime, Python never encounters the
+cycle at module-load time.
+        """
         self.handle_unhandled_errors()
         self.setup_telemetry()
         self.record_cli_fingerprint()
         self.pre_run()
+
+        # ── Lazy import: breaks core.bootloader ↔ core.skills cycle ──
+        try:
+            from core.skills import discover_skills
+            discover_skills(ctx or os.getcwd())
+            self.logger.info("[Boot] Declarative skills discovered.")
+        except Exception as exc:
+            # Fail-silent: skills discovery is optional.
+            self.logger.warning(f"[Boot] Skills discovery skipped: {exc}")
+
         return self.initialize_subsystems()

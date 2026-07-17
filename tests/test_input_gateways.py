@@ -17,7 +17,6 @@ from core.parser import (
     validate_tool_call,
     _validate_path,
     ToolCall,
-    ValidationResult,
 )
 from core.security import (
     validate,
@@ -275,19 +274,72 @@ class TestShellValidationGateway(unittest.TestCase):
 # 5. PARSER GATEWAY (core.parser)
 # =============================================================================
 
+# ── Mock registry & tools for parser validation tests ────────────────────
+class _MockTool:
+    """Mock tool that accepts or rejects args based on a predicate."""
+    def __init__(self, name: str, validate_fn=None):
+        self.name = name
+        self._validate = validate_fn
+
+    def validate_and_parse(self, args):
+        if self._validate is not None:
+            err = self._validate(args)
+            if err:
+                raise ValueError(err)
+        return args
+
+    def get_schema(self):
+        return {"name": self.name}
+
+
+class _MockRegistry:
+    """Minimal registry adapter for unit tests."""
+    def __init__(self):
+        self._tools = {}
+
+    def register(self, name, tool):
+        self._tools[name] = tool
+
+    def __contains__(self, name):
+        return name in self._tools
+
+    def get_tool(self, name):
+        if name not in self._tools:
+            raise KeyError(f"Tool '{name}' not found")
+        return self._tools[name]
+
+
 class TestParserGateway(unittest.TestCase):
     """Phase 4: deterministic JSON/bash parsing."""
 
+    def setUp(self):
+        self.registry = _MockRegistry()
+        # Register a shell tool that accepts {command: str} with max_length
+        def _validate_shell(args):
+            if "command" not in args:
+                return "Missing required argument 'command'"
+            if not isinstance(args["command"], str):
+                return "Argument 'command' must be str"
+            if len(args["command"]) > 4096:
+                return "Argument 'command' exceeds max length"
+            unexpected = [k for k in args if k != "command"]
+            if unexpected:
+                return f"Unexpected argument '{unexpected[0]}'"
+            return None
+        self.registry.register("execute_shell", _MockTool("execute_shell", _validate_shell))
+        self.registry.register("web_search", _MockTool("web_search"))
+        self.registry.register("file_system", _MockTool("file_system"))
+
     def test_extract_json_tool_call(self):
         response = '```json\n{"tool": "web_search", "args": {"query": "test"}}\n```'
-        tc = extract_command(response)
+        tc = extract_command(response, registry=self.registry)
         self.assertIsNotNone(tc)
         self.assertEqual(tc.tool, "web_search")
         self.assertEqual(tc.args["query"], "test")
 
     def test_extract_bash_tool_call(self):
         response = '```bash\nls -la\n```'
-        tc = extract_command(response)
+        tc = extract_command(response, registry=self.registry)
         self.assertIsNotNone(tc)
         self.assertEqual(tc.tool, "execute_shell")
         self.assertEqual(tc.args["command"], "ls -la")
@@ -295,7 +347,7 @@ class TestParserGateway(unittest.TestCase):
     def test_hallucinated_python_tool_call_blocked(self):
         """The hallucination guard catches 'python ' (with trailing space) as start of command."""
         response = '```\npython import os; os.system("hack")\n```'
-        tc = extract_command(response)
+        tc = extract_command(response, registry=self.registry)
         self.assertIsNone(tc, "Hallucinated Python tool calls must be blocked")
 
     def test_empty_response(self):
@@ -324,52 +376,52 @@ class TestParserGateway(unittest.TestCase):
         self.assertNotIn("\x1b", normalized)
 
     def test_validate_tool_call_missing_tool(self):
-        vr = validate_tool_call('{"args": {}}')
-        self.assertFalse(vr.ok)
+        ok, err = validate_tool_call('{"args": {}}', self.registry)
+        self.assertFalse(ok)
 
     def test_validate_tool_call_unknown_tool(self):
-        vr = validate_tool_call('{"tool": "hack", "args": {}}')
-        self.assertFalse(vr.ok)
+        ok, err = validate_tool_call('{"tool": "hack", "args": {}}', self.registry)
+        self.assertFalse(ok)
 
     def test_validate_tool_call_missing_required(self):
-        vr = validate_tool_call('{"tool": "execute_shell", "args": {}}')
-        self.assertFalse(vr.ok)
+        ok, err = validate_tool_call('{"tool": "execute_shell", "args": {}}', self.registry)
+        self.assertFalse(ok)
 
     def test_validate_tool_call_wrong_type(self):
-        vr = validate_tool_call('{"tool": "execute_shell", "args": {"command": 123}}')
-        self.assertFalse(vr.ok)
+        ok, err = validate_tool_call('{"tool": "execute_shell", "args": {"command": 123}}', self.registry)
+        self.assertFalse(ok)
 
     def test_validate_tool_call_unexpected_arg(self):
-        vr = validate_tool_call('{"tool": "execute_shell", "args": {"command": "ls", "malicious": "yes"}}')
-        self.assertFalse(vr.ok)
+        ok, err = validate_tool_call('{"tool": "execute_shell", "args": {"command": "ls", "malicious": "yes"}}', self.registry)
+        self.assertFalse(ok)
 
     def test_validate_tool_call_max_length_exceeded(self):
         cmd = "A" * 5000
-        vr = validate_tool_call(f'{{"tool": "execute_shell", "args": {{"command": "{cmd}"}}}}')
-        self.assertFalse(vr.ok)
+        ok, err = validate_tool_call(f'{{"tool": "execute_shell", "args": {{"command": "{cmd}"}}}}', self.registry)
+        self.assertFalse(ok)
 
     def test_validate_tool_call_valid_shell(self):
-        vr = validate_tool_call('{"tool": "execute_shell", "args": {"command": "ls -la"}}')
-        self.assertTrue(vr.ok)
+        ok, err = validate_tool_call('{"tool": "execute_shell", "args": {"command": "ls -la"}}', self.registry)
+        self.assertTrue(ok)
 
     def test_validate_tool_call_valid_fs(self):
-        vr = validate_tool_call('{"tool": "file_system", "args": {"action": "read", "path": "test.txt"}}')
-        self.assertTrue(vr.ok)
+        ok, err = validate_tool_call('{"tool": "file_system", "args": {"action": "read", "path": "test.txt"}}', self.registry)
+        self.assertTrue(ok)
 
     def test_malformed_json(self):
-        vr = validate_tool_call('{broken json}')
-        self.assertFalse(vr.ok)
+        ok, err = validate_tool_call('{broken json}', self.registry)
+        self.assertFalse(ok)
 
     def test_unicode_homoglyph_json(self):
         """Unicode homoglyphs in JSON tool names should be NFKC-normalized."""
-        vr = validate_tool_call('{"tool": "ｅxecute_shell", "args": {"command": "ls"}}')
-        # The tool name has fullwidth 'ｅ' which normalizes to 'e' but
-        # TOOL_SCHEMAS keys use ASCII, so it won't match
-        self.assertFalse(vr.ok)
+        ok, err = validate_tool_call('{"tool": "ｅxecute_shell", "args": {"command": "ls"}}', self.registry)
+        # The tool name has fullwidth 'ｅ' which normalizes to 'e'
+        # but the registry key is 'execute_shell' so it won't match
+        self.assertFalse(ok)
 
     def test_nested_quote_json_payload(self):
-        vr = validate_tool_call('{"tool": "execute_shell", "args": {"command": "echo \\"nested quote\\""}}')
-        self.assertTrue(vr.ok)
+        ok, err = validate_tool_call('{"tool": "execute_shell", "args": {"command": "echo \\"nested quote\\""}}', self.registry)
+        self.assertTrue(ok)
 
 
 # =============================================================================
@@ -489,14 +541,14 @@ class TestSessionGateway(unittest.TestCase):
     """Phase 4: bare except eradication in session loading."""
 
     def test_load_nonexistent_session(self):
-        from core.session import SessionManager
+        from core.storage import SessionManager
         with tempfile.TemporaryDirectory() as tmpdir:
             sm = SessionManager(Path(tmpdir))
             result = sm.load("nonexistent_session")
             self.assertFalse(result)
 
     def test_save_and_load_roundtrip(self):
-        from core.session import SessionManager
+        from core.storage import SessionManager
         with tempfile.TemporaryDirectory() as tmpdir:
             sm = SessionManager(Path(tmpdir))
             sm.messages = [{"role": "user", "content": "hello"}]

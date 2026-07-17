@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.todo import TodoManager, TodoStatus
 from core.evidence import EvidenceLog, EvidenceRecord
-from core.session import SessionManager
+from core.storage import SessionManager
 
 
 # ── TodoManager serialization ──────────────────────────────────────────────
@@ -229,7 +229,7 @@ def test_evidence_log_counter_continuity():
 
 
 def test_systematic_planning_goal_persistence():
-    from core.session import SessionManager, build_goal_prompt
+    from core.storage import SessionManager, build_goal_prompt
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         sm = SessionManager(Path(td))

@@ -1,16 +1,55 @@
 # tools/search_memory.py
+"""Hybrid semantic + keyword memory search tool with Pydantic self-validation."""
+
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Optional, Any
-from core.hybrid_retriever import HybridRetriever, MemoryStore
-from tools.base import BaseTool
+from typing import Any, Optional, Type
+
+from tools.base import BaseTool, BaseModel, Field
 from tools.models import ToolResult
+from core.hybrid_retriever import HybridRetriever
+from core.storage import MemoryStore
+
+
+# ── Pydantic argument schema ──
+# tools.base re-exports a working BaseModel stub when real pydantic-core is
+# unavailable (e.g. Termux/Android), so the class can be defined unconditionally.
+
+class SearchMemoryArgs(BaseModel):
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="Natural-language search query for semantic memory retrieval.",
+    )
+    limit: int = Field(
+        5,
+        ge=1,
+        le=50,
+        description="Maximum number of memory results to return (1–50).",
+    )
 
 
 class SearchMemoryTool(BaseTool):
-    name = "search_memory"
-    description = "Search local semantic memory (hybrid keyword + vector)"
+    """Search local semantic memory using hybrid keyword + vector retrieval.
 
-    def __init__(self, storage_dir: Optional[Path] = None, memory_manager: Any = None):
+    Maintains a persistent ``MemoryStore`` backed by JSONL and a
+    ``HybridRetriever`` that combines TF-IDF keyword scoring with
+    time-decay re-ranking.
+    """
+
+    name: str = "search_memory"
+    description: str = (
+        "Search local semantic memory (hybrid keyword + vector) for prior "
+        "context, lessons, or historical information from this agent session."
+    )
+
+    def __init__(
+        self,
+        storage_dir: Optional[Path] = None,
+        memory_manager: Any = None,
+    ) -> None:
         super().__init__()
         if storage_dir is None:
             storage_dir = Path.cwd() / ".nabd" / "memory"
@@ -21,47 +60,33 @@ class SearchMemoryTool(BaseTool):
         self.retriever = HybridRetriever(self.store)
         self.memory_manager = memory_manager
 
-    def __call__(self, query: str, top_k: int = 5) -> dict:
-        """
-        Search memory with hybrid retrieval.
+    # ── Pydantic self-validation ──────────────────────────────────────
 
-        Args:
-            query: natural language query
-            top_k: number of results (default 5, max 10)
-        """
-        top_k = min(max(top_k, 1), 10)
-        results = self.retriever.search(query, top_k=top_k)
+    @property
+    def args_schema(self) -> Optional[Type[BaseModel]]:
+        return SearchMemoryArgs
 
-        return {
-            "tool": "search_memory",
-            "results": [
-                {
-                    "id": r["id"],
-                    "text": r["text"],
-                    "score": r["score"],
-                    "timestamp": r["timestamp"],
-                }
-                for r in results
-            ],
-            "total_chunks": len(self.store.get_all()),
-        }
+    # ── Unified execution path ────────────────────────────────────────
 
-    def execute(self, **kwargs) -> ToolResult:
-        query = kwargs.get("query", "")
-        top_k = kwargs.get("top_k", kwargs.get("limit", 5))
-        if not isinstance(query, str) or not query.strip():
-            return ToolResult(
-                success=False,
-                stderr="Missing or invalid 'query' argument for search_memory.",
-                returncode=-1,
-                status="error",
-            )
+    def execute_with_args(self, args: Any) -> ToolResult:
+        """Execute hybrid memory search with validated *args*."""
+        # Support both SearchMemoryArgs (Pydantic) and raw-dict fallback
+        if isinstance(args, dict):
+            query = args.get("query", "")
+            limit = int(args.get("limit", args.get("top_k", 5)))
+        else:
+            query = args.query
+            limit = args.limit
+
         try:
-            res = self(query=query, top_k=int(top_k))
-            lines = [f"🔍 Memory search results for '{query}':\n"]
-            for i, r in enumerate(res["results"], 1):
-                lines.append(f"[{i}] (Score: {r['score']}):\n{r['text']}\n" + "-" * 30)
-            if not res["results"]:
+            results = self.retriever.search(query, top_k=limit)
+            lines: list[str] = [f"🔍 Memory search results for '{query}':\n"]
+            for i, r in enumerate(results, 1):
+                lines.append(
+                    f"[{i}] (Score: {r['score']:.3f}):\n{r['text']}\n"
+                    + "-" * 30
+                )
+            if not results:
                 lines.append(f"No memories or prior context found for: {query}")
             return ToolResult(
                 success=True,
@@ -77,6 +102,23 @@ class SearchMemoryTool(BaseTool):
                 status="error",
             )
 
+    # ── Legacy entry point (backward compatible) ──────────────────────
+
+    def execute(self, **kwargs: Any) -> ToolResult:
+        """Legacy ``**kwargs`` entry point — delegates to ``execute_with_args``."""
+        query = kwargs.get("query", "")
+        limit = int(kwargs.get("top_k", kwargs.get("limit", 5)))
+        if not isinstance(query, str) or not query.strip():
+            return ToolResult(
+                success=False,
+                stderr="Missing or invalid 'query' argument for search_memory.",
+                returncode=-1,
+                status="error",
+            )
+        return self.execute_with_args(SearchMemoryArgs(query=query, limit=limit))
+
+    # ── External memory ingestion ─────────────────────────────────────
+
     def add(self, text: str, metadata: Optional[dict] = None) -> None:
-        """Add new memory (called by other tools after operations)"""
+        """Add a new memory entry (called by other tools after operations)."""
         self.retriever.add_memory(text, metadata)

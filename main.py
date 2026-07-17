@@ -100,7 +100,7 @@ def _extract_final_answer_text(raw: str) -> str:
 
 # ── Event Wiring ───────────────────────────────────────────────────────────
 
-def wire_events(ctx: AppContext) -> None:
+def wire_events(ctx: AppContext) -> dict:
     """Subscribe all event handlers. Every output goes through renderer."""
     from engine.events import bus
     from engine.ui_theme import map_tool_to_badge, select_status_verb
@@ -110,7 +110,6 @@ def wire_events(ctx: AppContext) -> None:
     todo_manager = ctx.todo_manager
 
     _last_tool_args: dict = {}
-    _streaming: bool = False
     _last_stage: str = "init"
     _last_tool_name: str = ""
     _turn_index: int = 0
@@ -119,8 +118,7 @@ def wire_events(ctx: AppContext) -> None:
     _held_buf: str = ""
 
     def _on_llm_started(p: dict) -> None:
-        nonlocal _streaming, _turn_index, _token_buf, _held_buf
-        _streaming = False
+        nonlocal _turn_index, _token_buf, _held_buf
         _token_buf = ""
         _held_buf = ""
         _turn_index += 1
@@ -129,7 +127,7 @@ def wire_events(ctx: AppContext) -> None:
         renderer.thought_start()
 
     def _on_llm_token(p: dict) -> None:
-        nonlocal _streaming, _token_buf, _held_buf
+        nonlocal _token_buf, _held_buf
         content = p.get("token", "")
         _token_buf += content
         stripped = _token_buf.lstrip()
@@ -140,10 +138,6 @@ def wire_events(ctx: AppContext) -> None:
             return
         to_print = _held_buf + content
         _held_buf = ""
-        if not _streaming:
-            _streaming = True
-            renderer.status_end()
-            renderer.think_end()
         renderer.stream_chunk(to_print)
 
     def _on_llm_completed(p: dict) -> None:
@@ -165,7 +159,7 @@ def wire_events(ctx: AppContext) -> None:
         result = p.get("result")
         if result is None:
             return
-        tool = p.get("tool", "")
+        tool = p.get("tool") or ""
         success = p.get("success", getattr(result, "success", False))
         output = (getattr(result, "stdout", "") or "").strip()
         stderr = (getattr(result, "stderr", "") or "").strip()
@@ -223,6 +217,27 @@ def wire_events(ctx: AppContext) -> None:
         renderer.error_badge("ENGINE", p.get("error", "unknown"))
         renderer.flush()
 
+    def _on_loop_completed(p: dict) -> None:
+        # The engine terminated the turn (connection_lost / budget_exhausted /
+        # goal_not_met / etc.). Surface the reason to the user instead of
+        # returning silently to the prompt — otherwise a fully exhausted
+        # provider chain leaves the user staring at a blinking cursor with no
+        # explanation of why the agent went mute.
+        reason = p.get("reason", "completed")
+        output = p.get("output", "")
+        renderer.think_end()
+        if reason in ("connection_lost",) or not output:
+            renderer.error_badge(
+                "ENGINE",
+                output or f"Agent stopped: {reason}. Check network/OpenRouter key & credit.",
+            )
+        else:
+            rendered = _extract_final_answer_text(output)
+            if rendered and rendered.strip():
+                for line in rendered.splitlines():
+                    renderer.agent_text(line)
+        renderer.flush()
+
     def _on_provider_failover(p: dict) -> None:
         prov = p.get("provider", "?")
         renderer.dim_line(f"retrying {prov}...")
@@ -261,6 +276,7 @@ def wire_events(ctx: AppContext) -> None:
     bus.subscribe("tool_completed", _on_tool_completed)
     bus.subscribe("loop_max_steps_reached", _on_max_steps)
     bus.subscribe("loop_error", _on_loop_error)
+    bus.subscribe("loop_completed", _on_loop_completed)
     bus.subscribe("llm_provider_failover", _on_provider_failover)
     bus.subscribe("deep_plan", _on_deep_plan)
     bus.subscribe("deep_exec", _on_deep_exec)
@@ -348,7 +364,7 @@ def main() -> None:
     _provider_router.set_state_key(ctx.session_manager.session_id[:12])
 
     # Graceful shutdown
-    def _shutdown_handler(signum: int, frame: object) -> None:
+    def _shutdown_handler(_signum: int, _frame: object) -> None:
         ctx.renderer.shutdown()
         ctx.session_manager.messages = state.get_messages()
         ctx.session_manager.todos = ctx.todo_manager.to_serializable()
@@ -471,12 +487,24 @@ def main() -> None:
             if user_input.lower() in ("exit", "quit"):
                 break
 
-            if user_input.lower() == "clear":
+            if user_input.lower() in ("clear", "/clear", "/reset", "/c"):
                 # Replace the prompt line with a background-highlighted version
-                sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ clear\033[0m\n")
+                sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {user_input}\033[0m\n")
                 sys.stdout.flush()
+                state.clear_context()
                 state.set_messages([{"role": "system", "content": base_inst}])
-                state.reset_step_count()
+                if hasattr(ctx.evidence_log, "clear"):
+                    ctx.evidence_log.clear()
+                elif isinstance(ctx.evidence_log, list):
+                    ctx.evidence_log.clear()
+                if hasattr(ctx.todo_manager, "clear"):
+                    ctx.todo_manager.clear()
+                try:
+                    (get_workspace_root() / CHECKPOINT_FILENAME).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                sys.stdout.write("\n\033[92m✨ [System] Context and history have been cleared. Ready for a new task!\033[0m\n\n")
+                sys.stdout.flush()
                 continue
 
             # Replace the prompt_toolkit line with a background-highlighted version
@@ -492,6 +520,7 @@ def main() -> None:
                 state=state,
                 max_output_len=ctx.config.max_output,
                 evidence_log=ctx.evidence_log,
+                logger=ctx.logger,
             )
 
             fd = sys.stdin.fileno()
@@ -527,14 +556,12 @@ def main() -> None:
             ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
             ctx.session_manager.save()
 
-            # Print assistant response — no badge, just content if not already streamed as prose
-            last_msg = state.get_last_message()
-            if last_msg and last_msg.get("role") == "assistant" and not _streaming:
-                rendered = _extract_final_answer_text(last_msg.get("content", ""))
-                if rendered and rendered.strip():
-                    for line in rendered.splitlines():
-                        ctx.renderer.agent_text(line)
-                    ctx.renderer.flush()
+            # NOTE: The assistant response is already rendered inside its
+            # green panel by the `show_final_answer` event (on_final_answer in
+            # ui/repl_termux.py) for every exit path — streaming, static, and
+            # fallback. Re-printing it here would duplicate the text as raw
+            # output outside the panel, so the manual fallback print is
+            # intentionally removed.
 
     finally:
         visualizer.stop()

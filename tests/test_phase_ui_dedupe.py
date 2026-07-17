@@ -3,13 +3,15 @@
 Verifies:
   1. main.py wire_events (_on_llm_token) buffers and suppresses raw final_answer / tool JSON streams.
   2. main.py wire_events (_on_llm_token) streams normal conversational prose directly.
-  3. ui/repl_termux.py consumer suppresses raw final_answer token streaming.
-  4. ui/repl_termux.py prevents duplicate tool completion and post-run panel printing.
+  3. ui.repl_termux.TerminalVisualizer dedupes tool completion / final-answer rendering
+     (sets _on_tool_completed_active and _final_answer_rendered flags).
+  4. Tool-name event contract: handlers resolve the tool name from both the
+     canonical "tool" key (emitted by engine/dispatcher.py) and the legacy
+     "tool_name" key, so a drifted payload never surfaces as "None".
 """
 
 import os
 import sys
-import asyncio
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -19,17 +21,29 @@ from engine.events import bus
 from core.ui_bridge import UIBridge
 
 
-def test_main_on_llm_token_suppresses_raw_final_answer():
-    """Verify that wire_events (_on_llm_token) does not stream final_answer JSON raw."""
+def _make_ctx():
+    """Build a real AppContext and swap in a mock renderer.
+
+    AppContext requires dependency injection (config/logger/renderer/...), so we
+    use the project's build() factory and override the renderer with a MagicMock
+    that satisfies the Renderer interface used by wire_events.
+    """
     import main
     from core.app_context import AppContext
     from engine.state import RuntimeState
 
-    ctx = AppContext()
+    ctx = AppContext.build()
     mock_renderer = MagicMock(spec=Renderer)
     ctx.renderer = mock_renderer
+    return ctx, mock_renderer
 
-    main.wire_events(ctx, RuntimeState())
+
+def test_main_on_llm_token_suppresses_raw_final_answer():
+    """Verify that wire_events (_on_llm_token) does not stream final_answer JSON raw."""
+    import main
+
+    ctx, mock_renderer = _make_ctx()
+    main.wire_events(ctx)
 
     # Simulate token emissions of a final_answer call
     tokens = ["f", "i", "n", "a", "l", "_", "a", "n", "s", "w", "e", "r", " ", "{", '"', "a", '"', "}", "\n"]
@@ -43,14 +57,9 @@ def test_main_on_llm_token_suppresses_raw_final_answer():
 def test_main_on_llm_token_streams_conversational_prose():
     """Verify that wire_events (_on_llm_token) streams regular prose tokens."""
     import main
-    from core.app_context import AppContext
-    from engine.state import RuntimeState
 
-    ctx = AppContext()
-    mock_renderer = MagicMock(spec=Renderer)
-    ctx.renderer = mock_renderer
-
-    main.wire_events(ctx, RuntimeState())
+    ctx, mock_renderer = _make_ctx()
+    main.wire_events(ctx)
 
     tokens = ["H", "e", "l", "l", "o", " ", "W", "o", "r", "l", "d"]
     for t in tokens:
@@ -63,17 +72,41 @@ def test_main_on_llm_token_streams_conversational_prose():
 
 
 def test_tool_result_not_printed_twice():
-    """Verify that tool completion and post-run panel do not cause duplicate output when handled by TermuxBridgeUI."""
-    from ui.repl_termux import TermuxBridgeUI
-    from core.ui_bridge import bridge
+    """TerminalVisualizer flags dedup state so tool completion + final-answer
+    panel do not double-print."""
+    from ui.repl_termux import TerminalVisualizer
 
     mock_bus = MagicMock()
-    bridge_ui = TermuxBridgeUI(bridge, mock_bus)
+    viz = TerminalVisualizer(event_bus=mock_bus, state=None)
 
-    # When TermuxBridgeUI registers listeners, _on_tool_completed_active is set to True
+    # Registering listeners flips the dedup guard on.
     assert getattr(mock_bus, "_on_tool_completed_active", False) is True
 
-    # And when on_final_answer is called, it marks _final_answer_rendered as True
-    with patch("ui.repl_termux.console"):
-        bridge_ui.on_final_answer({"output": 'final_answer { "answer": "clean answer" }'})
+    # Invoking on_final_answer marks the final answer as rendered so the
+    # secondary panel path is suppressed. Patch Live (the animated panel) so
+    # the test runs headless; console keeps its real size for width math.
+    with patch("ui.repl_termux.Live"):
+        viz.on_final_answer({"output": 'final_answer { "answer": "clean answer" }'})
     assert getattr(mock_bus, "_final_answer_rendered", False) is True
+
+
+def test_tool_name_contract_resolves_canonical_key():
+    """The canonical 'tool' key must resolve to the real tool name
+    (never None) in the REPL tool-completion handler."""
+    from ui.repl_termux import TerminalVisualizer
+
+    mock_bus = MagicMock()
+    viz = TerminalVisualizer(event_bus=mock_bus, state=None)
+
+    with patch("ui.repl_termux.console") as mock_console, patch("ui.repl_termux.Live"):
+        # Canonical key emitted by engine/dispatcher.py
+        viz.on_tool_completed({"tool": "web_search", "success": True})
+        viz.on_tool_completed({"tool": "file_system", "success": True})
+
+    # The printed completion line must contain the real names, not "None".
+    printed = "".join(
+        str(call.args[0]) for call in mock_console.print.call_args_list
+    )
+    assert "web_search" in printed, "canonical 'tool' key not resolved"
+    assert "file_system" in printed, "canonical 'tool' key not resolved"
+    assert "None" not in printed, "tool name resolved to None"

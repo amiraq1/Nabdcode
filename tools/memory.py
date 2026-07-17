@@ -13,7 +13,7 @@ def execute_search_memory(args: dict, memory_manager: Any) -> str:
     limit = args.get("limit", 5)
 
     if memory_manager is None:
-        from core.memory import MemoryManager
+        from core.storage import MemoryManager
         memory_manager = MemoryManager()
 
     results = memory_manager.hybrid_search(query, limit=limit)

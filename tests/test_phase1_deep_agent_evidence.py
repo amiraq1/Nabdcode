@@ -18,6 +18,13 @@ from engine.dispatcher import Dispatcher
 from core.evidence import EvidenceLog
 from tools.models import ToolResult
 
+# Bootstrap the tool registry so execute_node's validate_tool_call can resolve
+# tool names (e.g. "execute_shell"). The production app always builds AppContext
+# first; tests must do the same or extract_command() returns None and 0 dispatches
+# are recorded. Imported lazily to avoid importing the full app graph at module top.
+import core.app_context as _app_context  # noqa: E402
+_app_context.AppContext.build()
+
 
 def _stub_dispatcher(result: ToolResult | None = None) -> Dispatcher:
     """Return a Dispatcher whose dispatch() always returns the given result."""

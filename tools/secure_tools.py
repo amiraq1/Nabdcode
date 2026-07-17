@@ -3,6 +3,11 @@
 Implements zero-trust sandboxed file reading, git inspection, and test execution
 with strict pathlib boundaries, immutable command allowlists, centralized
 sanitization, and safe error handling.
+
+All Secure* tools now extend ``BaseTool`` (not ``smolagents.Tool``), gaining
+Pydantic self-validation and UI bridge event emission through the unified
+``__call__`` entry point.  The ``forward()`` contract is preserved for
+smolagents ``CodeAgent`` compatibility.
 """
 
 from __future__ import annotations
@@ -12,8 +17,19 @@ import os
 import pathlib
 import subprocess
 import time
-from typing import Any, Dict, Final, List, Optional
-from smolagents import Tool
+from typing import Any, Dict, Final, List, Optional, Type
+
+from tools.base import BaseTool
+from tools.models import ToolResult
+
+# ── Pydantic schema support ──────────────────────────────────────────────
+try:
+    from pydantic import BaseModel, Field, ValidationError
+except ImportError:
+    BaseModel = None  # type: ignore[assignment]
+    Field = None
+    ValidationError = None
+
 
 # ── Lazy sanitizer ────────────────────────────────────────────────────────
 # Imported lazily inside each method that needs it so the tools/ package
@@ -29,10 +45,36 @@ def _sanitize(text: str, **kwargs) -> str:
 logger = logging.getLogger("SecureTools")
 
 
-class SecureTool(Tool):
-    """Base class for secure tools that automatically emits UIBridge start/end events."""
+class SecureTool(BaseTool):
+    """Base class for secure tools with UIBridge event emission + forward contract.
+
+    **Key differences from BaseTool:**
+
+    * ``__call__`` wraps ``forward()`` with UI bridge start/end events (no
+      validation — backward compatible with existing smolagents callers).
+    * ``forward()`` is the primary execution contract (smolagens convention).
+      Subclasses override it instead of ``execute()``.
+    * ``inputs`` and ``output_type`` are preserved for smolagents ``CodeAgent``
+      schema generation.
+
+    Migration note (Phase 2+):
+        New tools should override ``execute(**kwargs)`` or
+        ``execute_with_args(args: BaseModel)`` and use ``args_schema`` for
+        self-validation.  The ``forward`` shim in ``BaseTool`` will then be
+        sufficient for smolagens compatibility.
+    """
+
+    # smolagents schema attributes (read by CodeAgent._build_tool_schemas)
+    inputs: dict = {}
+    output_type: str = "string"
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Wrap forward() with UI bridge start/end events.
+
+        Legacy behaviour preserved exactly: no validation, no Pydantic.
+        Validation will be integrated in Phase 2 via the shared
+        ``BaseTool.validate_and_parse()``.
+        """
         from core.ui_bridge import get_bridge
         bridge = get_bridge()
         call_args = kwargs if kwargs else {f"arg_{i}": str(a) for i, a in enumerate(args)}
@@ -45,6 +87,21 @@ class SecureTool(Tool):
         except Exception as e:
             bridge.emit_tool_end_sync(getattr(self, "name", self.__class__.__name__), f"❌ Error: {str(e)[:120]}")
             raise
+
+    def execute(self, **kwargs: Any) -> ToolResult:
+        """Redirect ``execute`` to ``forward`` for smolagens-compatible tools.
+
+        This is a backward-compatibility shim so the ``Dispatcher`` (which
+        calls ``tool.execute(**kwargs)``) still works.  Tools that override
+        ``forward()`` will have their string result wrapped into a ``ToolResult``.
+        """
+        result_str = self.forward(**kwargs)
+        return ToolResult(
+            success=not str(result_str).startswith(("Error:", "Security Violation:")),
+            stdout=str(result_str),
+            returncode=0,
+            status="success",
+        )
 
 
 def _is_path_relative_to(path: pathlib.Path, root: pathlib.Path) -> bool:
@@ -385,7 +442,7 @@ class SecureSemanticMemoryTool(SecureTool):
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        from core.memory import SemanticMemoryPipeline
+        from core.storage import SemanticMemoryPipeline
         self.memory = memory_pipeline or SemanticMemoryPipeline()
 
     def forward(self, action: str, text: str) -> str:
@@ -413,12 +470,47 @@ class SecureSemanticMemoryTool(SecureTool):
         return f"Retrieved Semantic Memory Lessons:\n{formatted}"
 
 
-class SecureFileSystemTool(SecureTool):
-    """smolagents-compatible wrapper around the hardened tools.file_system.FileSystemTool.
+# ── Pydantic schema for file system operations ───────────────────────────
 
-    Delegates to FileSystemTool.execute (which enforces the workspace jail and
-    the token clamp added in the memory-guard hardening pass), exposing it via
-    the smolagents ``forward`` contract expected by CodeAgent.
+if BaseModel is not None:
+
+    class SecureFileSystemArgs(BaseModel):
+        """Validated arguments for ``SecureFileSystemTool``."""
+
+        action: str = Field(
+            ...,
+            pattern=r"^(read|write|append|replace)$",
+            description="File operation: read, write, append, or replace.",
+        )
+        path: str = Field(
+            ...,
+            min_length=1,
+            max_length=4096,
+            description="Relative or absolute path within the workspace jail.",
+        )
+        content: Optional[str] = Field(
+            default=None,
+            description="Content for write/append actions.",
+        )
+        old_text: Optional[str] = Field(
+            default=None,
+            description="Text to replace (for replace action).",
+        )
+        new_text: Optional[str] = Field(
+            default=None,
+            description="Replacement text (for replace action).",
+        )
+
+    SecureFileSystemArgs.model_rebuild()
+
+
+class SecureFileSystemTool(SecureTool):
+    """smolagents-compatible wrapper around the hardened FileSystemTool.
+
+    Features:
+    * Self-validating args via Pydantic ``SecureFileSystemArgs`` schema.
+    * Delegates to ``FileSystemTool.execute`` (workspace jail + token clamp).
+    * Emits unified diff through the UI bridge on mutations.
     """
 
     name = "secure_file_system"
@@ -461,6 +553,13 @@ class SecureFileSystemTool(SecureTool):
         from tools.file_system import FileSystemTool
         self._tool = FileSystemTool(workspace=workspace or ".")
 
+    @property
+    def args_schema(self) -> Type["BaseModel"] | None:
+        """Pydantic schema for self-validation."""
+        if BaseModel is None:
+            return None
+        return SecureFileSystemArgs
+
     def forward(
         self,
         action: str,
@@ -474,6 +573,29 @@ class SecureFileSystemTool(SecureTool):
         resolved_path = path or kwargs.get("file_path")
         if not resolved_path:
             return "Error: secure_file_system requires a 'path' argument."
+
+        # ── Self-validation (if Pydantic is available) ───────────────
+        # Validate the incoming raw args against the Pydantic schema.
+        # On failure we return the LLM-readable error without crashing.
+        if BaseModel is not None:
+            try:
+                validated = self.validate_and_parse({
+                    "action": action,
+                    "path": resolved_path,
+                    "content": content,
+                    "old_text": old_text,
+                    "new_text": new_text,
+                })
+                # Use validated values (Pydantic normalises casing, strips
+                # whitespace, and enforces types).
+                action = validated.action
+                resolved_path = validated.path
+                content = validated.content
+                old_text = validated.old_text
+                new_text = validated.new_text
+            except ValueError as exc:
+                return str(exc)
+
         result = self._tool.execute(
             action=action,
             path=resolved_path,
@@ -483,12 +605,6 @@ class SecureFileSystemTool(SecureTool):
         )
 
         # ── File-Modification Emitter (Dependency Inversion) ──────────
-        # Push the computed unified diff to the abstract UI bridge so the
-        # DiffBlock lights up in real time. We only broadcast mutating
-        # actions (write/append/replace) — never 'read', to keep the UI
-        # clean. The bridge is a no-op unless a concrete controller is
-        # injected via core.ui_bridge.set_bridge(). Guarded so a bridge
-        # failure can never break the agent loop or the file operation.
         if action in ("write", "append", "replace"):
             diff = result.get("diff") or ""
             if diff:
@@ -541,8 +657,6 @@ class SecureShellTool(SecureTool):
 
     def forward(self, *args: Any, command: Any = "", **kwargs: Any) -> str:
         # Tolerate model schema drift & positional/list unpacking:
-        # Some local models or wrappers emit positional lists (e.g. forward(["ls"]))
-        # or dictionary mappings, or use aliases like 'file_path'/'path'/'cmd'/'args'.
         cmd = None
         if args:
             first_arg = args[0]
@@ -582,9 +696,6 @@ class SecureShellTool(SecureTool):
         if not cmd:
             return "Error: secure_shell requires a 'command' argument."
         result = self._tool.execute(command=str(cmd))
-        # Surface the REAL outcome, not just stdout. A redirect (`echo > file`)
-        # produces empty stdout but a nonzero returncode on failure; reporting only
-        # stdout would mask failures as silent "success".
         if not result.success:
             detail = result.stderr or result.stdout or "unknown error"
             return f"Error executing '{str(cmd)}' (exit {result.returncode}): {detail}"
@@ -659,6 +770,3 @@ class SecureBrowserTool(SecureTool):
         if not result.success:
             return f"Error ({result.returncode}): {result.stderr or result.stdout}"
         return str(result.stdout or result.stderr).strip()
-
-
-

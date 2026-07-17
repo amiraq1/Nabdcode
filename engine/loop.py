@@ -25,16 +25,17 @@ from engine.goal_verifier import evaluate_goal_exit, MAX_GOAL_RETRIES
 from core.permissions import PermissionEngine, PermissionDecision
 
 from core.parser import extract_command, extract_json_from_response, validate_tool_call, ToolCall, TOOL_SCHEMAS
+from tools.models import ToolResult
 from core.security import is_safe_command
 from core.utils import truncate
 from pathlib import Path
 from core.evidence import EvidenceLog, VerifierError
 from core.constants import is_chitchat
-from core.memory import load_memory, write_lesson
+from core.storage import load_memory, write_lesson
 from core.workspace import load_workspace_context
 from core.sanitize import sanitize
 from core.ui_bridge import get_bridge, _TIMEOUT_REPLY
-from core.prompts import BROWSER_FEWSHOT_EXAMPLES, FALLBACK_RESTRICTED_PROMPT
+from core.prompts import BROWSER_FEWSHOT_EXAMPLES, FALLBACK_RESTRICTED_PROMPT, CRITICAL_RULES_FOR_TOOL_CALLING
 from core.context_compactor import ContextCompactor, CompactionConfig
 
 
@@ -53,6 +54,7 @@ _SMALL_FALLBACK_MODEL_KEYWORDS: Final[tuple[str, ...]] = (
 )
 
 TOOL_FEWSHOT_FALLBACK: Final[str] = (
+    f"{CRITICAL_RULES_FOR_TOOL_CALLING}\n\n"
     "## Tool Call Format (few-shot)\n"
     "You MUST call a tool by outputting ONLY one JSON object. No prose.\n\n"
     "Example 1 — run a shell command:\n"
@@ -120,8 +122,8 @@ def _extract_final_answer(raw_json: str | None) -> str | None:
 
     The casual-chat system prompt instructs the model to conclude directly with
     ``final_answer`` (a real smolagents termination convention). ``final_answer``
-    is intentionally NOT in TOOL_SCHEMAS (it is not an executable tool), so the
-    generic schema gate would reject it as "Unknown tool" and force the model
+    is intentionally NOT registered as a tool (it is not an executable tool), so the
+    schema gate would reject it as "Unknown tool" and force the model
     into a correction/explain loop on a simple greeting. We detect it explicitly
     here and return the answer text so the loop can terminate cleanly.
 
@@ -161,6 +163,16 @@ MAX_BUDGET_SECONDS: Final[int] = 180  # سقف الميزانية: 3 دقائق 
 MAX_BUDGET_TOKENS: Final[int] = 12000  # سقف التوكنات التقريبي
 MAX_PROVIDER_FAIL_STREAK: Final[int] = 3
 FALLBACK_ALLOWED_TOOLS: Final[set[str]] = {"final_answer", "search_memory", "todo_write"}
+
+# Phase 4.5 — anti-frustration guards observed in live sessions:
+#  • Cap consecutive reasoning rounds that produce NO new tool call. After this
+#    many thought-only turns the model is forced to commit (tool call or a
+#    clarification/final answer) instead of spinning silently.
+#  • When the run has consumed this fraction of its budget ceiling, force the
+#    agent to emit a partial/summary answer rather than dying silently at the
+#    hard cap with nothing shown to the user.
+MAX_CONSECUTIVE_NO_TOOL_ROUNDS: Final[int] = 3
+BUDGET_SOFT_WARN_RATIO: Final[float] = 0.80
 
 # Phase4: in casual chat (no active goal) the compaction engine must still
 # surface the recent conversation, not just the frozen first user prompt. This
@@ -294,6 +306,14 @@ class _LoopCtx:
     # self-correction counter.
     goal_correct_count: int = 0
     fingerprints: list[str] = field(default_factory=list)
+    # Phase 4.5 — anti-frustration trackers:
+    #  • Normalized web_search queries already executed this run (for dedup).
+    executed_search_queries: list[str] = field(default_factory=list)
+    #  • Most-recent web_search result text, keyed for cache-return on repeat.
+    last_search_cache: dict[str, str] = field(default_factory=dict)
+    #  • Consecutive reasoning rounds that produced NO new (dispatched) tool
+    #    call. Reset to 0 whenever a real tool dispatch occurs.
+    consecutive_no_tool_rounds: int = 0
     # Session allowlist of approved shell commands (exact command string).
     # Cached for the duration of the current run() so repeated identical
     # commands don't re-prompt the operator. Never persisted across runs.
@@ -319,6 +339,7 @@ class ExecutionLoop:
         llm_provider: Callable[[list[dict[str, Any]]], str] | None = None,
         dispatcher: DispatcherProtocol | None = None,
         evidence_log: EvidenceLog | None = None,
+        logger: Any = None,
         model_identifier: str | None = None,
     ) -> None:
 
@@ -330,6 +351,9 @@ class ExecutionLoop:
         self.max_output_len = max_output_len
         self._recent_calls: deque[ToolCall] = deque(maxlen=16)
         self.evidence_log = evidence_log or EvidenceLog()
+        # Optional logger for routing provider fallback messages into the
+        # session log file instead of stdout (keeps the REPL clean).
+        self._logger = logger
         self._self_correct_count = 0
         self._provider_fail_streak = 0
         # Phase2: the active model identifier. Injected by callers that know the
@@ -380,7 +404,7 @@ class ExecutionLoop:
             return filtered
         return self.all_tools
 
-    def _build_critique(self, result: Any, last_tool_call: Any = None) -> str:
+    def _build_critique(self, result: Any, _last_tool_call: Any = None) -> str:
         findings_str = str(getattr(result, "findings", result))
         if "technical anchors" in findings_str:
             return (
@@ -501,7 +525,9 @@ class ExecutionLoop:
         recent: list[dict[str, Any]] = []
         for it in kept_interactions:
             recent.append({
-                "role": "user",
+                "role": "tool",
+                "tool_call_id": f"call_{it.step}",
+                "name": it.tool,
                 "content": (
                     f"[{it.tool} Output]\n{it.output}"
                     if it.output
@@ -572,16 +598,20 @@ class ExecutionLoop:
         token_est = sum(
             len(str(m.get("content", ""))) // 4 for m in self.state.get_messages()
         )
-        if elapsed_total > MAX_BUDGET_SECONDS or token_est > MAX_BUDGET_TOKENS:
-            self.state.update_status("COMPLETED")
-            safe_msg = self._safe_shutdown(
-                ctx.user_prompt,
-                f"Budget Ceiling: time={int(elapsed_total)}s tokens~{token_est}",
-            )
-            bus.emit(
-                "loop_completed",
-                {"reason": "budget_exhausted", "output": safe_msg},
-            )
+        if elapsed_total > MAX_BUDGET_SECONDS or token_est > MAX_BUDGET_TOKENS or not self.state.is_loop_safe():
+            if not self._maybe_force_partial_answer(force_cap=True):
+                self.state.update_status("COMPLETED")
+                if not getattr(self, "_last_response", "") or not self._last_response.strip():
+                    safe_msg = self._safe_shutdown(
+                        ctx.user_prompt,
+                        f"Budget Ceiling: time={int(elapsed_total)}s tokens~{token_est}",
+                    )
+                    self._last_response = safe_msg
+                bus.emit(
+                    "loop_completed",
+                    {"reason": "budget_exhausted", "output": self._last_response},
+                )
+                bus.emit("show_final_answer", {"output": self._last_response})
             return _LoopSignal.TERMINATE
         return _LoopSignal.PROCEED
 
@@ -644,9 +674,23 @@ class ExecutionLoop:
 
         try:
             started = time.perf_counter()
-            response = self.llm_provider(compacted)
+            # Pass the run's logger to the provider so router fallback messages
+            # land in the session log file instead of polluting the REPL. Only
+            # forward it when using the default router entry point; custom
+            # providers that don't accept **kwargs keep working untouched.
+            if self.llm_provider is _resolve_default_provider():
+                response = self.llm_provider(compacted, logger=self._logger)
+            else:
+                response = self.llm_provider(compacted)
             elapsed = time.perf_counter() - started
-        except (TimeoutError, ConnectionError, OSError) as exc:
+        # The LLM provider / router can raise a variety of errors when every
+        # backend fails (e.g. llm_router raises RuntimeError("All failed: ..."),
+        # or the OpenRouter/NVIDIA clients raise HTTP / auth / rate-limit
+        # errors). Catch broadly so each failure is routed through
+        # _note_provider_failure — which emits a visible "connection_lost"
+        # message via loop_completed once the streak is exhausted — instead of
+        # leaking as an unhandled exception that the REPL swallows silently.
+        except (TimeoutError, ConnectionError, OSError, RuntimeError, ValueError) as exc:
             if self._note_provider_failure(f"{type(exc).__name__}: {exc}") is _LoopSignal.TERMINATE:
                 return "", ""
             time.sleep(self.POLL_DELAY)
@@ -770,6 +814,8 @@ class ExecutionLoop:
             system_content += f"\n\n{FALLBACK_RESTRICTED_PROMPT}"
         if self._is_small_or_fallback_model() or getattr(self.state, 'is_fallback_mode_active', False):
             system_content += f"\n\n{TOOL_FEWSHOT_FALLBACK}"
+        else:
+            system_content += f"\n\n{CRITICAL_RULES_FOR_TOOL_CALLING}"
 
         return [
             {"role": "system", "content": system_content}
@@ -839,7 +885,7 @@ class ExecutionLoop:
 
         if raw_json:
             # Honor the smolagents final_answer termination convention. It is not
-            # in TOOL_SCHEMAS (not an executable tool), so the schema gate would
+            # registered as a tool (not an executable tool), so the schema gate would
             # reject it and loop forever on a greeting. Short-circuit to a clean
             # "no_tool_call"-style completion instead.
             final_answer = _extract_final_answer(raw_json)
@@ -847,7 +893,8 @@ class ExecutionLoop:
                 self._last_response = final_answer
                 return None, _LoopSignal.TERMINATE
 
-            is_valid, parsed, error = validate_tool_call(raw_json, available_tools=self.get_available_tools())
+            from engine.tool_registry import registry as _registry
+            is_valid, error = validate_tool_call(raw_json, _registry)
             if not is_valid:
                 bus.emit("ui_validation_failed", {"error": error, "step": self.state.step_count})
                 bus.emit(
@@ -855,9 +902,13 @@ class ExecutionLoop:
                     {"error": error, "raw_json": raw_json, "step": self.state.step_count},
                 )
                 attempt_tool = ""
-                if isinstance(parsed, dict):
-                    attempt_tool = parsed.get("tool", "")
-                elif isinstance(raw_json, str) and "browser_action" in raw_json:
+                try:
+                    parsed_tmp = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+                    if isinstance(parsed_tmp, dict):
+                        attempt_tool = parsed_tmp.get("tool", "")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                if not attempt_tool and isinstance(raw_json, str) and "browser_action" in raw_json:
                     attempt_tool = "browser_action"
 
                 if attempt_tool == "browser_action" or (isinstance(raw_json, str) and "browser_action" in raw_json and "query" in raw_json):
@@ -903,7 +954,14 @@ class ExecutionLoop:
                 self.state.increment_step()
                 time.sleep(self.POLL_DELAY)
                 return None, _LoopSignal.CONTINUE
-            tool_call = ToolCall(tool=parsed["tool"], args=parsed["args"])
+            # Re-parse the already-validated raw_json to construct the ToolCall
+            # (validate_tool_call no longer returns the parsed dict).
+            try:
+                parsed_obj = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+                tool_call = ToolCall(tool=parsed_obj["tool"], args=parsed_obj.get("args", {}))
+            except (json.JSONDecodeError, TypeError, KeyError):
+                # Should never happen since validate_tool_call already verified the shape
+                pass
         else:
             tool_call = extract_command(response)
 
@@ -1067,6 +1125,22 @@ class ExecutionLoop:
         tool_name = tool_call.tool
         tool_args = tool_call.args
 
+        # final_answer is a termination convention, not an executable tool. When
+        # a small/fallback model emits it in loose ReAct prose ("FINAL_ANSWER
+        # ...") the forgiving parser surfaces it as a ToolCall here; short-circuit
+        # to a clean termination instead of dispatching a non-registered tool
+        # (which would be rejected and loop forever).
+        if tool_name == "final_answer":
+            answer = ""
+            if isinstance(tool_args, dict):
+                answer = tool_args.get("answer") or tool_args.get("text") or ""
+            if answer:
+                self._last_response = answer
+            self.state.update_status("COMPLETED")
+            bus.emit("loop_completed", {"reason": "no_tool_call", "output": self._last_response})
+            bus.emit("show_final_answer", {"output": self._last_response})
+            return _LoopSignal.TERMINATE
+
         recent_slice = list(self._recent_calls)[-4:]
         if tool_call == ctx.last_command or tool_call in recent_slice:
             ctx.repeated += 1
@@ -1098,7 +1172,7 @@ class ExecutionLoop:
                 bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count})
                 bus.emit("tool_auth_violation", {
                     "role": "ORCHESTRATOR",
-                    "tool_name": tool_name,
+                    "tool": tool_name,
                     "error": "shell command violated security policy",
                 })
                 # Phase4.1 Auto-Critical (b): a security denial/block is frozen.
@@ -1242,6 +1316,68 @@ class ExecutionLoop:
             "Please analyze the error and fix your command or strategy."
         )
 
+    def _pre_dispatch_guard(self, tool_call: ToolCall) -> "ToolResult | None":
+        """Phase 4.5 cheap pre-checks that short-circuit a real tool dispatch.
+
+        Returns a ``ToolResult`` when the call should be answered WITHOUT
+        consuming a real tool execution (and therefore without spending budget
+        on a redundant/external call). Returns ``None`` when the call should
+        proceed to the normal dispatcher path.
+
+        Guards:
+          1. file_system path jail — reject reads/writes outside the pinned
+             workspace root before the tool ever runs (no wasted tool call).
+          2. web_search dedup — if the normalized query was already executed
+             this run, return the cached result instead of re-calling the net.
+        """
+        ctx = self._ctx
+        assert ctx is not None
+        tool_name = tool_call.tool
+        tool_args = tool_call.args
+
+        # ── Guard 1: file_system workspace jail (pre-dispatch) ───────────────
+        if tool_name == "file_system" and isinstance(tool_args, dict):
+            path = tool_args.get("path")
+            action = (tool_args.get("action") or "").lower()
+            if path and action in ("read", "write", "append", "replace", "delete"):
+                from core.kernel.security import _validate_path
+                if not _validate_path(str(path)):
+                    bus.emit("tool_security_blocked", {
+                        "command": f"file_system.{action}({path})",
+                        "step": self.state.step_count,
+                    })
+                    return ToolResult(
+                        success=False,
+                        stderr=(
+                            f"Access outside the workspace is forbidden. "
+                            f"Path '{path}' resolves outside the pinned workspace root. "
+                            f"Use a path relative to the workspace."
+                        ),
+                        returncode=-1,
+                        status="error",
+                    )
+
+        # ── Guard 2: web_search dedup (return cached result) ────────────────
+        if tool_name == "web_search" and isinstance(tool_args, dict):
+            raw_query = tool_args.get("query")
+            if raw_query:
+                norm = str(raw_query).strip().lower()
+                if norm in ctx.executed_search_queries and norm in ctx.last_search_cache:
+                    bus.emit("tool_dedup_hit", {
+                        "tool": "web_search",
+                        "query": raw_query,
+                        "step": self.state.step_count,
+                    })
+                    return ToolResult(
+                        success=True,
+                        stdout=ctx.last_search_cache[norm],
+                        returncode=0,
+                        status="success",
+                        metadata={"deduped": True},
+                    )
+
+        return None
+
     def _dispatch_and_record_evidence(self, tool_call: ToolCall) -> None:
         """Dispatch the validated tool and log the outcome to the EvidenceLog.
 
@@ -1277,7 +1413,10 @@ class ExecutionLoop:
                 )
                 output = truncate(blocked.output or "", self.max_output_len)
                 feedback = self._build_tool_feedback(result, tool_name, tool_args, output)
-                self.state.append_message({"role": "user", "content": feedback})
+                self.state.append_message({
+                    "role": "system",
+                    "content": f"[TOOL RESULT: {tool_name}]\n{feedback}",
+                })
                 self.state.increment_step()
                 time.sleep(self.POLL_DELAY)
                 return
@@ -1323,7 +1462,23 @@ class ExecutionLoop:
             ))
 
         feedback = self._build_tool_feedback(result, tool_name, tool_args, output)
-        self.state.append_message({"role": "user", "content": feedback})
+        self.state.append_message({
+            "role": "system",
+            "content": f"[TOOL RESULT: {tool_name}]\n{feedback}",
+        })
+        # Phase 4.5 — web_search dedup bookkeeping: cache the executed query so
+        # an identical re-issue later in the run returns the cached result.
+        if tool_name == "web_search" and isinstance(tool_args, dict):
+            raw_query = tool_args.get("query")
+            if raw_query:
+                norm = str(raw_query).strip().lower()
+                if norm not in ctx.executed_search_queries:
+                    ctx.executed_search_queries.append(norm)
+                if getattr(result, "success", False):
+                    ctx.last_search_cache[norm] = output
+        # Phase 4.5 — a real dispatch occurred → reset the no-tool counter.
+        if ctx is not None:
+            ctx.consecutive_no_tool_rounds = 0
         self.state.increment_step()
         self.state.prune_history()
         time.sleep(self.POLL_DELAY)
@@ -1390,6 +1545,9 @@ class ExecutionLoop:
         if self._check_budget_and_guards() is _LoopSignal.TERMINATE:
             return
 
+        if self._maybe_force_partial_answer():
+            return
+
         if hasattr(self, "_compactor") and self._compactor.should_compact(self.state.messages):
             self.state.messages = self._compactor.compact(
                 self.state.messages,
@@ -1412,6 +1570,11 @@ class ExecutionLoop:
 
         tool_call, signal = self._parse_and_validate_tool(response_text)
         if signal is _LoopSignal.CONTINUE:
+            ctx = self._ctx
+            if ctx is not None:
+                ctx.consecutive_no_tool_rounds += 1
+                if self._maybe_force_partial_answer():
+                    return
             return
         if signal is _LoopSignal.TERMINATE:
             # The parse helper already set self._last_response (e.g. a
@@ -1419,16 +1582,153 @@ class ExecutionLoop:
             # the loop emits loop_completed with reason "no_tool_call".
             if self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
                 return
+            ctx = self._ctx
+            if ctx is not None:
+                ctx.consecutive_no_tool_rounds += 1
+                if self._maybe_force_partial_answer():
+                    return
             return
+        ctx = self._ctx
+        assert ctx is not None
         if tool_call is None:
+            # Phase 4.5 — a reasoning round with no actionable tool call. Count
+            # it toward the consecutive-no-tool cap and, if the cap is breached
+            # near the budget, force a partial answer rather than spinning.
+            ctx.consecutive_no_tool_rounds += 1
+            if self._maybe_force_partial_answer():
+                return
             if self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
+                return
+            if self._maybe_force_partial_answer():
                 return
             return
 
         if self._handle_cycle_and_security(tool_call) is _LoopSignal.CONTINUE:
+            # A cycle/security block is also a non-productive round.
+            ctx.consecutive_no_tool_rounds += 1
+            if self._maybe_force_partial_answer():
+                return
+            return
+
+        # Phase 4.5 — cheap pre-dispatch guards (workspace jail, web_search
+        # dedup). A returned ToolResult short-circuits the real dispatch so we
+        # neither waste a tool call nor consume external budget.
+        guard_result = self._pre_dispatch_guard(self._active_tool)
+        if guard_result is not None:
+            self._record_and_feedback(self._active_tool, guard_result)
             return
 
         self._dispatch_and_record_evidence(self._active_tool)
+
+    def _record_and_feedback(self, tool_call: ToolCall, result: "ToolResult") -> None:
+        """Record a (possibly pre-dispatched) tool result and feed it back to the
+        model, mirroring the tail of ``_dispatch_and_record_evidence`` without
+        invoking the real dispatcher."""
+        ctx = self._ctx
+        tool_name = tool_call.tool
+        tool_args = tool_call.args
+        cmd_summary = (
+            tool_args.get("command")
+            or tool_args.get("path")
+            or tool_args.get("query")
+            or str(tool_args)[:60]
+        )
+        # Only cache/web_search dedup-bookkeeping when a real dispatch would have
+        # happened; pre-dispatch rejections (path jail) still record evidence.
+        if tool_name == "web_search" and isinstance(tool_args, dict):
+            raw_query = tool_args.get("query")
+            if raw_query:
+                norm = re.sub(r"\s+", " ", str(raw_query).strip().lower())
+                if norm not in ctx.executed_search_queries:
+                    ctx.executed_search_queries.append(norm)
+                if getattr(result, "success", False):
+                    ctx.last_search_cache[norm] = getattr(result, "output", "") or getattr(result, "stderr", "")
+        self.evidence_log.record(
+            tool=tool_name,
+            command_or_path=cmd_summary,
+            success=getattr(result, "success", False),
+            output_snippet=getattr(result, "output", "") or getattr(result, "stderr", ""),
+        )
+        output_val = getattr(result, "output", "") or getattr(result, "stderr", "") or str(result)
+        output = truncate(output_val, self.max_output_len)
+        if ctx is not None:
+            rec = self.evidence_log.get_records()[-1] if self.evidence_log.get_records() else None
+            ctx.tool_interactions.append(_ToolInteraction(
+                step=self.state.step_count,
+                tool=tool_name,
+                ok=bool(getattr(result, "success", False)),
+                exit_code=int(getattr(result, "returncode", 0) or 0),
+                path_hint=(cmd_summary or "")[:80],
+                summary=f"{'SUCCESS' if getattr(result, 'success', False) else 'FAILURE'}: {cmd_summary}".strip(),
+                output=output,
+                evidence_id=rec.evidence_id if rec else "",
+                critical=bool(rec.critical) if rec else False,
+            ))
+        feedback = self._build_tool_feedback(result, tool_name, tool_args, output)
+        self.state.append_message({
+            "role": "system",
+            "content": f"[TOOL RESULT: {tool_name}]\n{feedback}",
+        })
+        # A real dispatch happened (or a dedup hit) → reset the no-tool counter.
+        if ctx is not None:
+            ctx.consecutive_no_tool_rounds = 0
+        self.state.increment_step()
+        self.state.prune_history()
+        time.sleep(self.POLL_DELAY)
+
+    def _maybe_force_partial_answer(self, force_cap: bool = False) -> bool:
+        """Phase 4.5: near budget ceiling or consecutive reasoning cap reached, force a partial/summary answer.
+
+        When the run has consumed >= ``BUDGET_SOFT_WARN_RATIO`` of its ceiling
+        (time, tokens, or steps) OR when ``consecutive_no_tool_rounds`` exceeds
+        ``MAX_CONSECUTIVE_NO_TOOL_ROUNDS`` and the model has NOT already produced a
+        final answer, synthesize a partial summary from the evidence gathered so
+        far and terminate cleanly — instead of dying silently at the hard cap with
+        nothing shown to the user.
+
+        Returns ``True`` if it forced termination (caller should stop).
+        """
+        ctx = self._ctx
+        assert ctx is not None
+        elapsed_total = time.time() - ctx.start_time
+        token_est = sum(
+            len(str(m.get("content", ""))) // 4 for m in self.state.get_messages()
+        )
+        time_ratio = elapsed_total / MAX_BUDGET_SECONDS if MAX_BUDGET_SECONDS else 0
+        token_ratio = token_est / MAX_BUDGET_TOKENS if MAX_BUDGET_TOKENS else 0
+        step_ratio = self.state.step_count / self.state.max_steps if getattr(self.state, "max_steps", 0) else 0
+        is_budget = max(time_ratio, token_ratio, step_ratio) >= BUDGET_SOFT_WARN_RATIO
+        is_cap = ctx.consecutive_no_tool_rounds > MAX_CONSECUTIVE_NO_TOOL_ROUNDS
+
+        if not force_cap and not is_budget and not is_cap:
+            return False
+        # Already terminating with a real answer — don't double-emit.
+        if getattr(self, "_last_response", "") and self._last_response.strip():
+            return False
+
+        # Build a partial summary from the most-recent successful evidence.
+        lines = []
+        for rec in reversed(self.evidence_log.get_records()):
+            if rec.success and rec.output_snippet:
+                snippet = rec.output_snippet[:300].strip()
+                if snippet:
+                    lines.append(f"- [{rec.tool}] {snippet}")
+            if len(lines) >= 5:
+                break
+        summary = "\n".join(lines) if lines else "(no successful tool output captured yet)"
+        reason_label = "budget threshold reached" if is_budget else "consecutive reasoning limit reached"
+        partial = (
+            f"[Partial answer — {reason_label}]\n"
+            f"Task: {ctx.user_prompt}\n"
+            f"What I found so far:\n{summary}\n"
+            f"(Note: the agent stopped early to avoid exhausting the budget. "
+            f"Refine your question or run again for a fuller result.)"
+        )
+        self._last_response = partial
+        self.state.update_status("COMPLETED")
+        bus.emit("loop_completed", {"reason": "partial_answer_budget" if is_budget else "partial_answer_cap", "output": partial})
+        bus.emit("show_final_answer", {"output": partial})
+        return True
 
     def _finalize_loop(self, interrupted: bool) -> None:
         """Emit the terminal loop events once the iteration cycle has ended."""

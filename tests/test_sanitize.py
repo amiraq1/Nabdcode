@@ -66,8 +66,18 @@ class TestSubsystemIntegration(unittest.TestCase):
 
     def test_parser_validate_tool_call_with_ansi_payload(self):
         dirty_json = '{"tool": "file_system", "args": {"path": "test.txt", "action": "\x1b[31mread\x1b[0m"}}'
-        res = validate_tool_call(dirty_json)
-        self.assertTrue(res.ok, f"Expected valid tool call after sanitization, got {res.error}")
+        # Use a simple mock registry with an accepting mock tool
+        class _MockTool:
+            name = "file_system"
+            def validate_and_parse(self, args):
+                return args
+            def get_schema(self):
+                return {"name": "file_system"}
+        class _MockReg:
+            def __contains__(self, n): return True
+            def get_tool(self, n): return _MockTool()
+        ok, err = validate_tool_call(dirty_json, _MockReg())
+        self.assertTrue(ok, f"Expected valid tool call after sanitization, got {err}")
 
     def test_subprocess_safe_execute_command_sanitization(self):
         code, out, err = safe_execute_command("python3 tests/helper_ansi_emitter.py")

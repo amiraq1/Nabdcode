@@ -21,7 +21,6 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.spinner import SPINNERS
-from rich.status import Status
 from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -558,6 +557,31 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 if not text:
                     continue
 
+                # 1. Capture clear/reset commands to wipe context, history, and evidence for a fresh task
+                if text.lower() in ["/clear", "/reset", "/c", "clear"]:
+                    if hasattr(agent, "clear_session"):
+                        agent.clear_session()
+                    else:
+                        if hasattr(agent, "runtime_state") and hasattr(agent.runtime_state, "clear_context"):
+                            agent.runtime_state.clear_context()
+                        elif hasattr(agent, "state") and hasattr(agent.state, "clear_context"):
+                            agent.state.clear_context()
+                        elif hasattr(agent, "state") and hasattr(agent.state, "messages"):
+                            msgs = agent.state.messages
+                            sys_msgs = [m for m in msgs if m.get("role") == "system"] if msgs else []
+                            agent.state.set_messages(sys_msgs)
+                            agent.state.reset_step_count()
+                        if hasattr(agent, "evidence_log") and agent.evidence_log is not None:
+                            if hasattr(agent.evidence_log, "clear"):
+                                agent.evidence_log.clear()
+                            elif isinstance(agent.evidence_log, list):
+                                agent.evidence_log.clear()
+
+                    kinetic.stop()
+                    thought_compressor.stop()
+                    console.print("\n[bold green]✨ [System] Context, history, and evidence have been cleared. Ready for a new task![/bold green]\n")
+                    continue
+
                 # ── Phase5 (Permissions) slash commands ───────────────────────
                 # Intercept allow/deny/clear_perms BEFORE invoking the agent so the
                 # permission policy can be adjusted mid-session. These rules are
@@ -747,25 +771,39 @@ class TerminalVisualizer:
 
     def on_tool_started(self, data: dict):
         """إظهار سبينر متحرك عند بدء تشغيل أي أداة بناءً على دور الوكيل"""
-        self.stop()  # إيقاف أي سياق عرض نشط أولاً
+        try:
+            self.stop()  # إيقاف أي سياق عرض نشط أولاً
 
-        role = data.get("role", "ORCHESTRATOR")
-        tool_name = data.get("tool_name", "tool")
+            role = data.get("role", "ORCHESTRATOR")
+            # The engine emits "tool" consistently (see engine/dispatcher.py).
+            tool_name = data.get("tool") or "tool"
 
-        # اختيار لون السبينر حسب قبعة الوكيل الحالي
-        color = "cyan" if role == "ORCHESTRATOR" else "green" if role == "CODER" else "yellow"
+            # اختيار لون السبينر حسب قبعة الوكيل الحالي
+            color = "cyan" if role == "ORCHESTRATOR" else "green" if role == "CODER" else "yellow"
 
-        spinner = Spinner("dots", text=Text(f" [{role}] Running tool: {tool_name}...", style=f"bold {color}"))
+            spinner = Spinner("dots", text=Text(f" [{role}] Running tool: {tool_name}...", style=f"bold {color}"))
 
-        # تفعيل العرض الحي المتحرك في الطرفية بشكل مؤقت
-        self.live_context = Live(spinner, console=console, refresh_per_second=10, transient=True)
-        self.live_context.start()
+            # تفعيل العرض الحي المتحرك في الطرفية بشكل مؤقت
+            self.live_context = Live(spinner, console=console, refresh_per_second=10, transient=True)
+            self.live_context.start()
+        except Exception as exc:
+            # Never let a UI rendering glitch crash the event bus / tool pipeline.
+            try:
+                console.print(f"[dim red][UI] tool spinner unavailable: {exc}[/][/]")
+            except Exception:
+                pass
 
     def on_tool_completed(self, data: dict):
         """إيقاف السبينر وطباعة نتيجة الأداة بنجاح"""
-        self.stop()
-        tool_name = data.get("tool_name")
-        console.print(f"[bold green]✓[/bold green] Tool [bold white]{tool_name}[/] completed successfully.")
+        try:
+            self.stop()
+            tool_name = data.get("tool") or "?"
+            console.print(f"[bold green]✓[/bold green] Tool [bold white]{tool_name}[/] completed successfully.")
+        except Exception as exc:
+            try:
+                console.print(f"[dim red][UI] tool completion render failed: {exc}[/][/]")
+            except Exception:
+                pass
 
     def on_agent_handoff(self, data: dict):
         """طباعة لوحة أنيقة توضح انتقال "الوعي" والمسؤولية بين الوكلاء"""
@@ -792,7 +830,7 @@ class TerminalVisualizer:
 
         error_msg = data.get("error", "Unknown Violation")
         role = data.get("role")
-        tool = data.get("tool_name")
+        tool = data.get("tool")
 
         violation_text = (
             "[bold white on red] 🚨 EXECUTION GATE BLOCK [/bold white on red]\n\n"

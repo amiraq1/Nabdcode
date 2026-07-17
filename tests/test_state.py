@@ -87,6 +87,41 @@ class TestRuntimeState(unittest.TestCase):
         state.increment_step()
         self.assertFalse(state.is_loop_safe())
 
+    def test_clear_context(self):
+        state = RuntimeState(session_id="clear_test")
+        state.append_message({"role": "system", "content": "SYS"})
+        state.append_message({"role": "user", "content": "hello"})
+        state.increment_step()
+        state.past_steps_summary = "Old steps"
+        state.compacted_memory.append("Old mem")
+        state.tool_interactions.append("Old tool")
+        from engine.state import GoalSpec
+        state.active_goal = GoalSpec(raw_prompt="Goal", success_criteria="Done")
+
+        state.clear_context()
+        self.assertEqual(len(state.get_messages()), 1)
+        self.assertEqual(state.get_messages()[0]["content"], "SYS")
+        self.assertEqual(state.step_count, 0)
+        self.assertEqual(state.past_steps_summary, "")
+        self.assertEqual(len(state.compacted_memory), 0)
+        self.assertEqual(len(state.tool_interactions), 0)
+        self.assertIsNone(state.active_goal)
+
+    def test_evidence_and_todo_clear(self):
+        from core.evidence import EvidenceLog
+        from core.todo import TodoManager
+        elog = EvidenceLog()
+        elog.record("test_tool", "cmd", True, "snippet")
+        self.assertTrue(elog.has_evidence())
+        elog.clear()
+        self.assertFalse(elog.has_evidence())
+
+        tman = TodoManager()
+        tman.set_plan(["Task 1"])
+        self.assertEqual(len(tman.all()), 1)
+        tman.clear()
+        self.assertEqual(len(tman.all()), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

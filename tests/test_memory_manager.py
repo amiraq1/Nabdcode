@@ -16,7 +16,7 @@ import sqlite3
 import time
 import pytest
 
-from core.memory import MemoryManager
+from core.storage import MemoryManager
 
 
 # ---------------------------------------------------------------------------

@@ -73,7 +73,7 @@ def test_session_save_and_restore_evidence_continuity():
         session_dir = Path(tmp)
 
         # ── "First run" ──
-        from core.session import SessionManager
+        from core.storage import SessionManager
         sm = SessionManager(root=session_dir)
         elog = EvidenceLog()
         elog.record(tool="execute_shell", command_or_path="ls -la", success=True, output_snippet="files")

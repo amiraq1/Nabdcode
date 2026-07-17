@@ -3,7 +3,7 @@ import math
 import re
 from collections import Counter
 from typing import List, Tuple
-from core.memory_store import MemoryChunk
+from core.storage import MemoryChunk
 
 
 class TfIdfIndex:

@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional, Type
 
-from tools.base import BaseTool
+from tools.base import BaseTool, BaseModel
 from tools.models import ToolResult
 from core.todo import TodoManager, TodoStatus
+
+
+class TodoWriteArgs(BaseModel):
+    action: str = ""
+    items: Optional[list[str]] = None
+    item_id: Optional[int] = None
+    status: Optional[str] = None
+    verification_note: Optional[str] = None
 
 
 class TodoWriteTool(BaseTool):
@@ -25,6 +33,10 @@ class TodoWriteTool(BaseTool):
 
     def __init__(self, todo_manager: TodoManager):
         self._manager = todo_manager
+
+    @property
+    def args_schema(self) -> Optional[Type[BaseModel]]:
+        return TodoWriteArgs
 
     def execute(self, **kwargs: Any) -> ToolResult:
         action = kwargs.get("action")

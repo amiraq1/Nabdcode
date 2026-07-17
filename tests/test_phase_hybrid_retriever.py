@@ -1,10 +1,11 @@
 # tests/test_phase_hybrid_retriever.py
 from pathlib import Path
+from tools.models import ToolResult
 
 
 def test_memory_store_append_and_load(tmp_path):
     """MemoryStore persists chunks to JSONL"""
-    from core.memory_store import MemoryStore
+    from core.storage import MemoryStore
     store = MemoryStore(tmp_path / "mem.jsonl")
     chunk = store.add("test memory", {"type": "note"})
     assert chunk.id.startswith("mem_")
@@ -19,7 +20,7 @@ def test_memory_store_append_and_load(tmp_path):
 def test_tfidf_index_basic_search():
     """TfIdfIndex returns relevant results"""
     from core.semantic_index import TfIdfIndex
-    from core.memory_store import MemoryChunk
+    from core.storage import MemoryChunk
 
     index = TfIdfIndex()
     chunks = [
@@ -37,7 +38,7 @@ def test_tfidf_index_basic_search():
 def test_hybrid_retriever_semantic_boost(tmp_path):
     """Hybrid search combines semantic + keyword"""
     from core.hybrid_retriever import HybridRetriever
-    from core.memory_store import MemoryStore
+    from core.storage import MemoryStore
 
     store = MemoryStore(tmp_path / "mem.jsonl")
     store.add("python async programming tutorial")
@@ -54,9 +55,9 @@ def test_hybrid_retriever_semantic_boost(tmp_path):
 def test_hybrid_time_decay(tmp_path):
     """Recent memories rank higher than old ones"""
     from core.hybrid_retriever import HybridRetriever
-    from core.memory_store import MemoryStore
+    from core.storage import MemoryStore
     from unittest.mock import patch
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     store = MemoryStore(tmp_path / "mem.jsonl")
     old_chunk = store.add("old python note")
@@ -64,7 +65,8 @@ def test_hybrid_time_decay(tmp_path):
 
     # Mock timestamps
     with patch("core.hybrid_retriever.datetime") as mock_dt:
-        mock_dt.utcnow.return_value = datetime(2025, 1, 2)
+        mock_dt.now.return_value = datetime(2025, 1, 2, tzinfo=timezone.utc)
+        mock_dt.utcnow.return_value = datetime(2025, 1, 2, tzinfo=timezone.utc)
         mock_dt.fromisoformat.side_effect = lambda x: datetime.fromisoformat(x)
         retriever = HybridRetriever(store)
         results = retriever.search("python", top_k=2)
@@ -74,15 +76,14 @@ def test_hybrid_time_decay(tmp_path):
 
 
 def test_search_memory_tool_interface(tmp_path):
-    """SearchMemoryTool returns correct schema"""
+    """SearchMemoryTool returns correct ToolResult"""
     from tools.search_memory import SearchMemoryTool
 
     tool = SearchMemoryTool(tmp_path / "test_mem")
-    result = tool("python", top_k=3)
-    assert "tool" in result
-    assert result["tool"] == "search_memory"
-    assert "results" in result
-    assert isinstance(result["results"], list)
+    result = tool.execute(query="python", limit=3)
+    assert isinstance(result, ToolResult)
+    assert result.success
+    assert "python" in (result.stdout or "")
 
 
 def test_search_memory_empty_store(tmp_path):
@@ -90,15 +91,15 @@ def test_search_memory_empty_store(tmp_path):
     from tools.search_memory import SearchMemoryTool
 
     tool = SearchMemoryTool(tmp_path / "empty_mem")
-    result = tool("anything")
-    assert result["results"] == []
-    assert result["total_chunks"] == 0
+    result = tool.execute(query="anything")
+    assert isinstance(result, ToolResult)
+    assert "No memories" in (result.stdout or "")
 
 
 def test_hybrid_add_memory_updates_index(tmp_path):
     """Adding new memory updates retriever index"""
     from core.hybrid_retriever import HybridRetriever
-    from core.memory_store import MemoryStore
+    from core.storage import MemoryStore
 
     store = MemoryStore(tmp_path / "mem2.jsonl")
     retriever = HybridRetriever(store)

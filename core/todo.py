@@ -37,6 +37,11 @@ class TodoManager:
         """Push the current plan to the injected UI bridge (no-op if unset)."""
         get_bridge().on_plan_updated([item.to_dict() for item in self._items])
 
+    def clear(self) -> None:
+        """مسح كافة المهام وإعادة التهيئة."""
+        self._items.clear()
+        self._emit()
+
     def set_plan(self, texts: List[str]) -> List[TodoItem]:
         """يستبدل القائمة الحالية بخطة جديدة كاملة."""
         self._items = [

@@ -13,9 +13,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from tools.base import BaseTool
+from tools.base import BaseTool, BaseModel, Field
 from tools.shell import ShellTool
 from tools.models import ToolResult
+
+
+class MonitorArgs(BaseModel):
+    """Arguments for the termux_monitor tool.
+
+    Currently parameterless (the tool reports a fixed memory/disk snapshot),
+    but a schema is declared for engine self-validation and LLM-readable
+    introspection. ``unit`` is accepted for forward-compatibility and ignored.
+    """
+    unit: str = Field(
+        "mb",
+        description="Display unit hint for memory (currently informational only).",
+    )
 
 
 class TermuxMonitorTool(BaseTool):
@@ -27,6 +40,10 @@ class TermuxMonitorTool(BaseTool):
         "(free -m) and disk usage (df -h). Use for 'how much memory/disk is "
         "free', resource checks, or before heavy operations."
     )
+
+    @property
+    def args_schema(self) -> Any:
+        return MonitorArgs
 
     def _run_shell(self, command: str) -> str:
         """Execute a command via the hardened execute_shell tool; return stdout."""

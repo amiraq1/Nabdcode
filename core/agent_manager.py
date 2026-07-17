@@ -8,7 +8,6 @@ from core.memory_manager import PersistentMemory
 from tools.secure_tools import (
     SecureWorkspaceReader,
     SecureGitInspector,
-    SecureTestRunner,
     SecureSemanticMemoryTool,
     SecureFileSystemTool,
     SecureShellTool,
@@ -18,21 +17,7 @@ from tools.secure_tools import (
 from core.llm import get_secure_model
 from core.parser import pin_workspace_root
 from core.repo_scanner import SECURE_REPO_SCANNER
-
-
-class _KernelSecurityEngine:
-    """Adapter wrapping core.security.validate into SecurityEngineProtocol.
-
-    Injected into SecureShellTool at construction time so the tools layer
-    receives the real kernel security engine directly — never the lazy
-    fallback — breaking the circular-import cycle permanently (Phase 3 DI).
-    """
-
-    __slots__ = ()
-
-    def validate(self, command: str) -> tuple[bool, str]:
-        from core.security import validate
-        return validate(command)
+from core.adapters import _KernelSecurityEngine
 
 
 # ── Phase 1: Spatial Awareness & Persona Injection (OpenCode DNA port) ──
