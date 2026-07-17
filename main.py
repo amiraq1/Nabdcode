@@ -10,7 +10,10 @@ import os
 import sys
 
 from typing import Any
+from pathlib import Path
 from core.utils import safe_strip
+from core.kernel.security import get_workspace_root
+from engine.deep_agent import CHECKPOINT_FILENAME
 
 
 # ── Tool output summariser ─────────────────────────────────────────────────
@@ -224,23 +227,21 @@ def wire_events(ctx: AppContext) -> dict:
 
     def _on_loop_completed(p: dict) -> None:
         # The engine terminated the turn (connection_lost / budget_exhausted /
-        # goal_not_met / etc.). Surface the reason to the user instead of
-        # returning silently to the prompt — otherwise a fully exhausted
-        # provider chain leaves the user staring at a blinking cursor with no
-        # explanation of why the agent went mute.
+        # goal_not_met / etc.). Surface the reason/error to the user instead of
+        # returning silently to the prompt.
         reason = p.get("reason", "completed")
         output = p.get("output", "")
         renderer.think_end()
-        if reason in ("connection_lost",) or not output:
-            renderer.error_badge(
-                "ENGINE",
-                output or f"Agent stopped: {reason}. Check network/OpenRouter key & credit.",
-            )
+        if reason in ("connection_lost",) or not output or isinstance(output, Exception):
+            err_msg = str(output) if output else f"Agent stopped: {reason}. Check network/OpenRouter key & credit."
+            renderer.error_badge("ENGINE", err_msg)
         else:
-            rendered = _extract_final_answer_text(output)
-            if rendered and safe_strip(rendered):
-                for line in str(rendered).splitlines():
-                    renderer.agent_text(line)
+            # ❌ الكود القديم الذي يسبب ظهور صندوقين (Double-Render): تم تعطيله لتصبح واجهة البنتو (repl_termux.py) المسؤول الأوحد عن رسم صندوق الإجابة النهائية
+            # rendered = _extract_final_answer_text(output)
+            # if rendered and safe_strip(rendered):
+            #     for line in str(rendered).splitlines():
+            #         renderer.agent_text(line)
+            pass
         renderer.flush()
 
     def _on_provider_failover(p: dict) -> None:
@@ -529,10 +530,19 @@ def main() -> None:
                     ctx.evidence_log.clear()
                 if hasattr(ctx.todo_manager, "clear"):
                     ctx.todo_manager.clear()
+                # ✅ الكود الجديد والآمن لتنظيف نقطة الحفظ (Checkpoint)
                 try:
-                    (get_workspace_root() / CHECKPOINT_FILENAME).unlink(missing_ok=True)
-                except Exception:
-                    pass
+                    # استخدام Path.cwd() كبديل آمن إذا لم تكن دالة get_workspace_root متوفرة
+                    workspace_dir = get_workspace_root() if 'get_workspace_root' in globals() else Path.cwd()
+                    checkpoint_file = workspace_dir / CHECKPOINT_FILENAME
+                    
+                    if checkpoint_file.exists():
+                        checkpoint_file.unlink()
+                        ctx.logger.info("Workspace checkpoint cleared.")
+                        
+                except Exception as e:
+                    # طباعة الخطأ في السجلات بدلاً من تجاهله بصمت
+                    ctx.logger.warning(f"Failed to unlink checkpoint: {e}")
                 sys.stdout.write("\n\033[92m✨ [System] Context and history have been cleared. Ready for a new task!\033[0m\n\n")
                 sys.stdout.flush()
                 continue
