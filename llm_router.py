@@ -119,6 +119,22 @@ class ProviderRouter:
                 return
             except Exception as e:
                 last = e
+                err_text = str(e) if str(e) else repr(e)
+                # 🚨 [الانسحاب التكتيكي]: إذا كان الخطأ بسبب الرصيد 402، نكسر الحلقة فوراً!
+                if "402" in err_text or "Insufficient credits" in err_text or "payment required" in err_text.lower():
+                    log_msg = "[LLM Router] 🚨 CRITICAL: OpenRouter credits depleted (HTTP 402). Halting cloud requests!"
+                    if logger is not None:
+                        logger.error(log_msg)
+                        flush = getattr(logger, "flush", None)
+                        if callable(flush):
+                            try:
+                                flush()
+                            except Exception:
+                                pass
+                    else:
+                        import logging as _logging
+                        _logging.error(log_msg)
+                    raise RuntimeError("Task aborted: OpenRouter credits depleted.") from e
                 rate = is_rate_limit(e)
                 nf = is_not_found(e)
                 p.record_failure(rate=rate, notfound=nf)
@@ -157,11 +173,12 @@ class ProviderRouter:
     def generate_response(self, m, logger=None, **kwargs):
         return "".join(self.generate_stream(m, logger=logger, **kwargs))
 
-base_model = os.getenv("OPENROUTER_MODEL", "tencent/hunyuan-3:free")
+base_model = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 FALLBACK_MODELS = [
-    "tencent/hunyuan-3:free",  # الحارس المجاني الجديد والمستقر حالياً
-    "google/gemini-2.5-flash:free",
-    "google/gemma-2-9b-it",
+    "google/gemini-2.5-flash",                # سريع جداً وممتاز للاستنتاج
+    "meta-llama/llama-3.1-8b-instruct:free",  # مستقر جداً للأوامر
+    "mistralai/mistral-nemo:free",            # خفيف وسريع
+    "microsoft/phi-3-mini-128k-instruct:free" # رائع للسياقات الطويلة
 ]
 FREE_FALLBACK = FALLBACK_MODELS
 

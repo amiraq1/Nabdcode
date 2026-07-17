@@ -138,6 +138,31 @@ def test_all_modules_compile():
         py_compile.compile(os.path.join(os.path.dirname(__file__), "..", f), doraise=True)
 
 
+def test_tactical_fast_fail_402():
+    """ProviderRouter must instantly halt on HTTP 402 without trying subsequent providers."""
+    from llm_router import ProviderRouter, ProviderState
+    import pytest
+
+    class MockClient402:
+        def generate_response(self, messages, **kwargs):
+            raise Exception("OpenRouter API error: 402 Insufficient credits")
+
+    class MockClientNext:
+        def generate_response(self, messages, **kwargs):
+            return "Should never be called"
+
+    p1 = ProviderState(name="OR-0", client=MockClient402(), priority=0)
+    p2 = ProviderState(name="OR-1", client=MockClientNext(), priority=1)
+    router = ProviderRouter([p1, p2], state_key="test_402")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        list(router.generate_stream([{"role": "user", "content": "hello"}]))
+
+    assert "OpenRouter credits depleted" in str(exc_info.value)
+    assert p1.failure_count == 0  # halted instantly before recording normal cooldown backoff
+    assert p2.failure_count == 0
+
+
 if __name__ == "__main__":
     test_chitchat_set_contains_greetings()
     test_chitchat_case_insensitive()
@@ -149,5 +174,6 @@ if __name__ == "__main__":
     test_deep_agent_has_verify_gate()
     test_deep_agent_design_decision_documented()
     test_verifier_error_not_in_evidence()
+    test_tactical_fast_fail_402()
     test_all_modules_compile()
     print("All Phase 5 tests passed.")
