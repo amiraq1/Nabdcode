@@ -30,11 +30,12 @@ from prompt_toolkit.history import FileHistory
 from core.ui_bridge import get_bridge
 from core.context_manager import RepositoryContextManager
 from core.permissions import ShellPermissions, PermissionEngine
-from engine.state import RuntimeState
+from core.kernel.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor, render_bento_badge
 from core.utils import safe_strip
+from ui.theme import nabd_theme, BOX_THOUGHT, BOX_EXECUTION, BOX_EVIDENCE, BOX_FINAL
 
-console = Console()
+console = Console(theme=nabd_theme)
 
 
 # Single source of truth for the always-on TODO view.
@@ -172,7 +173,7 @@ def _handle_permission_command(text: str, agent=None) -> bool:
 
 def _handle_goal_command(text: str, agent=None) -> Any:
     """Handle the /goal <desc> [|| <criteria>] command with rich panel feedback."""
-    from engine.state import parse_goal_command
+    from core.kernel.state import parse_goal_command
 
     spec = parse_goal_command(text)
     if spec is None:
@@ -202,7 +203,7 @@ def _handle_goal_command(text: str, agent=None) -> Any:
     panel_content.append("\n\n")
     panel_content.append("The agent won't report Success until criteria are proven.", style="italic dim")
 
-    console.print(Panel(panel_content, title="[bold cyan]Goal Active[/bold cyan]", border_style="cyan"))
+    console.print(Panel(panel_content, title="[bento.execution.title] 🎯 Goal Active [/bento.execution.title]", border_style="bento.execution.border", box=BOX_EXECUTION, padding=(1, 2)))
     return f"Goal set: {spec.raw_prompt}"
 
 
@@ -214,7 +215,7 @@ class REPL:
 
     def _handle_goal_command(self, cmd: str) -> Optional[str]:
         """Enhanced goal command with rich panel feedback"""
-        from engine.state import parse_goal_command
+        from core.kernel.state import parse_goal_command
         goal = parse_goal_command(cmd)
         if not goal:
             return None
@@ -238,7 +239,7 @@ class REPL:
         panel_content.append("\n\n")
         panel_content.append("The agent won't report Success until criteria are proven.", style="italic dim")
 
-        console.print(Panel(panel_content, title="[bold cyan]Goal Active[/bold cyan]", border_style="cyan"))
+        console.print(Panel(panel_content, title="[bento.execution.title] 🎯 Goal Active [/bento.execution.title]", border_style="bento.execution.border", box=BOX_EXECUTION, padding=(1, 2)))
         return f"Goal set: {goal.raw_prompt}"
 
     def _render_prompt_with_goal(self) -> str:
@@ -307,7 +308,7 @@ def _handle_skill_command(text: str, agent=None) -> bool:
         return True
 
     if getattr(skill, "goal", "") or getattr(skill, "success_criteria", ""):
-        from engine.state import GoalSpec
+        from core.kernel.state import GoalSpec
         g_prompt = getattr(skill, "goal", "") or getattr(skill, "description", "") or skill.name
         g_crit = getattr(skill, "success_criteria", "") or g_prompt
         state.active_goal = GoalSpec(raw_prompt=g_prompt, success_criteria=g_crit, is_met=False)
@@ -392,8 +393,15 @@ async def render_agent_events(kinetic=None) -> None:
             if compressor.session_thoughts:
                 last_id = next(reversed(compressor.session_thoughts))
                 raw = compressor.session_thoughts[last_id]
-                console.print("\n[#808080]── Thought Block ──[/]")
-                console.print(safe_strip(raw) or "(empty)")
+                console.print(
+                    Panel(
+                        safe_strip(raw) or "(empty)",
+                        title="[bento.thought.text]◈ Thought Process[/bento.thought.text]",
+                        border_style="bento.thought.border",
+                        box=BOX_THOUGHT,
+                        padding=(1, 2),
+                    )
+                )
         except Exception:
             pass
 
@@ -669,8 +677,10 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                         console.print(
                             Panel(
                                 Markdown(clean_resp),
-                                border_style="#2A9D8F",
-                                title="[#20B2AA]◈ Agent[/]",
+                                border_style="bento.final.border",
+                                box=BOX_FINAL,
+                                padding=(1, 2),
+                                title="[bento.final.title] ◈ Agent [/bento.final.title]",
                             )
                         )
 
@@ -822,7 +832,7 @@ class TerminalVisualizer:
         handoff_text.append("📋 Payload:\n", style="dim white")
         handoff_text.append(f"\"{payload}\"", style="italic dim")
 
-        panel = Panel(handoff_text, border_style="bold blue", title="[Agent Context Handoff]")
+        panel = Panel(handoff_text, border_style="bento.execution.border", box=BOX_EXECUTION, padding=(1, 2), title="[bento.execution.title] 🔄 Agent Context Handoff [/bento.execution.title]")
         console.print(panel)
 
     def on_tool_auth_violation(self, data: dict):
@@ -862,13 +872,12 @@ class TerminalVisualizer:
         current_text = ""
         panel = Panel(
             Markdown(current_text),
-            border_style="bold green",
-            box=ROUNDED,                         # حواف مستديرة ناعمة وفخمة
-            padding=(1, 2),                      # هوامش داخلية (أعلى/أسفل، وجانبين) مريحة جداً للعين
+            border_style="bento.final.border",
+            box=BOX_FINAL,
+            padding=(1, 2),
             width=safe_width,
-            title="[bold green]🌿 Nabd OS[/bold green]",
+            title="[bento.final.title] 🌿 Nabd OS [/bento.final.title]",
             subtitle="[dim]Task completed successfully[/dim]",
-            title_align="left",
             subtitle_align="right"
         )
 

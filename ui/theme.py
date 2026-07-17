@@ -2,6 +2,9 @@
 """Centralized Design System for Nabd OS."""
 
 from typing import Dict
+from rich.theme import Theme
+from rich.style import Style
+from rich import box
 
 # الألوان الأساسية للواجهة مستخرجة من صور نظام التصميم
 COLORS: Dict[str, str] = {
@@ -39,3 +42,39 @@ ACTION_COLORS: Dict[str, str] = {
     "USER": "#3ecf8e",        # --success
     "SYSTEM": "#9d8cff",      # --accent-violet
 }
+
+# 🎨 1. لوحة ألوان النيون (Neon Palette)
+NEON_CYAN = "bright_cyan"
+NEON_MAGENTA = "bright_magenta"
+NEON_LIME = "bright_green"
+MUTED_PURPLE = "medium_purple4"
+SILVER_TEXT = "grey82"
+
+# 📐 2. أنماط الإطارات (Bento Box Borders)
+BOX_THOUGHT = box.ROUNDED
+BOX_EXECUTION = box.HEAVY_EDGE
+BOX_EVIDENCE = box.MINIMAL_DOUBLE_HEAD
+BOX_FINAL = box.DOUBLE
+
+# 🎭 3. قاموس الأنماط المركزي (Rich Theme)
+nabd_theme = Theme({
+    # منطقة التفكير (The Thought Box)
+    "bento.thought.border": Style(color=MUTED_PURPLE, dim=True),
+    "bento.thought.text": Style(color=SILVER_TEXT, italic=True),
+    
+    # منطقة التنفيذ (The Execution Box)
+    "bento.execution.border": Style(color=NEON_CYAN, bold=True),
+    "bento.execution.title": Style(color=NEON_CYAN, bold=True, reverse=True),
+    
+    # منطقة الأدلة (The Evidence Box)
+    "bento.evidence.border": Style(color=NEON_MAGENTA),
+    "bento.evidence.title": Style(color=NEON_MAGENTA, bold=True),
+    
+    # منطقة الإجابة النهائية (The Crown Jewel)
+    "bento.final.border": Style(color=NEON_LIME, bold=True),
+    "bento.final.title": Style(color="black", bgcolor=NEON_LIME, bold=True),
+    
+    # ألوان أساسية للمحرك
+    "system.warning": Style(color="bright_yellow", bold=True),
+    "system.error": Style(color="bright_red", bold=True),
+})
