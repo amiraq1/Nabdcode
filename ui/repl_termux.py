@@ -33,9 +33,19 @@ from core.permissions import ShellPermissions, PermissionEngine
 from core.kernel.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor, render_bento_badge
 from core.utils import safe_strip
-from ui.theme import nabd_theme, BOX_THOUGHT, BOX_EXECUTION, BOX_EVIDENCE, BOX_FINAL
+from ui.theme import (
+    nabd_theme,
+    BOX_THOUGHT,
+    BOX_EXECUTION,
+    BOX_EVIDENCE,
+    BOX_FINAL,
+    PALETTE,
+    PANEL_STYLES,
+    CUSTOM_THEME,
+    PROMPT_STYLE,
+)
 
-console = Console(theme=nabd_theme)
+console = Console(theme=CUSTOM_THEME)
 
 
 # Single source of truth for the always-on TODO view.
@@ -549,9 +559,9 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 term_width = shutil.get_terminal_size().columns - 1
                 hr_style = _hr_line(term_width)
 
-                # The top border and the prompt chevron
+                # The top border and the multi-line cyberpunk prompt
                 render_todo_block()
-                prompt_message = HTML(f"{hr_style}\n<b><style color='#ffffff'>❯</style></b> ")
+                prompt_message = HTML(f"{hr_style}\n<style fg='#00ff9d' bold='true'>╭─ Ammar@NabdOS ~ </style>\n<style fg='#00fff7' bold='true'>╰─❯ </style>")
                 # Render the prompt without the buggy bottom_toolbar
                 user_input = await session.prompt_async(
                     prompt_message,
@@ -769,47 +779,86 @@ class TerminalVisualizer:
             self.event_bus._final_answer_rendered = False
         self._register_listeners()
 
-    def _register_listeners(self):
-        """ربط الأحداث بالدالات البصرية المناسبة لها مع دعم دالتي on و subscribe"""
+    def _subscribe_with_fallback(self, event_name, handler):
+        """Wrap handler with try/except to prevent subscriber crashes."""
+        def safe_handler(data):
+            try:
+                handler(data)
+            except Exception as e:
+                try:
+                    console.print(
+                        Panel(
+                            f"[red]Subscriber error for {event_name}: {e}[/red]",
+                            title="[bold red]EVENTBUS ERROR[/bold red]",
+                            border_style="red"
+                        )
+                    )
+                except Exception:
+                    pass
         register_fn = getattr(self.event_bus, "on", None) or getattr(self.event_bus, "subscribe", None)
         if register_fn:
-            self.event_bus._on_tool_completed_active = True
-            register_fn("tool_started", self.on_tool_started)
-            register_fn("tool_completed", self.on_tool_completed)
-            register_fn("agent_handoff", self.on_agent_handoff)
-            register_fn("tool_auth_violation", self.on_tool_auth_violation)
-            register_fn("show_final_answer", self.on_final_answer)
+            register_fn(event_name, safe_handler)
+
+    def _register_listeners(self):
+        """ربط الأحداث بالدالات البصرية المناسبة لها مع دعم دالتي on و subscribe وتحصين المشتركين ضد الانهيار"""
+        if not self.event_bus:
+            return
+        self.event_bus._on_tool_completed_active = True
+        self._subscribe_with_fallback("tool_started", self.on_tool_started)
+        self._subscribe_with_fallback("tool_completed", self.on_tool_completed)
+        self._subscribe_with_fallback("agent_handoff", self.on_agent_handoff)
+        self._subscribe_with_fallback("tool_auth_violation", self.on_tool_auth_violation)
+        self._subscribe_with_fallback("show_final_answer", self.on_final_answer)
+        self._subscribe_with_fallback("loop_completed", self.on_loop_completed)
 
     def on_tool_started(self, data: dict):
-        """إظهار سبينر متحرك عند بدء تشغيل أي أداة بناءً على دور الوكيل"""
+        """إظهار لوحة بدء الأداة مع سبينر متحرك عند بدء تشغيل أي أداة بناءً على دور الوكيل"""
         try:
             self.stop()  # إيقاف أي سياق عرض نشط أولاً
 
             role = data.get("role", "ORCHESTRATOR")
-            # The engine emits "tool" consistently (see engine/dispatcher.py).
-            tool_name = data.get("tool") or "tool"
+            tool_name = data.get("tool") or data.get("tool_name") or "tool"
 
             # اختيار لون السبينر حسب قبعة الوكيل الحالي
             color = "cyan" if role == "ORCHESTRATOR" else "green" if role == "CODER" else "yellow"
 
-            spinner = Spinner("dots", text=Text(f" [{role}] Running tool: {tool_name}...", style=f"bold {color}"))
+            # لوحة بدء الأداة
+            panel = Panel(
+                Text(f"Executing: {tool_name} [{role}]", style="neon_cyan"),
+                **PANEL_STYLES["tool_start"]
+            )
+            console.print(panel)
 
-            # تفعيل العرض الحي المتحرك في الطرفية بشكل مؤقت
+            spinner = Spinner("dots", text=Text(f" [{role}] Running tool: {tool_name}...", style=f"bold {color}"))
             self.live_context = Live(spinner, console=console, refresh_per_second=10, transient=True)
             self.live_context.start()
         except Exception as exc:
-            # Never let a UI rendering glitch crash the event bus / tool pipeline.
             try:
                 console.print(f"[dim red][UI] tool spinner unavailable: {exc}[/][/]")
             except Exception:
                 pass
 
     def on_tool_completed(self, data: dict):
-        """إيقاف السبينر وطباعة نتيجة الأداة بنجاح"""
+        """إيقاف السبينر وطباعة نتيجة الأداة داخل لوحة Panel محصنة"""
         try:
             self.stop()
-            tool_name = data.get("tool") or "?"
-            console.print(f"[bold green]✓[/bold green] Tool [bold white]{tool_name}[/] completed successfully.")
+            tool_name = data.get("tool") or data.get("tool_name") or "?"
+            raw_output = data.get("output", "")
+
+            # Safe string conversion
+            output_text = str(raw_output).strip() if raw_output is not None else ""
+            if not output_text:
+                output_text = "(empty result)"
+
+            # Truncate long outputs
+            if len(output_text) > 2000:
+                output_text = output_text[:2000] + "\n...[truncated by UI]"
+
+            panel = Panel(
+                Text(f"[{tool_name}]\n{output_text}", style="white"),
+                **PANEL_STYLES["tool_complete"]
+            )
+            console.print(panel)
         except Exception as exc:
             try:
                 console.print(f"[dim red][UI] tool completion render failed: {exc}[/][/]")
@@ -865,42 +914,77 @@ class TerminalVisualizer:
         if self.event_bus:
             self.event_bus._final_answer_rendered = True
 
-        # 1. حساب العرض الآمن والمناسب لشاشة الهاتف في Termux (نترك هامش 4 أحرف لمنع الالتصاق)
         safe_width = min(console.size.width - 4, 80)
 
-        # 2. تهيئة الإطار الفارغ مع التنسيقات المستديرة والهوامش الداخلية
         current_text = ""
         panel = Panel(
             Markdown(current_text),
-            border_style="bento.final.border",
+            border_style="neon_purple",
             box=BOX_FINAL,
             padding=(1, 2),
             width=safe_width,
-            title="[bento.final.title] 🌿 Nabd OS [/bento.final.title]",
+            title="[bold neon_purple]◆ FINAL ANSWER[/bold neon_purple]",
             subtitle="[dim]Task completed successfully[/dim]",
             subtitle_align="right"
         )
 
-        console.print("\n")  # سطر فارغ لتهوية الجزء العلوي قبل انبثاق اللوحة
+        console.print("\n")
 
-        # 3. تأثير التدفق التدريجي (Streaming Effect)
-        # نقوم بتقسيم النص إلى كلمات وطباعتها على دفعات خفيفة للحفاظ على جمالية الماركدوان والسرعة
         words = output.split(" ")
-        chunk_size = 3  # عدد الكلمات المطبوعة في كل نبضة
+        chunk_size = 3
 
         with Live(panel, console=console, auto_refresh=False) as live:
             for i in range(0, len(words), chunk_size):
                 chunk = " ".join(words[i:i + chunk_size])
                 current_text += (" " if current_text else "") + chunk
 
-                # تحديث عرض الماركدوان تدريجياً داخل لوحة العرض الحي
                 panel.renderable = Markdown(current_text)
                 live.update(panel, refresh=True)
-
-                # تأخير زمني بسيط بالملي ثانية ليحاكي سرعة الاستجابة الحية
                 time.sleep(0.04)
 
-        console.print("\n")  # سطر فارغ لتهوية الجزء السفلي بعد اكتمال اللوحة
+        console.print("\n")
+
+    def on_loop_completed(self, data: dict):
+        """Handle final answer or error from ExecutionLoop with Panel styling and resilience against VerifyError."""
+        try:
+            self.stop()
+            raw_response = data.get("response") if isinstance(data, dict) else data
+
+            # CRITICAL SAFEGUARD: Handle non-string payloads
+            if raw_response is None:
+                response_text = ""
+            elif isinstance(raw_response, Exception):
+                exc_type = type(raw_response).__name__
+                exc_msg = str(raw_response)
+                response_text = f"[{exc_type}] {exc_msg}"
+            else:
+                response_text = str(raw_response).strip()
+
+            if not response_text:
+                response_text = "(session completed — no response)"
+
+            # Choose panel style based on content or exception
+            if isinstance(raw_response, Exception) or "ERROR" in response_text.upper() or "EXCEPTION" in response_text.upper() or "VERIFYERROR" in response_text.upper():
+                style_key = "error"
+            elif "PARTIAL" in response_text.upper():
+                style_key = "warning"
+            else:
+                style_key = "final_answer"
+
+            # If show_final_answer already rendered normally, don't duplicate unless error or warning
+            if self.event_bus and getattr(self.event_bus, "_final_answer_rendered", False) and style_key == "final_answer":
+                return
+
+            panel = Panel(
+                Text(response_text, style="white"),
+                **PANEL_STYLES[style_key]
+            )
+            console.print(panel)
+        except Exception as exc:
+            try:
+                console.print(f"[bold red]✖ on_loop_completed render error: {exc}[/bold red]")
+            except Exception:
+                pass
 
     def stop(self):
         """🔒 إغلاق آمن لعرض الـ Live لمنع تعليق الطرفية"""

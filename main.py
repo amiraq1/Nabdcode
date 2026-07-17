@@ -504,7 +504,7 @@ def main() -> None:
         while True:
             try:
                 user_input = input_session.prompt(
-                    ANSI("\033[36m❯ \033[0m"),
+                    HTML('<style fg="#00ff9d" bold="true">╭─ Ammar@NabdOS ~ </style>\n<style fg="#00fff7" bold="true">╰─❯ </style>'),
                     bottom_toolbar=_bottom_toolbar,
                     placeholder=HTML('<style fg="#555">Ask your question...</style>'),
                 ).strip()
