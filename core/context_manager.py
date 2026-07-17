@@ -16,7 +16,7 @@ from core.parser import get_workspace_root
 
 
 def _now() -> str:
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _task_id_for(task: str) -> str:

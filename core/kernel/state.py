@@ -51,6 +51,7 @@ class GoalSpec:
     is_met: bool = False
     description: str = ""
     mode: str = "all"
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __post_init__(self):
         if not self.description and self.success_criteria:
@@ -65,6 +66,7 @@ class GoalSpec:
             "is_met": self.is_met,
             "description": self.description,
             "mode": self.mode,
+            "created_at": self.created_at.isoformat() if isinstance(self.created_at, datetime) else str(self.created_at),
         }
 
     @staticmethod
@@ -72,12 +74,23 @@ class GoalSpec:
         if not isinstance(data, dict):
             return GoalSpec()
         crit = data.get("success_criteria")
+        created_val = data.get("created_at")
+        if isinstance(created_val, str):
+            try:
+                created_at = datetime.fromisoformat(created_val)
+            except Exception:
+                created_at = datetime.now(timezone.utc)
+        elif isinstance(created_val, datetime):
+            created_at = created_val
+        else:
+            created_at = datetime.now(timezone.utc)
         return GoalSpec(
             raw_prompt=str(data.get("raw_prompt", "")),
             success_criteria=str(crit) if crit is not None and str(crit) != "None" else None,
             is_met=bool(data.get("is_met", False)),
             description=str(data.get("description", "")),
             mode=str(data.get("mode", "all")),
+            created_at=created_at,
         )
 
 
@@ -167,6 +180,7 @@ class RuntimeState:
     max_context_tokens: int = MAX_CONTEXT_TOKENS
     messages: List[Dict[str, str]] = field(default_factory=list)
     last_updated: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    start_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     active_goal: "GoalSpec | None" = None
     shell_permissions: "ShellPermissions" = field(default_factory=ShellPermissions)
     is_fallback_mode_active: bool = False
@@ -275,4 +289,5 @@ class RuntimeState:
                 "step_count": self.step_count,
                 "messages": list(self.messages),
                 "last_updated": self.last_updated,
+                "start_time": self.start_time.isoformat() if isinstance(self.start_time, datetime) else str(self.start_time),
             }

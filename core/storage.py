@@ -570,7 +570,7 @@ def load_memory() -> str:
 
 
 def write_lesson(problem: str, solution: str):
-    entry = f"\n## {datetime.now().date()} - درس مستفاد\n"
+    entry = f"\n## {datetime.now(timezone.utc).date()} - درس مستفاد\n"
     entry += f"**المشكلة:** {problem}\n"
     entry += f"**الحل:** {solution}\n"
 

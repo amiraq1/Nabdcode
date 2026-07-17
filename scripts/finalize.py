@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(".")
@@ -45,7 +45,7 @@ def update_agent_md() -> list[str]:
         ]
 
     new_section = (
-        f"\n## الدروس المستفادة تلقائيا {datetime.now().date()}\n"
+        f"\n## الدروس المستفادة تلقائيا {datetime.now(timezone.utc).date()}\n"
         + "\n".join(golden)
         + "\n"
     )
@@ -135,7 +135,7 @@ def generate_report(golden_rules: list[str]) -> None:
     status = count_tests()
     report = f"""# تقرير إنجاز المشروع النهائي - Smart Agent Multi-Agent System
 
-تاريخ التقرير: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+تاريخ التقرير: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")}
 
 ## 0. حالة الاختبارات
 {status}
