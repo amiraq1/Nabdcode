@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from setuptools import setup
+from setuptools import setup, find_packages
 
 
 def read_requirements() -> list:
@@ -79,6 +79,7 @@ setup(
         "Topic :: Terminals",
         "Topic :: Utilities",
     ],
-    py_modules=[],
-    # include_package_data=True,  # enable if you add package_data / MANIFEST.in
+    py_modules=["main", "llm_router", "nabd_logo", "vfs"],
+    packages=find_packages(include=["core*", "engine*", "tools*", "ui*"]),
+    include_package_data=True,
 )

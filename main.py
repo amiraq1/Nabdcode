@@ -324,7 +324,7 @@ def main() -> None:
     from prompt_toolkit.history import InMemoryHistory
     from prompt_toolkit.formatted_text import ANSI, HTML
 
-    from engine.state import RuntimeState
+    from core.kernel.state import RuntimeState
     from engine.loop import ExecutionLoop, ToolRequiredError
     from engine.events import bus
     from ui.repl_termux import TerminalVisualizer
@@ -474,6 +474,31 @@ def main() -> None:
 
     # Flush any setup output before first prompt
     ctx.renderer.flush()
+
+    # Check for CLI one-shot query execution (e.g. `nabdcode "check my files"`)
+    positional_queries = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
+    if positional_queries:
+        one_shot_query = " ".join(positional_queries)
+        state.reset_step_count()
+        engine = ExecutionLoop(
+            state=state,
+            max_output_len=ctx.config.max_output,
+            evidence_log=ctx.evidence_log,
+            logger=ctx.logger,
+        )
+        try:
+            engine.run(one_shot_query)
+        except ToolRequiredError as exc:
+            _cleanup_after_streamed_failure(state, ctx, exc)
+        except Exception as exc:
+            ctx.logger.error(f"Execution failed: {exc}")
+        finally:
+            ctx.session_manager.messages = state.get_messages()
+            ctx.session_manager.todos = ctx.todo_manager.to_serializable()
+            ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
+            ctx.session_manager.save()
+            visualizer.stop()
+        sys.exit(0)
 
     try:
         while True:

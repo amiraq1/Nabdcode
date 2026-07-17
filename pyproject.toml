@@ -2,6 +2,25 @@
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "nabd-os"
+version = "1.0.0"
+description = "Local AI Agent OS & TUI specialized for Termux and Edge Devices"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "prompt_toolkit>=3.0.0",
+    "rich>=13.0.0",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+nabdcode = "main:main"
+
+[tool.setuptools]
+py-modules = ["main", "llm_router", "nabd_logo", "vfs"]
+packages = ["core", "engine", "tools", "ui"]
+
 [tool.black]
 line-length = 88
 target-version = ["py310"]
