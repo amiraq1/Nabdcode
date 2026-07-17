@@ -9,6 +9,9 @@ import json
 import os
 import sys
 
+from typing import Any
+from core.utils import safe_strip
+
 
 # ── Tool output summariser ─────────────────────────────────────────────────
 
@@ -20,8 +23,8 @@ def _summarise_tool(tool: str, args: dict, result) -> tuple[str, str, str]:
     """
     if tool == "execute_shell":
         cmd = (args.get("command") or "")[:60]
-        out = (getattr(result, "stdout", "") or "").strip()
-        err = (getattr(result, "stderr", "") or "").strip()
+        out = safe_strip(getattr(result, "stdout", ""))
+        err = safe_strip(getattr(result, "stderr", ""))
         if getattr(result, "success", False):
             lines = len(out.splitlines()) if out else 0
             return ("EXEC", f"{cmd} ({lines} lines)", "cyan")
@@ -34,7 +37,7 @@ def _summarise_tool(tool: str, args: dict, result) -> tuple[str, str, str]:
         path = str(args.get("path", ""))
         if getattr(result, "success", False):
             if action in ("read", "list"):
-                out = (getattr(result, "stdout", "") or "").strip()
+                out = safe_strip(getattr(result, "stdout", ""))
                 return ("READ", f"{path} ({len(out)} chars)", "cyan")
             elif action == "write":
                 return ("WRITE", f"{path} updated", "green")
@@ -49,7 +52,7 @@ def _summarise_tool(tool: str, args: dict, result) -> tuple[str, str, str]:
     if tool == "web_search":
         query = str(args.get("query", ""))[:40]
         if getattr(result, "success", False):
-            out = (getattr(result, "stdout", "") or "").strip()
+            out = safe_strip(getattr(result, "stdout", ""))
             count = out.count("[")
             return ("SEARCH", f'"{query}" ({count} results)', "cyan")
         return ("SEARCH", f'"{query}" — failed', "red")
@@ -57,7 +60,7 @@ def _summarise_tool(tool: str, args: dict, result) -> tuple[str, str, str]:
     if tool == "search_memory":
         query = str(args.get("query", ""))[:40]
         if getattr(result, "success", False):
-            out = (getattr(result, "stdout", "") or "").strip()
+            out = safe_strip(getattr(result, "stdout", ""))
             count = out.count("[") if "[" in out else (1 if out else 0)
             return ("MEMORY", f'"{query}" ({count} hits)', "cyan")
         return ("MEMORY", f'"{query}" — failed', "red")
@@ -65,7 +68,7 @@ def _summarise_tool(tool: str, args: dict, result) -> tuple[str, str, str]:
     return ("TOOL", tool, "cyan")
 
 
-def _extract_final_answer_text(raw: str) -> str:
+def _extract_final_answer_text(raw: Any) -> str:
     """UI-layer helper: unwrap a final_answer tool call into clean text.
 
     When the ExecutionLoop terminates via the smolagents ``final_answer``
@@ -79,22 +82,24 @@ def _extract_final_answer_text(raw: str) -> str:
     also falls back to the original text — this never mutates core state or
     raises, keeping it safe for the rendering path only.
     """
-    if not isinstance(raw, str) or not raw.strip():
-        return raw
+    if not raw or not safe_strip(raw):
+        return raw if isinstance(raw, str) else (str(raw) if raw is not None else "")
+    if not isinstance(raw, (str, bytes, bytearray)):
+        return str(raw)
     try:
         payload = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return raw
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return raw if isinstance(raw, str) else str(raw)
     if not isinstance(payload, dict):
-        return raw
+        return raw if isinstance(raw, str) else str(raw)
     if payload.get("tool") != "final_answer":
-        return raw
+        return raw if isinstance(raw, str) else str(raw)
     args = payload.get("args")
     if not isinstance(args, dict):
-        return raw
+        return raw if isinstance(raw, str) else str(raw)
     answer = args.get("answer")
     if not isinstance(answer, str):
-        return raw
+        return raw if isinstance(raw, str) else str(raw)
     return answer
 
 
@@ -233,8 +238,8 @@ def wire_events(ctx: AppContext) -> dict:
             )
         else:
             rendered = _extract_final_answer_text(output)
-            if rendered and rendered.strip():
-                for line in rendered.splitlines():
+            if rendered and safe_strip(rendered):
+                for line in str(rendered).splitlines():
                     renderer.agent_text(line)
         renderer.flush()
 
