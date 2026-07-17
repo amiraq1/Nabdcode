@@ -17,7 +17,7 @@ def get_git_repository_name():
     return "Local Workspace"
 
 
-def draw(model_name="Llama-3.1-70B"):
+def draw(model_name="ORCA-FLASH"):
     # تقسيم أسطر الشعار لتلوين كل سطر بشكل مستقل
     logo_lines = [
         "█▄ █ ▄▀█ █▄▀ █▀▄ █▀▀ █▀█ █▀▄ █▀▀",  # السطر العلوي

@@ -15,7 +15,7 @@ import core._env  # auto-load .env variables
 
 logger = logging.getLogger("nabd.llm")
 
-DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-2-9b-it")
+DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash-free")
 
 
 # ── Provider configuration ─────────────────────────────────────────────────

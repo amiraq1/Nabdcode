@@ -364,7 +364,7 @@ class ExecutionLoop:
         # resolved model (e.g. the router); defaults to the env-configured model
         # so existing callers that omit it still get a meaningful identifier.
         self.model_identifier = model_identifier or os.getenv(
-            "OPENROUTER_MODEL", "google/gemma-2-9b-it"
+            "OPENROUTER_MODEL", "deepseek/deepseek-v4-flash-free"
         )
         # Phase5 (GoalSpec): an explicit, verifiable session objective. It may
         # be injected here, or set earlier on state.active_goal via ``/goal``.

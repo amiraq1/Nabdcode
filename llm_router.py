@@ -124,11 +124,20 @@ class ProviderRouter:
             except Exception as e:
                 last = e
                 err_text = str(e) if str(e) else repr(e)
-                # 🚨 [الانسحاب التكتيكي]: إذا كان الخطأ بسبب الرصيد 402، نكسر الحلقة فوراً!
+                # 🚨 [الانسحاب التكتيكي والتوجيه الذكي]: عند انتهاء الرصيد 402، نعطل سلسلة المزود الحالي وننتقل فوراً للبدائل (DeepSeek/NVIDIA)
                 if "402" in err_text or "Insufficient credits" in err_text or "payment required" in err_text.lower():
-                    log_msg = "[LLM Router] 🚨 CRITICAL: OpenRouter credits depleted (HTTP 402). Halting cloud requests!"
+                    is_openrouter = p.name.startswith("OR-") or "openrouter" in p.name.lower()
+                    is_orca = p.name.startswith("ORCA") or "orca" in p.name.lower()
+                    
+                    for op in self.providers:
+                        if is_openrouter and (op.name.startswith("OR-") or "openrouter" in op.name.lower()):
+                            op.enabled = False
+                        elif is_orca and (op.name.startswith("ORCA") or "orca" in op.name.lower()):
+                            op.enabled = False
+                    
+                    log_msg = f"[LLM Router] ⚠️ Credits depleted (HTTP 402) on provider '{p.name}'. Disabling depleted chain and transitioning to next fallback..."
                     if logger is not None:
-                        logger.error(log_msg)
+                        logger.warning(log_msg)
                         flush = getattr(logger, "flush", None)
                         if callable(flush):
                             try:
@@ -137,7 +146,10 @@ class ProviderRouter:
                                 pass
                     else:
                         import logging as _logging
-                        _logging.error(log_msg)
+                        _logging.warning(log_msg)
+                    
+                    if any(op.is_available() for op in self.providers):
+                        continue
                     raise RuntimeError("Task aborted: OpenRouter credits depleted.") from e
                 rate = is_rate_limit(e)
                 nf = is_not_found(e)
@@ -177,7 +189,7 @@ class ProviderRouter:
     def generate_response(self, m, logger=None, **kwargs):
         return "".join(self.generate_stream(m, logger=logger, **kwargs))
 
-base_model = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+base_model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash-free")
 FALLBACK_MODELS = [
     "deepseek/deepseek-v4-flash-free",        # فلاش مجاني وسريع جداً من Orca/OpenRouter
     "deepseek/deepseek-v4-pro-free",          # برو مجاني عالي الدقة من Orca/OpenRouter
@@ -195,19 +207,19 @@ def handle_provider_fallback(exception_error: Exception) -> str:
     return current_fallback
 
 providers = []
-# 1. Primary base model
-try:
-    providers.append(ProviderState(name="OR-0", client=OpenRouterClient(model=base_model), priority=0))
-except Exception:
-    pass
-
-# 2. OrcaRouter primary DeepSeek models
+# 1. Vanguard: OrcaRouter DeepSeek models (#1 & #2)
 if OrcaRouterClient:
     try:
-        providers.append(ProviderState(name="ORCA-FLASH", client=OrcaRouterClient(model="deepseek/deepseek-v4-flash-free"), priority=1))
-        providers.append(ProviderState(name="ORCA-PRO", client=OrcaRouterClient(model="deepseek/deepseek-v4-pro-free"), priority=2))
+        providers.append(ProviderState(name="ORCA-FLASH", client=OrcaRouterClient(model="deepseek/deepseek-v4-flash-free"), priority=0))
+        providers.append(ProviderState(name="ORCA-PRO", client=OrcaRouterClient(model="deepseek/deepseek-v4-pro-free"), priority=1))
     except Exception:
         pass
+
+# 2. OpenRouter primary base model
+try:
+    providers.append(ProviderState(name="OR-0", client=OpenRouterClient(model=base_model), priority=2))
+except Exception:
+    pass
 
 # 3. NVIDIA fallback
 if NvidiaClient:
