@@ -27,7 +27,7 @@ from core.permissions import PermissionEngine, PermissionDecision
 from core.parser import extract_command, extract_json_from_response, validate_tool_call, ToolCall, TOOL_SCHEMAS
 from tools.models import ToolResult
 from core.security import is_safe_command
-from core.utils import truncate
+from core.utils import truncate, safe_strip
 from pathlib import Path
 from core.evidence import EvidenceLog, VerifierError
 from core.constants import is_chitchat
@@ -605,7 +605,8 @@ class ExecutionLoop:
         if elapsed_total > MAX_BUDGET_SECONDS or token_est > MAX_BUDGET_TOKENS or not self.state.is_loop_safe():
             if not self._maybe_force_partial_answer(force_cap=True):
                 self.state.update_status("COMPLETED")
-                if not getattr(self, "_last_response", "") or not self._last_response.strip():
+                last_resp = getattr(self, "_last_response", "")
+                if not last_resp or not safe_strip(last_resp):
                     safe_msg = self._safe_shutdown(
                         ctx.user_prompt,
                         f"Budget Ceiling: time={int(elapsed_total)}s tokens~{token_est}",
@@ -1760,7 +1761,7 @@ class ExecutionLoop:
         if not force_cap and not is_budget and not is_cap:
             return False
         # Already terminating with a real answer — don't double-emit.
-        if getattr(self, "_last_response", "") and self._last_response.strip():
+        if getattr(self, "_last_response", "") and safe_strip(getattr(self, "_last_response", "")):
             return False
 
         # Build a partial summary from the most-recent successful evidence.

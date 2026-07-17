@@ -32,6 +32,7 @@ from core.context_manager import RepositoryContextManager
 from core.permissions import ShellPermissions, PermissionEngine
 from engine.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor, render_bento_badge
+from core.utils import safe_strip
 
 console = Console()
 
@@ -392,7 +393,7 @@ async def render_agent_events(kinetic=None) -> None:
                 last_id = next(reversed(compressor.session_thoughts))
                 raw = compressor.session_thoughts[last_id]
                 console.print("\n[#808080]── Thought Block ──[/]")
-                console.print(raw.strip() or "(empty)")
+                console.print(safe_strip(raw) or "(empty)")
         except Exception:
             pass
 
@@ -446,7 +447,7 @@ async def render_agent_events(kinetic=None) -> None:
                 console.print(badge)
             elif event_type == "tool_end":
                 # Avoid redundant double printing if TermuxBridgeUI on_tool_completed handles completion.
-                summary = str(event.get("summary", "")).strip()
+                summary = safe_strip(event.get("summary", ""))
                 if summary and not summary.startswith("✓ Tool") and not getattr(bridge, "_on_tool_completed_active", False):
                     console.print(f"   [dim]↳ {summary}[/dim]")
             elif event_type == "token":
@@ -505,7 +506,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
             last_id = next(reversed(thought_compressor.session_thoughts))
             raw = thought_compressor.session_thoughts[last_id]
             console.print("\n[#808080]── Thought Block ──[/]")
-            console.print(raw.strip() or "(empty)")
+            console.print(safe_strip(raw) or "(empty)")
 
     session = PromptSession(style=cyberpunk_style, history=FileHistory(HISTORY_FILE), key_bindings=bindings)
 
@@ -549,7 +550,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     placeholder="Ask your question..."
                 )
 
-                text = user_input.strip()
+                text = safe_strip(user_input)
 
                 if text.lower() in ["exit", "quit"]:
                     console.print("[bold red]Exiting Nabd Agent OS cleanly...[/bold red]")
@@ -716,7 +717,7 @@ def extract_clean_answer(raw_text: Any) -> str:
                 return str(sub["answer"])
         return str(raw_text)
 
-    text = str(raw_text).strip()
+    text = safe_strip(raw_text)
     if not text:
         return ""
 

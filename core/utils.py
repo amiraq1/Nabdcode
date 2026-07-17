@@ -212,3 +212,11 @@ def truncate(text: str, max_len: int = 2000) -> str:
     if not text or len(text) <= max_len:
         return text
     return text[:max_len] + f"\n... [Truncated to {max_len} characters]"
+
+
+def safe_strip(value: Any, default: str = "") -> str:
+    """Safely convert value to string and strip whitespace."""
+    if value is None:
+        return default
+    text = str(value)
+    return text.strip()

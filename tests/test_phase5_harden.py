@@ -209,6 +209,26 @@ def test_evidence_feedback_loop_soft_interception():
     assert any("[EVIDENCE REJECTED]" in m.get("content", "") and m.get("role") == "user" for m in messages)
 
 
+def test_safe_strip_and_last_response_safety():
+    """Verify safe_strip handles None, exceptions, and non-strings without crashing."""
+    from core.utils import safe_strip
+    from engine.loop import ExecutionLoop
+    from core.kernel.state import RuntimeState
+
+    assert safe_strip(None, default="fallback") == "fallback"
+    assert safe_strip("   hello world   ") == "hello world"
+    assert safe_strip(RuntimeError("test error")) == "test error"
+    assert safe_strip(42) == "42"
+
+    state = RuntimeState(session_id="test_safe_strip")
+    loop = ExecutionLoop(state=state)
+    from engine.loop import _LoopCtx
+    loop._ctx = _LoopCtx(user_prompt="test")
+    loop._last_response = RuntimeError("An unexpected error occurred")
+    # Verify _maybe_force_partial_answer checks safe_strip without AttributeError on .strip()
+    assert not loop._maybe_force_partial_answer()
+
+
 if __name__ == "__main__":
     test_chitchat_set_contains_greetings()
     test_chitchat_case_insensitive()
@@ -223,5 +243,6 @@ if __name__ == "__main__":
     test_tactical_fast_fail_402()
     test_fixation_breaker_soft_interception()
     test_evidence_feedback_loop_soft_interception()
+    test_safe_strip_and_last_response_safety()
     test_all_modules_compile()
     print("All Phase 5 tests passed.")

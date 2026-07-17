@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Final, Optional, Tuple
 
 from core.sanitize import sanitize
+from core.utils import safe_strip
 
 # ── Workspace root — delegated to core.kernel.security (single source of truth)
 from core.kernel.security import (  # noqa: F401
@@ -275,7 +276,7 @@ def _parse_action_json(text: str, registry: Any) -> ToolCall | None:
     """
     m_fence = _ACTION_FENCE_RE.search(text)
     if m_fence:
-        candidate = m_fence.group(1).strip()
+        candidate = safe_strip(m_fence.group(1))
         try:
             payload = json.loads(candidate)
             res = _validate_payload(payload, registry)
@@ -320,7 +321,7 @@ TOOL_NAMES_IN_CODE: Final[tuple[str, ...]] = (
 
 
 def _is_hallucinated_python_tool_call(cmd: str) -> bool:
-    c = cmd.strip()
+    c = safe_strip(cmd)
     if not c.startswith("python "):
         return False
     if "import " in c and "(" in c and ")" in c:
@@ -334,7 +335,7 @@ def _parse_bash(text: str, registry: Any) -> ToolCall | None:
     match = BASH_PATTERN.search(text)
     if not match:
         return None
-    candidate = match.group(1).strip()
+    candidate = safe_strip(match.group(1))
     if not candidate or _is_hallucinated_python_tool_call(candidate):
         return None
     payload = {"tool": "execute_shell", "args": {"command": candidate}}
@@ -360,7 +361,7 @@ def extract_first_json_object(text: str) -> str | None:
         return None
     m = _FORGIVING_JSON_FENCE.search(text)
     if m:
-        return m.group(1).strip()
+        return safe_strip(m.group(1))
     start = text.find("{")
     while start != -1:
         depth = 0
@@ -382,7 +383,7 @@ def extract_legacy_shell(text: str) -> dict[str, Any] | None:
     m = _LEGACY_SHELL_PATTERN.search(text)
     if not m:
         return None
-    return {"tool": "execute_shell", "args": {"command": m.group(1).strip()}}
+    return {"tool": "execute_shell", "args": {"command": safe_strip(m.group(1))}}
 
 
 def _forgiving_json_tool_call(text: str, registry: Any) -> ToolCall | None:
@@ -464,13 +465,13 @@ def _parse_react_style(text: str, registry: Any) -> ToolCall | None:
     # correctly rather than leaking into the captured answer.
     final_match = _REACT_FINAL_PROSE_RE.search(text) or _REACT_FINAL_RE.search(text)
     if final_match:
-        answer = final_match.group(1).strip()
+        answer = safe_strip(final_match.group(1))
         if answer:
             return ToolCall(tool="final_answer", args={"answer": answer})
 
     search_match = _REACT_SEARCH_RE.search(text)
     if search_match:
-        query = search_match.group(1).strip()
+        query = safe_strip(search_match.group(1))
         if query:
             payload = {"tool": "web_search", "args": {"query": query}}
             return _validate_payload(payload, registry)
@@ -484,13 +485,13 @@ def _parse_react_style(text: str, registry: Any) -> ToolCall | None:
 
 
 def extract_json_from_response(text: str) -> str | None:
-    if not text or not text.strip():
+    if not text or not safe_strip(text):
         return None
-    text = normalize(text)
+    text = normalize(str(text))
     match = JSON_PATTERN.search(text)
     if match:
-        return match.group(1).strip()
-    text_stripped = text.strip()
+        return safe_strip(match.group(1))
+    text_stripped = safe_strip(text)
     if text_stripped.startswith("{") and text_stripped.endswith("}"):
         return text_stripped
     return None
@@ -509,9 +510,9 @@ def extract_command(text: str, registry: Any = None) -> ToolCall | None:
     *registry* defaults to the global ``engine.tool_registry.registry`` singleton
     when not provided (backward-compatible).
     """
-    if not text or not text.strip():
+    if not text or not safe_strip(text):
         return None
-    text = normalize(text)
+    text = normalize(str(text))
 
     if registry is None:
         from engine.tool_registry import registry as _reg
