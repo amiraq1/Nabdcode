@@ -809,7 +809,8 @@ class TerminalVisualizer:
         self._subscribe_with_fallback("agent_handoff", self.on_agent_handoff)
         self._subscribe_with_fallback("tool_auth_violation", self.on_tool_auth_violation)
         self._subscribe_with_fallback("show_final_answer", self.on_final_answer)
-        self._subscribe_with_fallback("loop_completed", self.on_loop_completed)
+        # ❌ قم بتعطيل هذا السطر لمنع الواجهة من رسم صناديق فارغة من تلقاء نفسها (الخطوة الأولى: المايسترو الأوحد)
+        # self._subscribe_with_fallback("loop_completed", self.on_loop_completed)
 
     def on_tool_started(self, data: dict):
         """إظهار لوحة بدء الأداة مع سبينر متحرك عند بدء تشغيل أي أداة بناءً على دور الوكيل"""
@@ -985,6 +986,8 @@ class TerminalVisualizer:
                 console.print(f"[bold red]✖ on_loop_completed render error: {exc}[/bold red]")
             except Exception:
                 pass
+
+    _on_loop_completed = on_loop_completed
 
     def stop(self):
         """🔒 إغلاق آمن لعرض الـ Live لمنع تعليق الطرفية"""

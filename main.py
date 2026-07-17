@@ -488,10 +488,18 @@ def main() -> None:
             logger=ctx.logger,
         )
         try:
-            engine.run(one_shot_query)
+            result = engine.run(one_shot_query)
+            if result:
+                visualizer._on_loop_completed({"response": result})
+            else:
+                visualizer._on_loop_completed({"response": "(Session completed - no text returned)"})
         except ToolRequiredError as exc:
             _cleanup_after_streamed_failure(state, ctx, exc)
+        except KeyboardInterrupt:
+            ctx.renderer.think_end()
+            visualizer.console.print("\n[bold yellow]⚠ Execution interrupted by user.[/bold yellow]")
         except Exception as exc:
+            visualizer._on_loop_completed({"response": exc})
             ctx.logger.error(f"Execution failed: {exc}")
         finally:
             ctx.session_manager.messages = state.get_messages()
@@ -570,17 +578,27 @@ def main() -> None:
                 new = list(old_termios)
                 new[3] = new[3] & ~termios.ECHO
                 termios.tcsetattr(fd, termios.TCSANOW, new)
-                engine.run(clean_prompt)
+
+                # 1. تشغيل المحرك
+                result = engine.run(clean_prompt)
+
+                # 2. المايسترو: تسليم النتيجة للواجهة بشكل مباشر ومضمون
+                if result:
+                    visualizer._on_loop_completed({"response": result})
+                else:
+                    visualizer._on_loop_completed({"response": "(Session completed - no text returned)"})
+
             except KeyboardInterrupt:
                 ctx.renderer.think_end()
-                ctx.renderer.flush()
+                visualizer.console.print("\n[bold yellow]⚠ Execution interrupted by user.[/bold yellow]")
             except ToolRequiredError as exc:
                 # ToolRequiredError: The LLM answered without using required tools.
                 # Strip the fabricated response, add newline separator after any
                 # partial streaming output, and show the verifier's rejection.
                 _cleanup_after_streamed_failure(state, ctx, exc)
             except Exception as exc:
-                # Error already rendered by _on_loop_error via event bus
+                # تمرير الخطأ للواجهة ليتم رسمه في الصندوق الأحمر
+                visualizer._on_loop_completed({"response": exc})
                 ctx.logger.error(f"Execution failed: {exc}")
             finally:
                 if old_termios is not None:

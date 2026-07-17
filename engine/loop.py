@@ -1542,7 +1542,7 @@ class ExecutionLoop:
     # Orchestrator
     # ------------------------------------------------------------------
 
-    def run(self, user_prompt: str) -> None:
+    def run(self, user_prompt: str) -> str:
         """Start the autonomous execution loop (thin orchestrator).
 
         Per-iteration responsibilities are delegated to the private helpers above.
@@ -1594,6 +1594,7 @@ class ExecutionLoop:
             raise
         finally:
             self._finalize_loop(interrupted)
+        return self._last_response
 
     def _run_once(self) -> None:
         """Execute a single loop iteration, delegating to the extracted helpers."""
