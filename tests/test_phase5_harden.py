@@ -188,6 +188,27 @@ def test_fixation_breaker_soft_interception():
     assert any("[SYSTEM CRITIQUE]" in m.get("content", "") and m.get("role") == "user" for m in messages)
 
 
+def test_evidence_feedback_loop_soft_interception():
+    """ExecutionLoop must intercept rejected claims/final_answers, increment _evidence_rejection_count, and inject [EVIDENCE REJECTED]."""
+    from engine.loop import ExecutionLoop, _LoopCtx
+    from core.kernel.state import RuntimeState
+    from core.parser import ToolCall
+
+    state = RuntimeState(session_id="test_evidence_rejection")
+    loop = ExecutionLoop(state=state)
+    loop._ctx = _LoopCtx(user_prompt="find the file and report line count")
+    loop._last_response = "The file has 42 lines."  # Unverified claim without evidence anchor
+
+    # Call final_answer tool call
+    tc_final = ToolCall(tool="final_answer", args={"answer": "The file has 42 lines."})
+    sig = loop._handle_cycle_and_security(tc_final)
+
+    assert sig.name == "CONTINUE"
+    assert loop._evidence_rejection_count == 1
+    messages = state.get_messages()
+    assert any("[EVIDENCE REJECTED]" in m.get("content", "") and m.get("role") == "user" for m in messages)
+
+
 if __name__ == "__main__":
     test_chitchat_set_contains_greetings()
     test_chitchat_case_insensitive()
@@ -201,5 +222,6 @@ if __name__ == "__main__":
     test_verifier_error_not_in_evidence()
     test_tactical_fast_fail_402()
     test_fixation_breaker_soft_interception()
+    test_evidence_feedback_loop_soft_interception()
     test_all_modules_compile()
     print("All Phase 5 tests passed.")

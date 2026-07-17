@@ -358,6 +358,8 @@ class ExecutionLoop:
         self._provider_fail_streak = 0
         self._last_tool_signature: str | None = None
         self._fixation_count: int = 0
+        self._evidence_rejection_count: int = 0
+        self.MAX_EVIDENCE_RETRIES: int = 3  # السماح بـ 3 محاولات لتصحيح الإجابة
         # Phase2: the active model identifier. Injected by callers that know the
         # resolved model (e.g. the router); defaults to the env-configured model
         # so existing callers that omit it still get a meaningful identifier.
@@ -1072,37 +1074,62 @@ class ExecutionLoop:
         require_tools = _prompt_requires_investigation(ctx.user_prompt, has_active_goal=has_active_goal)
         try:
             self.evidence_log.verify_fresh(require_tools=require_tools, claim=self._last_response)
-        except VerifierError as verr:
+            self._evidence_rejection_count = 0
+        except (VerifierError, ToolRequiredError) as verr:
+            self._evidence_rejection_count += 1
+            err_msg = str(verr)
+
             # Phase4.1 Auto-Critical Policy (a): any evidence chunk explicitly
             # cited during a failed verify_fresh critique is frozen as Critical
             # so the correction loop can never lose the anchor it was told to use.
             self._auto_critical_from_claim(self._last_response)
-            if ctx.self_correct_count < MAX_SELF_CORRECT:
-                ctx.self_correct_count += 1
-                critique = self._build_critique(verr)
-                self.state.append_message({"role": "user", "content": critique})
-                bus.emit(
-                    "verifier_critique",
-                    {
-                        "step": self.state.step_count,
-                        "attempt": ctx.self_correct_count,
-                        "max_attempts": MAX_SELF_CORRECT,
-                        "critique": critique,
-                    },
-                )
-                self.state.increment_step()
-                backoff_delay = min(self.POLL_DELAY * (2 ** (ctx.self_correct_count - 1)), 4.0)
-                time.sleep(backoff_delay)
-                return _LoopSignal.CONTINUE
 
-            self.state.update_status("COMPLETED")
-            safe_msg = self._safe_shutdown(ctx.user_prompt, verr)
-            bus.emit("loop_completed", {"reason": "self_correct_exhausted", "output": safe_msg})
-            return _LoopSignal.TERMINATE
+            if self._evidence_rejection_count > self.MAX_EVIDENCE_RETRIES or ctx.self_correct_count >= MAX_SELF_CORRECT:
+                log_msg = f"[Evidence Verifier] 🚨 CRITICAL: Max retries ({self.MAX_EVIDENCE_RETRIES}) reached. Aborting task. Reason: {err_msg}"
+                if self._logger is not None:
+                    self._logger.error(log_msg)
+                else:
+                    import logging as _logging
+                    _logging.error(log_msg)
+                self.state.update_status("COMPLETED")
+                safe_msg = self._safe_shutdown(ctx.user_prompt, err_msg)
+                bus.emit("loop_completed", {"reason": "self_correct_exhausted", "output": safe_msg})
+                return _LoopSignal.TERMINATE
 
-        if ctx.self_correct_count > 0:
+            # 🚨 الاعتراض الناعم (Soft Interception)
+            log_msg = f"[Evidence Verifier] Soft Interception (Attempt {self._evidence_rejection_count}/{self.MAX_EVIDENCE_RETRIES}): {err_msg}"
+            if self._logger is not None:
+                self._logger.warning(log_msg)
+            else:
+                import logging as _logging
+                _logging.warning(log_msg)
+
+            ctx.self_correct_count += 1
+            rejection_msg = (
+                f"[EVIDENCE REJECTED] Your FINAL_ANSWER was rejected by the Structural Verifier.\n"
+                f"Reason: {err_msg}\n\n"
+                f"CRITICAL SYSTEM DIRECTIVE: You MUST use exact, verbatim quotes (technical anchors) "
+                f"from your previous tool outputs. Do NOT paraphrase, summarize, or hallucinate. "
+                f"Analyze the terminal logs, correct your answer by quoting exactly, and submit FINAL_ANSWER again."
+            )
+            self.state.append_message({"role": "user", "content": rejection_msg})
+            bus.emit(
+                "verifier_critique",
+                {
+                    "step": self.state.step_count,
+                    "attempt": self._evidence_rejection_count,
+                    "max_attempts": self.MAX_EVIDENCE_RETRIES,
+                    "critique": rejection_msg,
+                },
+            )
+            self.state.increment_step()
+            backoff_delay = min(self.POLL_DELAY * (2 ** (self._evidence_rejection_count - 1)), 4.0)
+            time.sleep(backoff_delay)
+            return _LoopSignal.CONTINUE
+
+        if ctx.self_correct_count > 0 or self._evidence_rejection_count > 0:
             write_lesson(
-                problem=f"Initial verification failed and resolved after {ctx.self_correct_count} correction attempt(s)",
+                problem=f"Initial verification failed and resolved after {max(ctx.self_correct_count, self._evidence_rejection_count)} correction attempt(s)",
                 solution=f"Resolved by adhering to the client constitution rules and quoting from outputs",
             )
 
@@ -1138,10 +1165,7 @@ class ExecutionLoop:
                 answer = tool_args.get("answer") or tool_args.get("text") or ""
             if answer:
                 self._last_response = answer
-            self.state.update_status("COMPLETED")
-            bus.emit("loop_completed", {"reason": "no_tool_call", "output": self._last_response})
-            bus.emit("show_final_answer", {"output": self._last_response})
-            return _LoopSignal.TERMINATE
+            return self._verify_claim_or_self_correct()
 
         # ── Fixation Breaker (Soft Interception) ─────────────────────────────
         current_tool = tool_name
@@ -1633,11 +1657,14 @@ class ExecutionLoop:
                 return
             return
 
-        if self._handle_cycle_and_security(tool_call) is _LoopSignal.CONTINUE:
+        sig = self._handle_cycle_and_security(tool_call)
+        if sig is _LoopSignal.CONTINUE:
             # A cycle/security block is also a non-productive round.
             ctx.consecutive_no_tool_rounds += 1
             if self._maybe_force_partial_answer():
                 return
+            return
+        if sig is _LoopSignal.TERMINATE:
             return
 
         # Phase 4.5 — cheap pre-dispatch guards (workspace jail, web_search
