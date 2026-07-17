@@ -105,7 +105,8 @@ def test_tool_name_contract_resolves_canonical_key():
 
     # The printed completion line must contain the real names, not "None".
     printed = "".join(
-        str(call.args[0]) for call in mock_console.print.call_args_list
+        str(getattr(call.args[0], "renderable", call.args[0]))
+        for call in mock_console.print.call_args_list
     )
     assert "web_search" in printed, "canonical 'tool' key not resolved"
     assert "file_system" in printed, "canonical 'tool' key not resolved"

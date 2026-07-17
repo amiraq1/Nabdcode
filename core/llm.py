@@ -76,9 +76,9 @@ class MissingAPIKeyError(OpenRouterError):
 
 # ── Unified, config-first, lazy key resolution ─────────────────────────────
 
-# Provider name -> ordered list of environment variables to try.
 _PROVIDER_ENV_VARS: dict[str, tuple[str, ...]] = {
-    "openrouter": ("OPENROUTER_API_KEY", "AGENTROUTER_API_KEY", "NVIDIA_API_KEY"),
+    "openrouter": ("OPENROUTER_API_KEY", "ORCAROUTER_API_KEY", "AGENTROUTER_API_KEY", "NVIDIA_API_KEY"),
+    "orcarouter": ("ORCAROUTER_API_KEY", "OPENROUTER_API_KEY"),
     "nvidia": ("NVIDIA_API_KEY",),
 }
 
@@ -378,6 +378,33 @@ class LocalClient:
         return full_text
 
 
+# ── OrcaRouter client ──────────────────────────────────────────────────────
+
+class OrcaRouterClient(OpenRouterClient):
+    BASE_URL = os.getenv("ORCAROUTER_BASE_URL", "https://orcarouter.ai/api/v1/chat/completions")
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        config: OpenRouterConfig | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            config=config,
+            base_url=base_url or os.getenv("ORCAROUTER_BASE_URL", "https://orcarouter.ai/api/v1/chat/completions"),
+        )
+
+    @property
+    def api_key(self) -> str:
+        """Lazily resolve the OrcaRouter key (Env -> Config -> prompt)."""
+        if self._api_key is None:
+            self._api_key = _resolve_api_key("orcarouter", self._api_key)
+        return self._api_key
+
+
 # ── NVIDIA client ──────────────────────────────────────────────────────────
 
 class NvidiaClient:
@@ -430,14 +457,14 @@ class NvidiaClient:
 
 # ── Lazy factory ───────────────────────────────────────────────────────────
 
-def get_llm_client(provider: str = "openrouter", **kwargs: Any) -> OpenRouterClient | NvidiaClient:
+def get_llm_client(provider: str = "openrouter", **kwargs: Any) -> OpenRouterClient | OrcaRouterClient | NvidiaClient:
     """Lazily construct an LLM client without resolving keys at call time.
 
     The returned client defers key resolution until its first network call,
     keeping CLI startup (e.g. ``--help``) fast and non-blocking.
 
     Args:
-        provider: ``"openrouter"`` or ``"nvidia"``.
+        provider: ``"openrouter"``, ``"orcarouter"``, or ``"nvidia"``.
         **kwargs: Forwarded to the underlying client constructor.
 
     Returns:
@@ -446,6 +473,9 @@ def get_llm_client(provider: str = "openrouter", **kwargs: Any) -> OpenRouterCli
     if provider == "nvidia":
         logger.debug("Constructing lazy NvidiaClient.")
         return NvidiaClient(**kwargs)
+    elif provider == "orcarouter":
+        logger.debug("Constructing lazy OrcaRouterClient.")
+        return OrcaRouterClient(**kwargs)
     logger.debug("Constructing lazy OpenRouterClient.")
     return OpenRouterClient(**kwargs)
 

@@ -8,6 +8,10 @@ try:
     from core.llm import NvidiaClient
 except Exception:
     NvidiaClient = None
+try:
+    from core.llm import OrcaRouterClient
+except Exception:
+    OrcaRouterClient = None
 
 @dataclass
 class ProviderState:
@@ -175,6 +179,8 @@ class ProviderRouter:
 
 base_model = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 FALLBACK_MODELS = [
+    "deepseek/deepseek-v4-flash-free",        # فلاش مجاني وسريع جداً من Orca/OpenRouter
+    "deepseek/deepseek-v4-pro-free",          # برو مجاني عالي الدقة من Orca/OpenRouter
     "google/gemini-2.5-flash",                # سريع جداً وممتاز للاستنتاج
     "meta-llama/llama-3.1-8b-instruct:free",  # مستقر جداً للأوامر
     "mistralai/mistral-nemo:free",            # خفيف وسريع
@@ -184,25 +190,38 @@ FREE_FALLBACK = FALLBACK_MODELS
 
 
 def handle_provider_fallback(exception_error: Exception) -> str:
-    """حقن كفاءة التوجيه التلقائي البديل عند ارتداد NVIDIA أو OpenRouter بـ 404/429/502/504."""
+    """حقن كفاءة التوجيه التلقائي البديل عند ارتداد NVIDIA أو OpenRouter أو Orca بـ 404/429/502/504."""
     current_fallback = FALLBACK_MODELS[0]
     return current_fallback
 
 providers = []
+# 1. Primary base model
 try:
     providers.append(ProviderState(name="OR-0", client=OpenRouterClient(model=base_model), priority=0))
 except Exception:
     pass
 
-if NvidiaClient:
+# 2. OrcaRouter primary DeepSeek models
+if OrcaRouterClient:
     try:
-        providers.append(ProviderState(name="NVIDIA", client=NvidiaClient(), priority=1))
+        providers.append(ProviderState(name="ORCA-FLASH", client=OrcaRouterClient(model="deepseek/deepseek-v4-flash-free"), priority=1))
+        providers.append(ProviderState(name="ORCA-PRO", client=OrcaRouterClient(model="deepseek/deepseek-v4-pro-free"), priority=2))
     except Exception:
         pass
 
-for i, mdl in enumerate(FREE_FALLBACK, start=2):
+# 3. NVIDIA fallback
+if NvidiaClient:
     try:
-        providers.append(ProviderState(name=f"OR-{i}", client=OpenRouterClient(model=mdl), priority=i))
+        providers.append(ProviderState(name="NVIDIA", client=NvidiaClient(), priority=3))
+    except Exception:
+        pass
+
+# 4. OpenRouter/Orca multi-provider fallback loop
+for i, mdl in enumerate(FREE_FALLBACK, start=4):
+    try:
+        client_cls = OrcaRouterClient if ("deepseek" in mdl or "orca" in mdl) and OrcaRouterClient else OpenRouterClient
+        name_prefix = "ORCA" if client_cls == OrcaRouterClient else "OR"
+        providers.append(ProviderState(name=f"{name_prefix}-{i}", client=client_cls(model=mdl), priority=i))
     except Exception:
         pass
 
