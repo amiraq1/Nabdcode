@@ -163,6 +163,31 @@ def test_tactical_fast_fail_402():
     assert p2.failure_count == 0
 
 
+def test_fixation_breaker_soft_interception():
+    """ExecutionLoop must intercept repeated identical tool call immediately and inject [SYSTEM CRITIQUE] without dispatching."""
+    from engine.loop import ExecutionLoop, _LoopCtx
+    from core.kernel.state import RuntimeState
+    from core.parser import ToolCall
+
+    state = RuntimeState(session_id="test_fixation")
+    loop = ExecutionLoop(state=state)
+    loop._ctx = _LoopCtx(user_prompt="do something")
+
+    tc1 = ToolCall(tool="execute_shell", args={"command": "ls -la"})
+    tc2 = ToolCall(tool="execute_shell", args={"command": "ls -la"})
+
+    # First attempt should proceed normally (not blocked by fixation breaker)
+    sig1 = loop._handle_cycle_and_security(tc1)
+    assert sig1.name != "CONTINUE" or loop._fixation_count == 0
+
+    # Second identical attempt should be intercepted by Fixation Breaker
+    sig2 = loop._handle_cycle_and_security(tc2)
+    assert sig2.name == "CONTINUE"
+    assert loop._fixation_count == 1
+    messages = state.get_messages()
+    assert any("[SYSTEM CRITIQUE]" in m.get("content", "") and m.get("role") == "user" for m in messages)
+
+
 if __name__ == "__main__":
     test_chitchat_set_contains_greetings()
     test_chitchat_case_insensitive()
@@ -175,5 +200,6 @@ if __name__ == "__main__":
     test_deep_agent_design_decision_documented()
     test_verifier_error_not_in_evidence()
     test_tactical_fast_fail_402()
+    test_fixation_breaker_soft_interception()
     test_all_modules_compile()
     print("All Phase 5 tests passed.")

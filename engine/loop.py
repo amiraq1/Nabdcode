@@ -356,6 +356,8 @@ class ExecutionLoop:
         self._logger = logger
         self._self_correct_count = 0
         self._provider_fail_streak = 0
+        self._last_tool_signature: str | None = None
+        self._fixation_count: int = 0
         # Phase2: the active model identifier. Injected by callers that know the
         # resolved model (e.g. the router); defaults to the env-configured model
         # so existing callers that omit it still get a meaningful identifier.
@@ -1140,6 +1142,34 @@ class ExecutionLoop:
             bus.emit("loop_completed", {"reason": "no_tool_call", "output": self._last_response})
             bus.emit("show_final_answer", {"output": self._last_response})
             return _LoopSignal.TERMINATE
+
+        # ── Fixation Breaker (Soft Interception) ─────────────────────────────
+        current_tool = tool_name
+        current_args = str(tool_args)
+        current_signature = f"{current_tool}::{current_args}"
+        if self._last_tool_signature == current_signature:
+            self._fixation_count += 1
+            if self._fixation_count >= 1:
+                log_msg = f"[Fixation Breaker] Intercepted repeated command: {current_tool}"
+                if self._logger is not None:
+                    self._logger.warning(log_msg)
+                else:
+                    import logging as _logging
+                    _logging.warning(log_msg)
+                bus.emit("ui_repeated_tool", {"tool": current_tool, "step": self.state.step_count})
+                intervention_msg = (
+                    f"[SYSTEM CRITIQUE] You just executed the exact same tool '{current_tool}' "
+                    f"with the exact same arguments. Repeating it will NOT yield new results. "
+                    f"STOP repeating yourself. Analyze the previous output, try a completely "
+                    f"different command/approach, or use 'FINAL_ANSWER' if you are stuck."
+                )
+                self.state.append_message({"role": "user", "content": intervention_msg})
+                self.state.increment_step()
+                time.sleep(self.POLL_DELAY)
+                return _LoopSignal.CONTINUE
+        else:
+            self._fixation_count = 0
+            self._last_tool_signature = current_signature
 
         recent_slice = list(self._recent_calls)[-4:]
         if tool_call == ctx.last_command or tool_call in recent_slice:
