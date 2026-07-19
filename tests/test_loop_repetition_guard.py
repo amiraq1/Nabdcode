@@ -16,14 +16,14 @@ class TestLoopRepetitionGuard(unittest.TestCase):
 
         loop = ExecutionLoop(llm_provider=mock_llm, state=state)
         # Ensure safe shutdown returns cleanly
-        loop._safe_shutdown = MagicMock(return_value="ABORTED_SAFE")
+        loop._get_fallback_reason = MagicMock(return_value="ABORTED_SAFE")
 
         loop.run("Check workspace files and fix bugs")
 
         # LLM should be called exactly 3 times (1st appearance, 2nd appearance, 3rd appearance triggers kill switch)
         self.assertEqual(mock_llm.call_count, 3)
-        loop._safe_shutdown.assert_called_once()
-        args, _ = loop._safe_shutdown.call_args
+        loop._get_fallback_reason.assert_called_once()
+        args, _ = loop._get_fallback_reason.call_args
         self.assertIn("Infinite Replication Loop Detected", args[1])
 
     def test_thought_only_block_ban_triggers_kill_switch(self):
@@ -31,13 +31,13 @@ class TestLoopRepetitionGuard(unittest.TestCase):
         state = RuntimeState(session_id="test-thought-ban")
         mock_llm = MagicMock(return_value="Thought for 2s")
         loop = ExecutionLoop(llm_provider=mock_llm, state=state)
-        loop._safe_shutdown = MagicMock(return_value="ABORTED_SAFE")
+        loop._get_fallback_reason = MagicMock(return_value="ABORTED_SAFE")
 
         loop.run("Hello test")
 
         self.assertEqual(mock_llm.call_count, 1)
-        loop._safe_shutdown.assert_called_once()
-        args, _ = loop._safe_shutdown.call_args
+        loop._get_fallback_reason.assert_called_once()
+        args, _ = loop._get_fallback_reason.call_args
         self.assertIn("only 'Thinking' blocks without tools", args[1])
 
     def test_normalized_fingerprint_catches_varying_thought_seconds(self):
@@ -50,13 +50,13 @@ class TestLoopRepetitionGuard(unittest.TestCase):
         ]
         mock_llm = MagicMock(side_effect=responses)
         loop = ExecutionLoop(llm_provider=mock_llm, state=state)
-        loop._safe_shutdown = MagicMock(return_value="ABORTED_SAFE")
+        loop._get_fallback_reason = MagicMock(return_value="ABORTED_SAFE")
 
         loop.run("Check workspace files and fix bugs")
 
         self.assertEqual(mock_llm.call_count, 3)
-        loop._safe_shutdown.assert_called_once()
-        args, _ = loop._safe_shutdown.call_args
+        loop._get_fallback_reason.assert_called_once()
+        args, _ = loop._get_fallback_reason.call_args
         self.assertIn("Infinite Replication Loop Detected", args[1])
 
     def test_bullet_tolerant_thought_ban_triggers_kill_switch(self):
@@ -69,13 +69,13 @@ class TestLoopRepetitionGuard(unittest.TestCase):
             state = RuntimeState(session_id="test-bullet-ban")
             mock_llm = MagicMock(return_value=prompt_text)
             loop = ExecutionLoop(llm_provider=mock_llm, state=state)
-            loop._safe_shutdown = MagicMock(return_value="ABORTED_SAFE")
+            loop._get_fallback_reason = MagicMock(return_value="ABORTED_SAFE")
 
             loop.run("Hello test")
 
             self.assertEqual(mock_llm.call_count, 1)
-            loop._safe_shutdown.assert_called_once()
-            args, _ = loop._safe_shutdown.call_args
+            loop._get_fallback_reason.assert_called_once()
+            args, _ = loop._get_fallback_reason.call_args
             self.assertIn("only 'Thinking' blocks without tools (bullet/star detected)", args[1])
 
 
@@ -90,7 +90,7 @@ class TestFinalAnswerTermination(unittest.TestCase):
             return_value='{"tool": "final_answer", "args": {"answer": "Hello! How can I help today?"}}'
         )
         loop = ExecutionLoop(llm_provider=mock_llm, state=state)
-        loop._safe_shutdown = MagicMock(return_value="ABORTED_SAFE")
+        loop._get_fallback_reason = MagicMock(return_value="ABORTED_SAFE")
 
         completed = []
 
