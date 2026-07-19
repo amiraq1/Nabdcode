@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Final, Optional
 
 from core.parser import ToolCall
 from core.prompts import BROWSER_FEWSHOT_EXAMPLES, CRITICAL_RULES_FOR_TOOL_CALLING
@@ -13,6 +13,14 @@ from core.prompts import BROWSER_FEWSHOT_EXAMPLES, CRITICAL_RULES_FOR_TOOL_CALLI
 TOOL_WINDOW: Final[int] = 2
 CHAT_WINDOW: Final[int] = 12
 MAX_CRITICAL_FULL: Final[int] = 3
+
+# Budget / anti-frustration ceilings (extracted from loop.py, refactor step5-c).
+# Module-local to the engine loop — no external references — so they live here
+# alongside the other shared loop constants.
+MAX_BUDGET_SECONDS: Final[int] = 180  # سقف الميزانية: 3 دقائق لكل مهمة على Termux
+MAX_BUDGET_TOKENS: Final[int] = 12000  # سقف التوكنات التقريبي
+MAX_CONSECUTIVE_NO_TOOL_ROUNDS: Final[int] = 3
+BUDGET_SOFT_WARN_RATIO: Final[float] = 0.80
 
 TOOL_FEWSHOT_FALLBACK: Final[str] = (
     f"{CRITICAL_RULES_FOR_TOOL_CALLING}\n\n"
