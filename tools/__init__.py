@@ -38,9 +38,15 @@ _TOOL_MAPPING: Dict[str, str] = {
     "WebSearchTool": ".web_search",
     "SearchMemoryTool": ".search_memory",
     "TodoWriteTool": ".todo",
+    "RagSearchTool": ".rag_search",
     "TermuxMonitorTool": ".termux_monitor",
     "BrowserTool": ".browser_tool",
     "GitPushTool": ".git_tool",
+    "CodeIntelligenceTool": ".code_intelligence",
+    "PythonREPLTool": ".python_repl",
+    "TasteManagerTool": ".taste_manager",
+    "GraphifyTool": ".graphify_tool",
+    "GraphIntelTool": ".graph_intel",
     # Secure wrappers
     "SecureTool": ".secure_tools",
     "SecureShellTool": ".secure_tools",
@@ -51,6 +57,10 @@ _TOOL_MAPPING: Dict[str, str] = {
     "SecureGitInspector": ".secure_tools",
     "SecureTestRunner": ".secure_tools",
     "SecureSemanticMemoryTool": ".secure_tools",
+    "SecureCodeIntelligenceTool": ".secure_tools",
+    "SecurePythonREPLTool": ".secure_tools",
+    "SecureTasteManagerTool": ".secure_tools",
+    "SecureGraphifyTool": ".secure_tools",
     # Pure function (no core/ dep)
     "execute_search_memory": ".memory",
 }

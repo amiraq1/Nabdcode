@@ -163,7 +163,7 @@ def test_loop_blocks_false_success_when_goal_unmet():
     """With an active goal and no evidence, the loop must NOT emit a generic
     success termination — it must emit loop_completed reason='goal_not_met'."""
     events = []
-    from engine.events import bus
+    from core.kernel.events import bus
     bus.subscribe("loop_completed", lambda p: events.append(p))
 
     state = RuntimeState(session_id="g-fail")

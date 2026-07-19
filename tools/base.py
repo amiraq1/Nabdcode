@@ -308,8 +308,10 @@ class BaseTool(ABC):
 
         # ── 1. UI bridge: tool start ─────────────────────────────────
         try:
-            from core.ui_bridge import get_bridge
-            get_bridge().emit_tool_start_sync(self.name, raw_args)
+            from engine.dispatcher import is_dispatching
+            if not is_dispatching():
+                from core.ui_bridge import get_bridge
+                get_bridge().emit_tool_start_sync(self.name, raw_args)
         except Exception:
             pass  # bridge must never break the tool
 
@@ -322,9 +324,11 @@ class BaseTool(ABC):
 
             # ── 4. UI bridge: tool end ───────────────────────────────
             try:
-                summary = str(result)[:150]
-                from core.ui_bridge import get_bridge
-                get_bridge().emit_tool_end_sync(self.name, summary)
+                from engine.dispatcher import is_dispatching
+                if not is_dispatching():
+                    summary = str(result)[:150]
+                    from core.ui_bridge import get_bridge
+                    get_bridge().emit_tool_end_sync(self.name, summary)
             except Exception:
                 pass
 
@@ -338,10 +342,12 @@ class BaseTool(ABC):
                 status="error",
             )
             try:
-                from core.ui_bridge import get_bridge
-                get_bridge().emit_tool_end_sync(
-                    self.name, f"❌ Error: {str(exc)[:120]}"
-                )
+                from engine.dispatcher import is_dispatching
+                if not is_dispatching():
+                    from core.ui_bridge import get_bridge
+                    get_bridge().emit_tool_end_sync(
+                        self.name, f"❌ Error: {str(exc)[:120]}"
+                    )
             except Exception:
                 pass
             return result
@@ -354,10 +360,12 @@ class BaseTool(ABC):
                 status="error",
             )
             try:
-                from core.ui_bridge import get_bridge
-                get_bridge().emit_tool_end_sync(
-                    self.name, f"❌ Error: {str(exc)[:120]}"
-                )
+                from engine.dispatcher import is_dispatching
+                if not is_dispatching():
+                    from core.ui_bridge import get_bridge
+                    get_bridge().emit_tool_end_sync(
+                        self.name, f"❌ Error: {str(exc)[:120]}"
+                    )
             except Exception:
                 pass
             return result

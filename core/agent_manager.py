@@ -13,6 +13,10 @@ from tools.secure_tools import (
     SecureShellTool,
     SecureWebSearchTool,
     SecureBrowserTool,
+    SecureCodeIntelligenceTool,
+    SecurePythonREPLTool,
+    SecureTasteManagerTool,
+    SecureGraphifyTool,
 )
 from core.llm import get_secure_model
 from core.parser import pin_workspace_root
@@ -136,6 +140,10 @@ def initialize_secure_agent(workspace_path: str = ".") -> CodeAgent:
             SecureShellTool(security_engine=_KernelSecurityEngine()),
             SecureWebSearchTool(),
             SecureBrowserTool(workspace_dir=workspace_path),
+            SecureCodeIntelligenceTool(workspace=workspace_path),
+            SecurePythonREPLTool(workspace=workspace_path),
+            SecureTasteManagerTool(workspace=workspace_path),
+            SecureGraphifyTool(workspace_dir=workspace_path),
             # Read-only workspace map/search (excludes heavy dirs + .gguf).
             SECURE_REPO_SCANNER(),
             # Dynamically discovered skills (BaseSkill -> Tool via adapter).
@@ -144,12 +152,12 @@ def initialize_secure_agent(workspace_path: str = ".") -> CodeAgent:
         model=model,
         name="Executor",
         description=(
-            "A surgical operator that interacts with the file system, searches the web, runs bash commands, and modifies code. "
+            "A surgical operator that interacts with the file system, searches the web, runs bash commands, runs Python scripts, manages taste rules, queries graph structure, and inspects code. "
             f"Can read files from these roots: {allowed_roots}. "
-            "Use secure_file_system to read/write/edit files and secure_shell to run validated commands. "
+            "Use secure_file_system to read/write/edit files, secure_shell to run validated commands, secure_python_repl to execute Python code/math, secure_code_intelligence for AST symbol discovery, secure_taste_manager to remember coding rules/preferences, and secure_graphify_tool to query codebase relationships and knowledge graphs. "
             "IMPORTANT: secure_shell runs WITHOUT a shell, so redirection (>, >>) and chaining (&&, |) do NOT work. "
             "To CREATE OR WRITE a file, use secure_file_system with action='write' (or 'append'/'replace') and pass 'content' — never 'echo ... > file'. "
-            "secure_shell is only for commands that print to stdout (e.g. 'python3 calc_math.py', 'grep', 'ls')."
+            "secure_shell is only for commands that print to stdout (e.g. 'pytest', 'grep', 'ls'). For Python snippets or calculations, use secure_python_repl — never secure_shell('python -c ...')."
         ),
         # Avoid cluttering the local-model context window with default smolagents tools.
         add_base_tools=False,

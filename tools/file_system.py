@@ -15,6 +15,7 @@ class FileAction(str, Enum):
     WRITE = "write"
     APPEND = "append"
     REPLACE = "replace"
+    LIST = "list"
 
 
 MAX_DIFF_BYTES = 16 * 1024  # 16KB limit (very safe for local context)
@@ -41,9 +42,11 @@ class FileSystemTool(BaseTool):
     name: Final[str] = "file_system"
 
     description: Final[str] = (
-        "Safely read, write, append, and replace text in files inside the workspace. "
-        "Required args: 'action' ('read', 'write', 'append', 'replace'), 'path' (str). "
-        "For write/append, pass 'content' (str). For replace, pass 'old_text' (str), 'new_text' (str), and optional 'count' (int, default 1) or 'all' (bool)."
+        "Safely read, list, write, append, and replace files inside the workspace. "
+        "Required args: 'action' ('read','list','write','append','replace'), 'path' (str). "
+        "Use action='list' to enumerate a directory (pass 'recursive': true to walk subfolders) — "
+        "this is the ONLY way to discover files; do NOT use shell ls/find. "
+        "For write/append pass 'content'. For replace pass 'old_text','new_text', optional 'count'/'all'."
     )
 
     MAX_READ_SIZE: Final[int] = 1_000_000  # 1 MB
@@ -94,6 +97,9 @@ class FileSystemTool(BaseTool):
         try:
 
             target = self._resolve(path)
+
+            if action is FileAction.LIST:
+                return self._list(target, recursive=bool(kwargs.get("recursive", False)))
 
             if action is FileAction.READ:
                 return self._read(target)
@@ -382,6 +388,38 @@ class FileSystemTool(BaseTool):
                 "path": path.name,
             },
         )
+
+
+    def _list(self, path: Path, recursive: bool = False) -> ToolResult:
+        if not path.exists():
+            return ToolResult(success=False, stderr=f"Path not found: {path}")
+        if not path.is_dir():
+            return ToolResult(success=False, stderr="Target is not a directory. Use action 'read' for files.")
+        _SKIP = {".git", "__pycache__", "node_modules", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".nabd", ".cache"}
+        lines: list[str] = []
+        try:
+            seq = sorted(path.rglob("*"), key=lambda x: str(x).lower()) if recursive \
+                  else sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
+            for p in seq:
+                if any(part in _SKIP for part in p.parts):
+                    continue
+                rel = p.relative_to(self.workspace) if recursive else p.name
+                if p.is_dir():
+                    lines.append(f"[DIR]  {rel}/")
+                else:
+                    try:
+                        lines.append(f"[FILE] {rel} ({p.stat().st_size} bytes)")
+                    except Exception:
+                        lines.append(f"[FILE] {rel}")
+                if len(lines) >= 800:
+                    lines.append("... [TRUNCATED] too many entries; list subfolders individually.")
+                    break
+        except Exception as exc:
+            return ToolResult(success=False, stderr=f"{type(exc).__name__}: {exc}")
+        root = "." if path == self.workspace else str(path.relative_to(self.workspace))
+        header = f"Directory listing for '{root}'{' (recursive)' if recursive else ''} — {len(lines)} entries:"
+        body = "\n".join(lines) if lines else "(empty directory)"
+        return ToolResult(success=True, stdout=sanitize(f"{header}\n{body}", preserve_newlines=True))
 
 
 from tools.secure_tools import SecureWorkspaceReader

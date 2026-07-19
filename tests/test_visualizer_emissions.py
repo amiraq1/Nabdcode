@@ -14,7 +14,7 @@ payload fields, so a refactor that drops or renames an emit fails loudly.
 import unittest
 from unittest.mock import MagicMock
 
-from engine.events import bus
+from core.kernel.events import bus
 
 
 class MagicMockWorker:

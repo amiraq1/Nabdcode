@@ -189,7 +189,7 @@ def test_fixation_breaker_soft_interception():
 
 
 def test_evidence_feedback_loop_soft_interception():
-    """ExecutionLoop must intercept rejected claims/final_answers, increment _evidence_rejection_count, and inject [EVIDENCE REJECTED]."""
+    """ExecutionLoop must intercept rejected claims/final_answers, increment _evidence_rejection_count, and inject a [CONTROL] user message (channel-separated — no [EVIDENCE REJECTED] artifact)."""
     from engine.loop import ExecutionLoop, _LoopCtx
     from core.kernel.state import RuntimeState
     from core.parser import ToolCall
@@ -206,7 +206,9 @@ def test_evidence_feedback_loop_soft_interception():
     assert sig.name == "CONTINUE"
     assert loop._evidence_rejection_count == 1
     messages = state.get_messages()
-    assert any("[EVIDENCE REJECTED]" in m.get("content", "") and m.get("role") == "user" for m in messages)
+    assert any(m.get("content", "").startswith("[CONTROL]") and m.get("role") == "user" for m in messages)
+    # Regression: directive must NOT be disguised as an evidence-rejected tool artifact.
+    assert not any("[EVIDENCE REJECTED]" in m.get("content", "") for m in messages)
 
 
 def test_safe_strip_and_last_response_safety():

@@ -45,6 +45,7 @@ class EvidenceRecord:
     evidence_type: str = "other"
     tool: str = "unknown"
     command_or_path: str = ""
+    action: str = ""
     success: bool = True
     output_snippet: str = ""
     covered_subjects: FrozenSet[str] = field(default_factory=frozenset)
@@ -69,11 +70,13 @@ class EvidenceRecord:
         exit_code: int = 0,
         timestamp: float = 0.0,
         call_id: str = "",
+        action: str = "",
     ) -> None:
         object.__setattr__(self, "evidence_id", evidence_id if evidence_id != "E-0" else (call_id or "E-0"))
         object.__setattr__(self, "evidence_type", evidence_type)
         object.__setattr__(self, "tool", tool_name or tool)
         object.__setattr__(self, "command_or_path", input or command_or_path)
+        object.__setattr__(self, "action", action)
         object.__setattr__(self, "success", success if exit_code == 0 else False)
         object.__setattr__(self, "output_snippet", raw_output if raw_output is not None else output_snippet)
         object.__setattr__(self, "covered_subjects", covered_subjects)
@@ -103,6 +106,7 @@ class EvidenceRecord:
             "evidence_type": self.evidence_type,
             "tool": self.tool,
             "command_or_path": self.command_or_path,
+            "action": self.action,
             "success": self.success,
             "output_snippet": self.output_snippet,
             "covered_subjects": sorted(self.covered_subjects),
@@ -120,6 +124,7 @@ class EvidenceRecord:
             output_snippet=d["output_snippet"],
             covered_subjects=frozenset(d.get("covered_subjects", [])),
             critical=d.get("critical", False),
+            action=d.get("action", ""),
         )
 
 
@@ -459,6 +464,7 @@ class Verifier:
         findings: List[Finding],
         records: Dict[str, EvidenceRecord],
         require_tools: bool,
+        user_prompt: str = "",
     ) -> None:
         """Raise VerifierError if any check fails."""
         if require_tools and not records:
@@ -469,6 +475,12 @@ class Verifier:
                 "No verified evidence was collected.\n\n"
                 "No report was generated."
             )
+
+        if require_tools and user_prompt:
+            from core.investigation import check_investigation_gates
+            passed, details = check_investigation_gates(user_prompt, list(records.values()))
+            if not passed:
+                raise VerifierError(details)
 
         for f in findings:
             if not f.evidence_id:
@@ -519,7 +531,7 @@ class EvidenceLog:
         return f"E-{self._counter}"
 
     def record(self, tool: str, command_or_path: str, success: bool,
-               output_snippet: str, critical: bool = False) -> EvidenceRecord:
+               output_snippet: str, critical: bool = False, action: str = "") -> EvidenceRecord:
         eid = self.next_id()
         rec = EvidenceRecord(
             evidence_id=eid,
@@ -530,6 +542,7 @@ class EvidenceLog:
             output_snippet=output_snippet[:200],
             covered_subjects=_extract_subjects(tool, command_or_path),
             critical=critical,
+            action=action,
         )
         self._records[eid] = rec
         return rec
@@ -605,7 +618,7 @@ class EvidenceLog:
 
     # ── batch verify (L0 + optional L1) ─────────────────────────────────
 
-    def verify(self, require_tools: bool, claim: str | None = None) -> None:
+    def verify(self, require_tools: bool, claim: str | None = None, user_prompt: str = "") -> None:
         """Run the verification stack.
 
         L0 — structural integrity of evidence records (IDs, success, types).
@@ -619,6 +632,7 @@ class EvidenceLog:
             findings=self._findings,
             records=self._records,
             require_tools=require_tools,
+            user_prompt=user_prompt,
         )
 
         # L1: structural content verification
@@ -633,7 +647,7 @@ class EvidenceLog:
                 raise VerifierError(result.to_error("L1"))
 
     def verify_fresh(
-        self, claim: str, evidence_text: str = "", require_tools: bool = True
+        self, claim: str, evidence_text: str = "", require_tools: bool = True, user_prompt: str = ""
     ) -> VerificationResult:
         """Run fresh-context verification (L1) without execution history bias."""
         if not require_tools:
@@ -643,10 +657,33 @@ class EvidenceLog:
                 level="L1",
                 scores={},
             )
+        # Phase 0 convergence (fix b): reject verbatim tool-output echo. A real
+        # synthesis must NOT paste a tool's raw output back as the answer. This
+        # blocks the live failure where the model returned "Based on the gathered
+        # evidence: [file_system] Directory listing for 'core' — 55 entries" with
+        # no actual analysis. The answer must be a synthesis, not an echo.
+        _claim_l = (claim or "").lower()
+        _echo_markers = (
+            "based on the gathered evidence:",
+            "[file_system] directory listing",
+            "[tool result:",
+            "directory listing for '",
+        )
+        if any(m in _claim_l for m in _echo_markers):
+            raise VerifierError(
+                "Task aborted.\n\n"
+                "Reason:\n"
+                "[ECHO REJECTED] Your final answer repeats a tool's raw output "
+                "verbatim instead of synthesizing a report.\n\n"
+                "You MUST write an original Markdown analysis (headings, bullets, "
+                "code blocks) that interprets the evidence you read — not echo the "
+                "listing or tool result back to the user."
+            )
         Verifier.verify(
             findings=self._findings,
             records=self._records,
             require_tools=require_tools,
+            user_prompt=user_prompt,
         )
         result = StructuralVerifier.verify(
             claim=claim,

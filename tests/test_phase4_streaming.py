@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.llm import LocalClient, LocalConfig
 from engine.renderer import Renderer
-from engine.events import bus
+from core.kernel.events import bus
 
 
 # ── Stream event capture helper ──────────────────────────────────────────

@@ -61,6 +61,103 @@ class UIBridge:
         if observer in self._observers:
             self._observers.remove(observer)
 
+    def _relay_from_bus(self, event_name: str, payload: Any) -> None:
+        """Receive event from EventBus without relaying back to bus."""
+        if isinstance(payload, dict):
+            payload = dict(payload)
+            payload["_from_bus"] = True
+        else:
+            payload = {"_from_bus": True, "content": payload}
+        if event_name in ("tool_started", "tool_start"):
+            self.emit("tool_started", **payload)
+        elif event_name in ("tool_completed", "tool_end"):
+            self.emit("tool_completed", **payload)
+        elif event_name in ("llm_token", "token"):
+            self.emit("token", **payload)
+        elif event_name in ("on_agent_thought", "thought"):
+            self.emit("thought", **payload)
+        elif event_name in ("status_update", "status_changed"):
+            self.emit("status_update", **payload)
+        elif event_name in ("edit_proposed", "file_modified"):
+            self.emit("edit_proposed", **payload)
+
+    def emit(self, event_name: str, **kwargs: Any) -> None:
+        """Universal event emitter routing events to observers and async queues.
+
+        Single-direction flow (plan 1.1): the engine emits to EventBus; the
+        UIBridge is a *reader* only. It MUST NOT re-emit back into EventBus —
+        that bidirectional relay created an infinite echo (event -> bus ->
+        bridge -> bus -> ...) suppressed only by fragile runtime flags. The
+        bridge consumes events pushed to it (via _relay_from_bus) and fans out
+        to its observers/queue; it never writes back to the bus.
+        """
+        if kwargs.pop("_from_bus", False):
+            # Events arriving from the bus are consumed here, never relayed back.
+            pass
+
+        if event_name in ("on_agent_thought", "thought"):
+            content = kwargs.get("content", kwargs.get("text", ""))
+            if type(self).on_agent_thought is not UIBridge.on_agent_thought:
+                self.on_agent_thought(content)
+            else:
+                self._notify_observers("on_agent_thought", content)
+                try:
+                    q = self._get_queue()
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.call_soon_threadsafe(q.put_nowait, {"type": "thought", "content": content})
+                    except RuntimeError:
+                        q.put_nowait({"type": "thought", "content": content})
+                except Exception:
+                    pass
+        elif event_name in ("tool_started", "tool_start"):
+            tool_name = kwargs.get("tool_name", kwargs.get("tool", kwargs.get("name", "")))
+            args = kwargs.get("args", {})
+            if type(self).tool_started is not UIBridge.tool_started:
+                self.tool_started(tool_name, args=args)
+            else:
+                self.emit_tool_start_sync(tool_name, args)
+        elif event_name in ("tool_completed", "tool_end"):
+            tool_name = kwargs.get("tool_name", kwargs.get("tool", kwargs.get("name", "")))
+            ok = kwargs.get("ok", kwargs.get("success", True))
+            result = kwargs.get("result", kwargs.get("summary", ""))
+            if type(self).tool_completed is not UIBridge.tool_completed:
+                self.tool_completed(tool_name, ok=ok, summary=result)
+            else:
+                self.emit_tool_end_sync(tool_name, str(result)[:500])
+        elif event_name in ("edit_proposed", "file_modified"):
+            file_path = kwargs.get("file", kwargs.get("file_path", ""))
+            diff = kwargs.get("diff", kwargs.get("diff_content", ""))
+            additions = kwargs.get("additions", 0)
+            removals = kwargs.get("removals", 0)
+            # Phase 2.4 Edit Gateway: pass threading.Event + decision_box
+            # through to the concrete handler so blocking approval works.
+            event = kwargs.get("event", None)
+            decision_box = kwargs.get("decision_box", None)
+            if type(self).edit_proposed is not UIBridge.edit_proposed:
+                self.edit_proposed(file=file_path, diff=diff, additions=additions, removals=removals, event=event, decision_box=decision_box)
+            else:
+                self.on_file_modified(f"[{file_path}]\n{diff}")
+        elif event_name in ("status_update", "status_changed"):
+            if type(self).status_update is not UIBridge.status_update:
+                self.status_update(**kwargs)
+            else:
+                msg = kwargs.get("message", kwargs.get("status_text", ""))
+                self.on_status_changed(msg)
+        elif event_name in ("token", "llm_token"):
+            content = kwargs.get("content", kwargs.get("token", ""))
+            try:
+                q = self._get_queue()
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.call_soon_threadsafe(q.put_nowait, {"type": "token", "content": content})
+                except RuntimeError:
+                    q.put_nowait({"type": "token", "content": content})
+            except Exception:
+                pass
+        else:
+            self.on_action_triggered(event_name, kwargs.get("target", ""), str(kwargs))
+
     def _notify_observers(self, method: str, *args: Any) -> None:
         """Fail-safe fan-out to all observers.
 
@@ -146,19 +243,21 @@ class UIBridge:
         """Called to update the status bar / progress text."""
         self._notify_observers("on_status_changed", status_text)
 
-    def on_agent_thought(self, text: str) -> None:
+    def on_agent_thought(self, text: str, **kw: Any) -> None:
         """Called to surface agent reasoning text."""
-        self._notify_observers("on_agent_thought", text)
-        # Also enqueue for the live renderer (collapsible thought blocks).
-        try:
-            q = self._get_queue()
-            try:
-                loop = asyncio.get_running_loop()
-                loop.call_soon_threadsafe(q.put_nowait, {"type": "thought", "content": text})
-            except RuntimeError:
-                q.put_nowait({"type": "thought", "content": text})
-        except Exception:
-            pass
+        self.emit("on_agent_thought", text=text, **kw)
+
+    def tool_started(self, tool_name: str, **kw: Any) -> None:
+        self.emit("tool_started", tool_name=tool_name, **kw)
+
+    def edit_proposed(self, file: str, diff: str = "", additions: int = 0, removals: int = 0, **kw: Any) -> None:
+        self.emit("edit_proposed", file=file, diff=diff, additions=additions, removals=removals, **kw)
+
+    def tool_completed(self, tool_name: str, ok: bool = True, **kw: Any) -> None:
+        self.emit("tool_completed", tool_name=tool_name, ok=ok, **kw)
+
+    def status_update(self, **kw: Any) -> None:
+        self.emit("status_update", **kw)
 
 
     def request_user_input(self, prompt: str, timeout: float | None = None) -> str:

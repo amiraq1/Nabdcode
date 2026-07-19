@@ -6,6 +6,7 @@ from enum import Enum
 import json
 import os
 import re
+import threading
 import time
 from typing import Any, Callable, Final, Optional
 
@@ -14,17 +15,17 @@ from typing import Any, Callable, Final, Optional
 # a load-order cycle:
 #   engine.loop -> engine.dispatcher -> engine.tool_registry -> tools.base
 # and, more importantly, engine.loop was historically the linchpin that forced
-# engine/__init__ -> engine.loop -> llm_router -> core -> engine.events to
+# engine/__init__ -> engine.loop -> llm_router -> core -> core.kernel.events to
 # re-enter mid-import. Injecting the dispatcher via DI + a Protocol keeps the
 # module-level import graph acyclic.
 from engine.consent import ConsentManager
-from engine.events import bus
+from core.kernel.events import bus
 from engine.interfaces import DispatcherProtocol
 from engine.state import RuntimeState, GoalSpec, parse_goal_command, build_goal_block
 from engine.goal_verifier import evaluate_goal_exit, MAX_GOAL_RETRIES
 from core.permissions import PermissionEngine, PermissionDecision
 
-from core.parser import extract_command, extract_json_from_response, validate_tool_call, ToolCall, TOOL_SCHEMAS
+from core.parser import extract_command, extract_json_from_response, validate_tool_call, ToolCall
 from tools.models import ToolResult
 from core.security import is_safe_command
 from core.utils import truncate, safe_strip
@@ -57,9 +58,11 @@ TOOL_FEWSHOT_FALLBACK: Final[str] = (
     f"{CRITICAL_RULES_FOR_TOOL_CALLING}\n\n"
     "## Tool Call Format (few-shot)\n"
     "You MUST call a tool by outputting ONLY one JSON object. No prose.\n\n"
-    "Example 1 — run a shell command:\n"
+    "Example 1 — search the local codebase knowledge base (RAG) for code context:\n"
+    '{"tool": "search_knowledge_base", "args": {"action": "search", "query": "EventBus fault isolation try except", "k": 3}}\n\n'
+    "Example 2 — run a shell command:\n"
     '{"tool": "execute_shell", "args": {"command": "ls -la"}}\n\n'
-    "Example 2 — finish a conversational reply:\n"
+    "Example 3 — finish a conversational reply:\n"
     '{"tool": "final_answer", "args": {"answer": "Here is your answer."}}\n\n'
     f"{BROWSER_FEWSHOT_EXAMPLES}\n\n"
     "Output ONLY one JSON object. No prose."
@@ -69,6 +72,9 @@ TOOL_FEWSHOT_FALLBACK: Final[str] = (
 def _prompt_requires_investigation(text: str, has_active_goal: bool = False) -> bool:
     """Return True if this prompt asks for real work, not chitchat, simple math, or casual/informational chat."""
     if has_active_goal:
+        return True
+    from core.investigation import classify_intent, is_multi_stage_investigation
+    if is_multi_stage_investigation(classify_intent(text)):
         return True
     if is_chitchat(text)[0]:
         return False
@@ -82,12 +88,14 @@ def _prompt_requires_investigation(text: str, has_active_goal: bool = False) -> 
         "repo", "project", ".py", ".js", ".md", ".json", ".txt", ".sh",
         "todo", "pytest", "tests", "error in", "bug in", "log", "logs",
         "ls ", "grep ", "cat ", "sed ", "git ",
+        "مستودع", "الكود", "كود", "ملف", "ملفات", "مجلد", "المشروع", "مشروع", "سجل", "سجلات", "الشيفرة",
     )
     workspace_actions = (
         "analyze", "check ", "find ", "read ", "list ", "search ", "run ",
         "execute ", "test ", "debug ", "fix ", "edit ", "write ", "create ",
         "modify ", "update ", "delete ", "count ", "how many", "show ",
         "scan ", "build ", "compile ", "inspect ",
+        "افحص", "فحص", "حلل", "حلّل", "دقق", "دقّق", "راجع", "شغل", "شغّل", "نفذ", "نفّذ", "اقرأ", "ابحث", "اعرض", "صحح", "صحّح", "اصلح", "أصلح", "عدل", "عدّل", "انشئ", "أنشئ", "احسب",
     )
     if any(target in lower for target in workspace_targets) or any(lower.startswith(act) or f" {act}" in lower for act in workspace_actions):
         return True
@@ -101,20 +109,39 @@ def _prompt_requires_investigation(text: str, has_active_goal: bool = False) -> 
     if any(lower.startswith(pref) or pref in lower for pref in informational_prefixes):
         return False
 
-    return True
+    # Default: لا إشارة عمل/مستودع -> محادثة/معرفة عامة
+    return False
 
 
 # Strip a leading "Thought for Ns" prefix so the replication fingerprint ignores
 # varying think-times that would otherwise evade the repetition guard.
 _THOUGHT_PREFIX_RE = re.compile(
-    r"^(?:\s*[\*\-]\s*)?(?:Thought|Thinking)\s+for\s+\d+s\s*",
+    r"^(?:\s*[\*\-]\s*)?(?:Thought|Thinking)\s+(?:for\s+\d+\s*(?:s|seconds?)|through|about)\s*",
     re.IGNORECASE,
 )
 
 
 def _normalize_response(response_text: str) -> str:
-    """Strip the leading 'Thought for Ns' prefix from a response."""
-    return _THOUGHT_PREFIX_RE.sub("", response_text).strip()
+    """Strip leading 'Thought for Ns' and `<think>...</think>` blocks from a response."""
+    text = re.sub(r"<(?:think|thought)>.*?</(?:think|thought)>", "", response_text, flags=re.IGNORECASE | re.DOTALL)
+    return _THOUGHT_PREFIX_RE.sub("", text).strip()
+
+
+def _extract_cmd_or_path(tool_args: Any) -> str:
+    """Extract a clean target path or command summary from tool arguments."""
+    if not isinstance(tool_args, dict):
+        return str(tool_args)[:60]
+    return str(
+        tool_args.get("command")
+        or tool_args.get("path")
+        or tool_args.get("file_path")
+        or tool_args.get("AbsolutePath")
+        or tool_args.get("SearchPath")
+        or tool_args.get("TargetFile")
+        or tool_args.get("file")
+        or tool_args.get("query")
+        or str(tool_args)[:60]
+    )
 
 
 def _extract_final_answer(raw_json: str | None) -> str | None:
@@ -144,6 +171,48 @@ def _extract_final_answer(raw_json: str | None) -> str | None:
     if not isinstance(answer, str):
         return None
     return answer.strip()
+
+
+def _looks_like_tool_call(text: str) -> bool:
+    """True when ``text`` is (or contains) a raw tool-call JSON — e.g. the last
+    model response was another tool invocation rather than a synthesized report.
+
+    Matches a bare ``{...}`` payload AND one wrapped in prose / a ```json fence,
+    since the model's final output at the step ceiling is often fenced or
+    prefixed with commentary. Used by the final-answer guard: a raw tool call
+    sitting in ``_last_response`` must NOT be treated as a finished answer, or
+    the run will dump that JSON as the "final answer".
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    candidates = [stripped]
+    # Extract fenced blocks: ```json ... ``` or ``` ... ```
+    for m in re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL):
+        candidates.append(m)
+    # Fallback: first balanced-ish {...} object anywhere in the text.
+    brace = text.find("{")
+    if brace != -1:
+        candidates.append(text[brace:])
+    for cand in candidates:
+        cand = cand.strip()
+        if not cand.startswith("{"):
+            continue
+        try:
+            obj = json.loads(cand)
+        except (json.JSONDecodeError, TypeError):
+            # Try up to the last closing brace if trailing prose exists.
+            end = cand.rfind("}")
+            if end != -1:
+                try:
+                    obj = json.loads(cand[: end + 1])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            else:
+                continue
+        if isinstance(obj, dict) and "tool" in obj:
+            return True
+    return False
 
 
 def _is_thought_only(response_text: str) -> bool:
@@ -205,11 +274,12 @@ MAX_CRITICAL_FULL: Final[int] = 3
 # Patterns that mark a response as "thinking-only" (no actionable tool call).
 # Anchored at the start; tolerate leading bullet/star and trailing period.
 FORBIDDEN_THOUGHT_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
-    re.compile(r"^\s*(?:[\*\-]\s*)?(?:Thought|Thinking)\s+(?:for\s+\d+\s*(?:s|seconds?)|through|about)\s*\.?$", re.IGNORECASE),
-    re.compile(r"^\s*(?:[\*\-]\s*)?(?:I am thinking|I will think|I will now think)\s*\.?$", re.IGNORECASE),
+    re.compile(r"^\s*(?:[\*\-]\s*)?(?:Thought|Thinking)\s+(?:for\s+\d+\s*(?:s|seconds?)|through|about|process)\s*\.?$", re.IGNORECASE),
+    re.compile(r"^\s*(?:[\*\-]\s*)?(?:I am thinking|I will think|I will now think|Let me think|Let's think)\s*\.?$", re.IGNORECASE),
     re.compile(r"^\s*(?:[\*\-]\s*)?Thinking through the problem\s*\.?$", re.IGNORECASE),
     re.compile(r"^\s*(?:[\*\-]\s*)?Proceeding to think\s*\.?$", re.IGNORECASE),
     re.compile(r"^\s*I will now think about that\s*\.?$", re.IGNORECASE),
+    re.compile(r"^\s*<(?:think|thought)>.*</(?:think|thought)>\s*$", re.IGNORECASE | re.DOTALL),
 )
 
 
@@ -217,7 +287,7 @@ def _resolve_default_provider() -> Callable[[list[dict[str, Any]], Any], str]:
     """Lazily resolve the default LLM provider.
 
     Imported at call time to avoid a circular import:
-    engine/__init__ -> engine.loop -> llm_router -> core -> engine.events
+    engine/__init__ -> engine.loop -> llm_router -> core -> core.kernel.events
     would otherwise re-enter engine/__init__ mid-import.
     """
     from llm_router import execute_agent_with_memory
@@ -287,6 +357,44 @@ class _ToolInteraction:
     critical: bool = False
 
 
+def _derive_read_hint(user_prompt: str) -> str:
+    """Extract a path-like term from the user prompt for the rejection directive.
+
+    Scans the user prompt for path-like patterns (directory names, file paths,
+    keywords like 'core', 'engine', 'src', etc.) and returns a suggestion like
+    ' (e.g. file_system.read path=core/__init__.py)'. Returns empty string when
+    no hint can be derived so the rejection message stays clean for chitchat.
+    """
+    if not user_prompt:
+        return ""
+    # Known workspace directories (project-specific, not hardcoded as mandatory)
+    _known = ("core", "engine", "tools", "ui", "tests", "scripts", "src", "lib")
+    _lower = user_prompt.lower()
+    for kw in _known:
+        if kw in _lower:
+            m = re.search(re.escape(kw), user_prompt, re.IGNORECASE)
+            if m:
+                return f" (e.g. {m.group()}/__init__.py)"
+    return ""
+
+
+def _type_name(t: Any) -> str:
+    """Map a Python type annotation to a short human-readable name."""
+    if t is str:
+        return "str"
+    if t is int:
+        return "int"
+    if t is float:
+        return "float"
+    if t is bool:
+        return "bool"
+    if t is list:
+        return "list"
+    if t is dict:
+        return "dict"
+    return str(t).split("'")[1] if "'" in str(t) else str(t)
+
+
 @dataclass
 class _LoopCtx:
     """Mutable, per-``run()`` loop state.
@@ -314,6 +422,9 @@ class _LoopCtx:
     #  • Consecutive reasoning rounds that produced NO new (dispatched) tool
     #    call. Reset to 0 whenever a real tool dispatch occurs.
     consecutive_no_tool_rounds: int = 0
+    # Phase 8 (RAG Auto-Trigger): guards against re-triggering the forced
+    # search_knowledge_base call more than once per run.
+    rag_auto_triggered: bool = False
     # Session allowlist of approved shell commands (exact command string).
     # Cached for the duration of the current run() so repeated identical
     # commands don't re-prompt the operator. Never persisted across runs.
@@ -322,6 +433,15 @@ class _LoopCtx:
     # _TOOL_WINDOW turns keep full output; older turns are compressed into
     # <past_steps_summary>. Critical-evidence turns are frozen regardless.
     tool_interactions: list[_ToolInteraction] = field(default_factory=list)
+    # Phase 0 convergence: how many times a non-recursive root listing (`list .`)
+    # has been allowed this run. Permitted exactly ONCE so the model can satisfy
+    # the verifier's "directories explored >= 1" gate without re-scanning.
+    root_list_count: int = 0
+    # Phase 0 fix B: cumulative no-tool reasoning rounds that NEVER resets on a
+    # transient tool call. The consecutive counter is reset by real dispatches
+    # (which a small model can interleave to dodge the cap), so this cumulative
+    # one is what actually bounds non-converging thought-only loops.
+    total_no_tool_rounds: int = 0
 
 
 class ExecutionLoop:
@@ -358,8 +478,16 @@ class ExecutionLoop:
         self._provider_fail_streak = 0
         self._last_tool_signature: str | None = None
         self._fixation_count: int = 0
+        self._force_final: bool = False  # set by Fixation Breaker to hard-stop looping
+        self._force_tool: bool = False  # Phase C: force tool call on next LLM iteration when reads < 3
+        self._executed_sigs: set[str] = set()  # all tool-call signatures executed this run
+        self._redundant_count: int = 0  # count of already-seen (cycled) calls
         self._evidence_rejection_count: int = 0
         self.MAX_EVIDENCE_RETRIES: int = 3  # السماح بـ 3 محاولات لتصحيح الإجابة
+        # Phase F: one-time synthesis directive flag.
+        self._synthesis_directive_injected: bool = False
+        # Phase D: unified read counter tracking across iterations.
+        self._last_read_count: int = 0  # previous iteration's read count (for progress detection)
         # Phase2: the active model identifier. Injected by callers that know the
         # resolved model (e.g. the router); defaults to the env-configured model
         # so existing callers that omit it still get a meaningful identifier.
@@ -376,8 +504,33 @@ class ExecutionLoop:
         self._workspace_context: str = ""
         # Per-run context; allocated in run() before the loop begins.
         self._ctx: Optional[_LoopCtx] = None
-        self.all_tools = TOOL_SCHEMAS
+        # ToolRegistry (populated by AppContext.build() before any ExecutionLoop
+        # is constructed) is the single source of truth for tool schemas.
+        self.all_tools = self._get_registry_schemas()
         self._compactor = ContextCompactor()
+
+    @staticmethod
+    def _get_registry_schemas() -> dict:
+        """Return all tool schemas directly from the live ``ToolRegistry``.
+
+        The registry is the authoritative source of truth; no legacy fallback
+        dict is merged. Every registered tool is visible to the model.
+        """
+        try:
+            from engine.tool_registry import registry
+
+            schemas: dict[str, dict[str, Any]] = {}
+            for schema in registry.get_all_schemas():
+                name = schema.get("name")
+                if name:
+                    schemas[name] = {
+                        "required": schema.get("required", {}),
+                        "optional": schema.get("optional", {}),
+                        "description": schema.get("description", ""),
+                    }
+            return schemas
+        except Exception:
+            return {}
 
     def _is_small_or_fallback_model(self) -> bool:
         """Return True when the active model is a small/local/fallback tier.
@@ -422,6 +575,31 @@ class ExecutionLoop:
             return f"[VERIFIER CRITIQUE]: You claimed a number without evidence. Use the tool then state the output."
 
         return f"[VERIFIER CRITIQUE]: {findings_str}. Correct your approach and retry with the correct tool."
+
+    def _format_tools_for_prompt(self) -> str:
+        """Render the available tool schemas as a compact plain-text block.
+
+        Small/fallback models (ORCA-FLASH) do not understand OpenAI-style
+        ``tools`` arrays; they need the tool list inline in the system prompt
+        with explicit names + args so they emit the correct JSON tool call.
+        """
+        tools = self.get_available_tools()
+        if not tools:
+            return ""
+        lines = ["## AVAILABLE TOOLS (call one per turn via JSON):"]
+        for name, schema in tools.items():
+            if name == "final_answer":
+                lines.append(f'- {name}: args={{"answer": str}}')
+                continue
+            required = schema.get("required", {})
+            optional = schema.get("optional", {})
+            req_str = ", ".join(f"{k}: {_type_name(v)}" for k, v in required.items())
+            opt_str = ", ".join(f"{k}: {_type_name(v)}" for k, v in optional.items())
+            spec = f"required={{ {req_str} }}" if req_str else "required={{}}"
+            if opt_str:
+                spec += f", optional={{ {opt_str} }}"
+            lines.append(f"- {name}: {spec}")
+        return "\n".join(lines)
 
     # ── Phase4.1 Auto-Critical Policy helpers ──────────────────────────────
 
@@ -586,6 +764,102 @@ class ExecutionLoop:
             f"[{it.path_hint}] — {it.summary}"
         )
 
+    # ── Phase D: Unified read counter (single source of truth) ─────────────
+
+    def _real_reads(self) -> int:
+        """Return count of distinct file paths successfully read via file_system read/edit or code_intelligence.
+
+        Single source of truth for all read-counting logic. Counts each unique
+        path once (distinct by lowercased path). Excludes root list ("." / "/").
+        """
+        seen: set[str] = set()
+        for r in self.evidence_log.get_records():
+            if not r.success:
+                continue
+            tool = getattr(r, "tool", "") or ""
+            action = getattr(r, "action", "") or ""
+            path = str(getattr(r, "command_or_path", "") or "").strip().lower()
+            if path in (".", "/", ""):
+                continue
+            if tool == "file_system" and action in ("read", "edit", ""):
+                seen.add(path)
+            elif tool in ("code_intelligence", "secure_code_intelligence") and action in ("list_symbols", "get_definition", "find_references"):
+                seen.add(path)
+        return len(seen)
+
+    # ── Phase C: Extract file suggestions from listing evidence ─────────────
+
+    def _extract_listing_files(self, max_suggestions: int = 3) -> str:
+        """Extract 2-3 concrete .py file paths from the most recent listing output.
+
+        Scans evidence records for successful ``file_system list`` calls and
+        extracts .py filenames from the output snippet. Returns a comma-separated
+        string like 'core/__init__.py, core/constants.py, core/config.py'.
+        Falls back to the directory name + '__init__.py' when no filenames found.
+        Returns empty string when listing_dir is root-level ("." or "/").
+        """
+        # Find the most recent listing record: match action="list" OR any
+        # file_system record where command_or_path looks like a directory path
+        # (no file extension, not root) — some tools may not populate action.
+        listing_dir = ""
+        for rec in reversed(self.evidence_log.get_records()):
+            if not rec.success or rec.tool != "file_system":
+                continue
+            action = getattr(rec, "action", "") or ""
+            cmd = str(getattr(rec, "command_or_path", "") or "").strip()
+            if cmd in (".", "/", ""):
+                continue
+            if action == "list":
+                listing_dir = cmd
+                break
+            # Fallback: no action field set, but command_or_path is a directory
+            # (no file extension).
+            if not action and "." not in cmd:
+                listing_dir = cmd
+                break
+
+        if not listing_dir:
+            return ""
+
+        # Phase F: build set of already-read paths (exclude from suggestions).
+        already_read = set()
+        for r in self.evidence_log.get_records():
+            if r.success and r.tool == "file_system":
+                a = getattr(r, "action", "") or ""
+                if a in ("read", "edit", ""):
+                    p = str(getattr(r, "command_or_path", "") or "").strip().lower()
+                    if p and p not in (".", "/", ""):
+                        already_read.add(p)
+
+        # Scan output snippets of all recent file_system records for .py files
+        files: list[str] = []
+        seen: set[str] = set()
+        for rec in reversed(self.evidence_log.get_records()):
+            if not rec.success:
+                continue
+            snippet = str(getattr(rec, "output_snippet", "") or "")
+            # Find .py filenames in the output
+            for m in re.finditer(r'\b([a-zA-Z_][a-zA-Z0-9_]*\.py)\b', snippet):
+                fname = m.group(1)
+                if fname not in seen:
+                    seen.add(fname)
+                    # Build path: <listing_dir>/<filename>
+                    _full = f"{listing_dir}/{fname}"
+                    # Phase F: skip already-read paths.
+                    if _full.lower() in already_read:
+                        continue
+                    files.append(_full)
+                    if len(files) >= max_suggestions:
+                        break
+            if len(files) >= max_suggestions:
+                break
+
+        if files:
+            return ", ".join(files)
+
+        # Fallback: no unread .py files found — suggest directory itself.
+        return f"{listing_dir}/__init__.py"
+
     # ------------------------------------------------------------------
     # Per-iteration helpers (single responsibility, CC < 10 each)
     # ------------------------------------------------------------------
@@ -602,7 +876,26 @@ class ExecutionLoop:
         token_est = sum(
             len(str(m.get("content", ""))) // 4 for m in self.state.get_messages()
         )
-        if elapsed_total > MAX_BUDGET_SECONDS or token_est > MAX_BUDGET_TOKENS or not self.state.is_loop_safe():
+        # Phase 0 Fix B: cumulative no-tool reasoning cap. The total counter
+        # NEVER resets on transient tool calls, so it bounds non-converging
+        # thought-only loops even when a small model interleaves tool calls to
+        # dodge the consecutive cap.
+        # Phase D: step-based hard ceiling for investigation prompts (10 cycles absolute max).
+        # This is an absolute safety net — never loops forever even on small models.
+        _step_hard_cap = False
+        if _prompt_requires_investigation(ctx.user_prompt, has_active_goal=_has_active_goal(self)):
+            # Phase F: synthesis buffer — 15-cycle ceiling when reads >= 3
+            _hard_limit = 15 if self._real_reads() >= 3 else 10
+            if self.state.step_count > _hard_limit:
+                _step_hard_cap = True
+        hard_ceiling = (
+            elapsed_total > MAX_BUDGET_SECONDS
+            or token_est > MAX_BUDGET_TOKENS
+            or not self.state.is_loop_safe()
+            or (ctx.total_no_tool_rounds > MAX_CONSECUTIVE_NO_TOOL_ROUNDS * 2 and getattr(self.state, "active_goal", None) is None)
+            or _step_hard_cap
+        )
+        if hard_ceiling:
             if not self._maybe_force_partial_answer(force_cap=True):
                 self.state.update_status("COMPLETED")
                 last_resp = getattr(self, "_last_response", "")
@@ -612,11 +905,8 @@ class ExecutionLoop:
                         f"Budget Ceiling: time={int(elapsed_total)}s tokens~{token_est}",
                     )
                     self._last_response = safe_msg
-                bus.emit(
-                    "loop_completed",
-                    {"reason": "budget_exhausted", "output": self._last_response},
-                )
-                bus.emit("show_final_answer", {"output": self._last_response})
+                if not self._emit_final(self._last_response, "budget_exhausted"):
+                    return _LoopSignal.CONTINUE
             return _LoopSignal.TERMINATE
         return _LoopSignal.PROCEED
 
@@ -671,11 +961,69 @@ class ExecutionLoop:
         raw stripped response and ``normalized_resp`` has the leading "Thought for
         Ns" prefix removed (used by the repetition fingerprint guard).
         """
+        # ── Phase D: set _force_tool based on unified read counter ───────────
+        # Check at every LLM call start: if investigation is needed and reads < 3,
+        # force the model to call a tool via tool_choice="required".
+        # Uses _real_reads() as single source of truth.
+        # Phase D: set _force_tool based on unified read counter.
+        # Phase F: when reads >= 3, inject one-time synthesis directive.
+        self._force_tool = False
+        if self._ctx is not None:
+            _needs = _prompt_requires_investigation(
+                self._ctx.user_prompt, has_active_goal=_has_active_goal(self)
+            )
+            if _needs:
+                if self._real_reads() < 3:
+                    self._force_tool = True
+                    # Phase G: proactive real-file directive. As soon as a listing
+                    # exists, feed the model concrete EXISTING paths on EVERY forced
+                    # turn so it never guesses/hallucinates paths in its first plan.
+                    # Saved here, injected AFTER compaction (mirrors Phase F) so the
+                    # sliding-window drop cannot swallow it.
+                    _proactive_sugg = self._extract_listing_files()
+                    if _proactive_sugg:
+                        self._force_read_directive_text = (
+                            "[CONTROL] You have not read enough source files yet "
+                            "(need >=3). Do NOT guess or invent file paths. Call "
+                            "file_system with action='read' on these EXISTING "
+                            f"files now: {_proactive_sugg}"
+                        )
+                # Phase F: one-time synthesis directive when reads just reached >= 3
+                # Save the text; actual injection into compacted happens AFTER
+                # _compact_messages + _inject_runtime_context to avoid being
+                # dropped by the sliding-window compaction.
+                if self._real_reads() >= 3 and not getattr(self, "_synthesis_directive_injected", False):
+                    self._synthesis_directive_injected = True
+                    self._synthesis_directive_text = (
+                        "[CONTROL] SYNTHESIS DIRECTIVE: You have read at least 3 source files. "
+                        "This is sufficient. Do NOT call any more tools. "
+                        "Synthesize your architectural report IMMEDIATELY using final_answer."
+                    )
+
         bus.emit("llm_request_started", {"step": self.state.step_count})
 
         compacted = self._compact_messages(self.state.get_messages())
         if compacted and compacted[0].get("role") == "system":
             compacted = self._inject_runtime_context(compacted)
+        # Phase F: inject one-time synthesis directive into compacted
+        # (after compaction so it survives the sliding-window drop).
+        if getattr(self, "_synthesis_directive_injected", False) and hasattr(self, "_synthesis_directive_text"):
+            compacted.append({
+                "role": "system",
+                "content": self._synthesis_directive_text,
+            })
+            # Prevent re-injection on subsequent iterations.
+            self._synthesis_directive_injected = True
+            del self._synthesis_directive_text
+        # Phase G: inject proactive real-file directive (after compaction so it
+        # survives the sliding-window drop). Re-derived each forced turn.
+        if getattr(self, "_force_tool", False) and getattr(self, "_force_read_directive_text", ""):
+            compacted.append({
+                "role": "system",
+                "content": self._force_read_directive_text,
+            })
+            # One-shot: clear so a stale directive can't linger past this call.
+            self._force_read_directive_text = ""
 
         try:
             started = time.perf_counter()
@@ -684,9 +1032,42 @@ class ExecutionLoop:
             # forward it when using the default router entry point; custom
             # providers that don't accept **kwargs keep working untouched.
             if self.llm_provider is _resolve_default_provider():
-                response = self.llm_provider(compacted, logger=self._logger)
+                _fc_tools = None
+                try:
+                    from core.fc_schemas import build_openai_tools
+                    from engine.tool_registry import registry as _fc_registry
+
+                    # The Orchestrator is forbidden from calling execute_shell
+                    # (security gate blocks it); exclude it from the FC schema so
+                    # the model can never emit a blocked call via native FC.
+                    _fc_tools = build_openai_tools(_fc_registry, exclude={"execute_shell"})
+                except Exception:
+                    _fc_tools = None
+                if _fc_tools:
+                    # Fixation Breaker raised _force_final (repeated call detected
+                    # on a small model that ignores prose). Pin tool_choice to
+                    # final_answer so the model is FORCED to emit the report
+                    # instead of looping — the only reliable stop with flash models.
+                    # Phase C: when _force_tool is True (reads < 3, investigation
+                    # active), force the model to call A tool via "required" —
+                    # it cannot emit final_answer or prose without reading.
+                    _tool_choice = "auto"
+                    if getattr(self, "_force_final", False):
+                        _tool_choice = {"type": "function", "function": {"name": "final_answer"}}
+                    elif getattr(self, "_force_tool", False):
+                        _tool_choice = "required"
+                    response = self.llm_provider(
+                        compacted, logger=self._logger, tools=_fc_tools, tool_choice=_tool_choice
+                    )
+                else:
+                    response = self.llm_provider(compacted, logger=self._logger)
             else:
                 response = self.llm_provider(compacted)
+            # Phase C: after any successful LLM call, reset _force_tool so next
+            # iteration uses default tool_choice ("auto"). Placed OUTSIDE the
+            # if _fc_tools branch so it runs even when native FC is unavailable.
+            if getattr(self, "_force_tool", False):
+                self._force_tool = False
             elapsed = time.perf_counter() - started
         # The LLM provider / router can raise a variety of errors when every
         # backend fails (e.g. llm_router raises RuntimeError("All failed: ..."),
@@ -702,9 +1083,25 @@ class ExecutionLoop:
             return "", ""
 
         response_text = response.strip()
+        try:
+            import pathlib as _pl
+            _pl.Path('logs').mkdir(exist_ok=True)
+            with open('logs/parser_debug.log','a',encoding='utf-8') as _d:
+                _d.write('\n===== RAW @ step %s =====\n%s\n' % (getattr(self.state,'step_count','?'), response_text[:3000]))
+        except Exception:
+            pass
 
         # Prompt Leak Detector: check if raw model response leaked structural system markers
-        if any(marker in response_text for marker in ("## TODO Discipline", "<hard_rules>", "<system_instructions>")):
+        _LEAK_MARKERS = (
+            "## TODO Discipline",
+            "<hard_rules>",
+            "<system_instructions>",
+            "<system_identity>",
+            "CRITICAL RULE:",
+            "TASK CLASSIFICATION",
+            "SMALL-TALK & CHIT-CHAT PROTOCOL",
+        )
+        if any(marker in response_text for marker in _LEAK_MARKERS):
             leak_preview = response_text[:200]
             if self._note_provider_failure(f"Prompt Leak detected: {leak_preview}") is _LoopSignal.TERMINATE:
                 return "", ""
@@ -750,7 +1147,7 @@ class ExecutionLoop:
         agent_md = Path("AGENT.md")
         rules = sanitize(agent_md.read_text(encoding="utf-8"))[:4000] if agent_md.exists() else ""
         memory = sanitize(load_memory() or "")[:4000]
-        from core.constants import TODO_DISCIPLINE, SECURITY_COMPLIANCE_RULE, LANGUAGE_POLICY
+        from core.constants import TODO_DISCIPLINE, SECURITY_COMPLIANCE_RULE, LANGUAGE_POLICY, PYTHON_AND_CODE_EXPLORATION_POLICY, GRAPHIFY_KNOWLEDGE_GRAPH_POLICY
 
         prefix = "<system_instructions>\n"
         user_msg = ""
@@ -764,10 +1161,25 @@ class ExecutionLoop:
 
         if req_tools:
             prefix += f"{TODO_DISCIPLINE}\n\n"
+            from core.investigation import build_investigation_protocol_prompt
+            inv_prompt = build_investigation_protocol_prompt(user_msg)
+            if inv_prompt:
+                prefix += f"{inv_prompt}\n\n"
         else:
             prefix += "## Casual/Direct Context Exception (Active)\nThis user prompt is purely conversational, informational, or conceptual without an active goal or workspace task. Answer directly, warmly, and immediately using final_answer without executing tools or inspecting workspace files.\n\n"
         prefix += f"{SECURITY_COMPLIANCE_RULE}\n\n"
         prefix += f"{LANGUAGE_POLICY}\n\n"
+        prefix += f"{PYTHON_AND_CODE_EXPLORATION_POLICY}\n\n"
+        prefix += f"{GRAPHIFY_KNOWLEDGE_GRAPH_POLICY}\n\n"
+
+        try:
+            from core.taste_engine import TasteEngine
+            from core.kernel.security import get_workspace_root
+            _taste_engine = TasteEngine(workspace_dir=get_workspace_root())
+            prefix += f"{_taste_engine.get_taste_summary_for_prompt()}\n\n"
+        except Exception:
+            pass
+
         if rules:
             prefix += f"{rules}\n\n"
         prefix += "</system_instructions>\n"
@@ -822,9 +1234,17 @@ class ExecutionLoop:
         else:
             system_content += f"\n\n{CRITICAL_RULES_FOR_TOOL_CALLING}"
 
+        # Phase 7 (Tool Visibility): explicitly list all available tools with
+        # their parameters so the model knows what it CAN call. Without this,
+        # small/fallback models never see the tool registry and hallucinate.
+        tools_block = self._format_tools_for_prompt()
+        if tools_block:
+            system_content += f"\n\n{tools_block}"
+
         return [
             {"role": "system", "content": system_content}
         ] + compacted[1:]
+
 
     def _emit_todo_list(self, response: str) -> None:
         """Parse ``- [ ]`` / ``- [x]`` lines from the response and emit show_todo_list."""
@@ -861,17 +1281,20 @@ class ExecutionLoop:
             return _LoopSignal.TERMINATE
 
         fingerprint = normalized_resp[:200]
-        if fingerprint and ctx.fingerprints.count(fingerprint) >= 2:
-            self.state.update_status("COMPLETED")
-            safe_msg = self._safe_shutdown(
-                ctx.user_prompt,
-                "CRITICAL: Infinite Replication Loop Detected (Entropy = 0). "
-                "Aborting session to preserve API budget and memory.",
-            )
-            bus.emit("loop_completed", {"reason": "infinite_replication_loop", "output": safe_msg})
-            return _LoopSignal.TERMINATE
-
         if fingerprint:
+            # Check the PRE-APPEND count so the guard trips on the 3rd identical
+            # response (the fingerprint has already been seen twice). This gives
+            # the no-tool verifier room to defer to this guard for pure
+            # reasoning loops that never emit a tool.
+            if ctx.fingerprints.count(fingerprint) >= 2:
+                self.state.update_status("COMPLETED")
+                safe_msg = self._safe_shutdown(
+                    ctx.user_prompt,
+                    "CRITICAL: Infinite Replication Loop Detected (Entropy = 0). "
+                    "Aborting session to preserve API budget and memory.",
+                )
+                bus.emit("loop_completed", {"reason": "infinite_replication_loop", "output": safe_msg})
+                return _LoopSignal.TERMINATE
             ctx.fingerprints.append(fingerprint)
             if len(ctx.fingerprints) > 3:
                 ctx.fingerprints.pop(0)
@@ -900,6 +1323,11 @@ class ExecutionLoop:
 
             from engine.tool_registry import registry as _registry
             is_valid, error = validate_tool_call(raw_json, _registry)
+            try:
+                with open('logs/parser_debug.log','a',encoding='utf-8') as _d:
+                    _d.write('\n[VALIDATE] is_valid=%r error=%r has_exec=%r has_todo=%r has_fs=%r raw=%.160s\n' % (is_valid, error, 'execute_shell' in _registry, 'todo_write' in _registry, 'file_system' in _registry, raw_json))
+            except Exception:
+                pass
             if not is_valid:
                 bus.emit("ui_validation_failed", {"error": error, "step": self.state.step_count})
                 bus.emit(
@@ -1037,6 +1465,13 @@ class ExecutionLoop:
                     self._auto_critical_from_claim(self._last_response)
                     if ctx.goal_correct_count < MAX_GOAL_RETRIES:
                         ctx.goal_correct_count += 1
+                        ctx.fingerprints.clear()
+                        self._last_tool_signature = None
+                        self._fixation_count = 0
+                        self._executed_sigs = set()
+                        self._redundant_count = 0
+                        ctx.last_command = None
+                        self._recent_calls.clear()
                         critique = goal_result.to_critique() if not goal_result.ok else "Goal success criteria not proven against live evidence."
                         self.state.append_message({"role": "user", "content": critique})
                         bus.emit(
@@ -1071,78 +1506,11 @@ class ExecutionLoop:
             })
             self._goal.is_met = True
 
-        has_active_goal = bool(self._goal and getattr(self._goal, 'success_criteria', None) and getattr(self._goal, 'success_criteria', None) != 'None')
-        require_tools = _prompt_requires_investigation(ctx.user_prompt, has_active_goal=has_active_goal)
-        try:
-            self.evidence_log.verify_fresh(require_tools=require_tools, claim=self._last_response)
-            self._evidence_rejection_count = 0
-        except (VerifierError, ToolRequiredError) as verr:
-            self._evidence_rejection_count += 1
-            err_msg = str(verr)
-
-            # Phase4.1 Auto-Critical Policy (a): any evidence chunk explicitly
-            # cited during a failed verify_fresh critique is frozen as Critical
-            # so the correction loop can never lose the anchor it was told to use.
-            self._auto_critical_from_claim(self._last_response)
-
-            if self._evidence_rejection_count > self.MAX_EVIDENCE_RETRIES or ctx.self_correct_count >= MAX_SELF_CORRECT:
-                log_msg = f"[Evidence Verifier] 🚨 CRITICAL: Max retries ({self.MAX_EVIDENCE_RETRIES}) reached. Aborting task. Reason: {err_msg}"
-                if self._logger is not None:
-                    self._logger.error(log_msg)
-                else:
-                    import logging as _logging
-                    _logging.error(log_msg)
-                self.state.update_status("COMPLETED")
-                safe_msg = self._safe_shutdown(ctx.user_prompt, err_msg)
-                bus.emit("loop_completed", {"reason": "self_correct_exhausted", "output": safe_msg})
-                return _LoopSignal.TERMINATE
-
-            # 🚨 الاعتراض الناعم (Soft Interception)
-            log_msg = f"[Evidence Verifier] Soft Interception (Attempt {self._evidence_rejection_count}/{self.MAX_EVIDENCE_RETRIES}): {err_msg}"
-            if self._logger is not None:
-                self._logger.warning(log_msg)
-            else:
-                import logging as _logging
-                _logging.warning(log_msg)
-
-            ctx.self_correct_count += 1
-            rejection_msg = (
-                f"[EVIDENCE REJECTED] Your FINAL_ANSWER was rejected by the Structural Verifier.\n"
-                f"Reason: {err_msg}\n\n"
-                f"CRITICAL SYSTEM DIRECTIVE: You MUST use exact, verbatim quotes (technical anchors) "
-                f"from your previous tool outputs. Do NOT paraphrase, summarize, or hallucinate. "
-                f"Analyze the terminal logs, correct your answer by quoting exactly, and submit FINAL_ANSWER again."
-            )
-            self.state.append_message({"role": "user", "content": rejection_msg})
-            bus.emit(
-                "verifier_critique",
-                {
-                    "step": self.state.step_count,
-                    "attempt": self._evidence_rejection_count,
-                    "max_attempts": self.MAX_EVIDENCE_RETRIES,
-                    "critique": rejection_msg,
-                },
-            )
-            self.state.increment_step()
-            backoff_delay = min(self.POLL_DELAY * (2 ** (self._evidence_rejection_count - 1)), 4.0)
-            time.sleep(backoff_delay)
+        # Phase 0 convergence: verify_fresh moved to _emit_final (single choke point).
+        # Check verify_fresh via _emit_final before declaring termination.
+        if not self._emit_final(self._last_response, "natural_completion"):
             return _LoopSignal.CONTINUE
-
-        if ctx.self_correct_count > 0 or self._evidence_rejection_count > 0:
-            write_lesson(
-                problem=f"Initial verification failed and resolved after {max(ctx.self_correct_count, self._evidence_rejection_count)} correction attempt(s)",
-                solution=f"Resolved by adhering to the client constitution rules and quoting from outputs",
-            )
-
-        # Phase5 (GoalSpec): if a goal is active it was already enforced by the
-        # authoritative gate at the top of this method. Reaching here means the
-        # goal either passed or was absent, so a generic "Success" termination is
-        # now safe to emit (the goal gate set is_met=True on its own path).
-        self.state.update_status("COMPLETED")
-        bus.emit("loop_completed", {"reason": "no_tool_call", "output": self._last_response})
-        bus.emit("show_final_answer", {"output": self._last_response})
         return _LoopSignal.TERMINATE
-
     def _handle_cycle_and_security(self, tool_call: ToolCall) -> _LoopSignal:
         """Detect repeated/oscillating tool calls and enforce the shell security gate.
 
@@ -1168,44 +1536,40 @@ class ExecutionLoop:
                 self._last_response = answer
             return self._verify_claim_or_self_correct()
 
-        # ── Fixation Breaker (Soft Interception) ─────────────────────────────
-        current_tool = tool_name
-        current_args = str(tool_args)
-        current_signature = f"{current_tool}::{current_args}"
-        if self._last_tool_signature == current_signature:
-            self._fixation_count += 1
-            if self._fixation_count >= 1:
-                log_msg = f"[Fixation Breaker] Intercepted repeated command: {current_tool}"
-                if self._logger is not None:
-                    self._logger.warning(log_msg)
-                else:
-                    import logging as _logging
-                    _logging.warning(log_msg)
-                bus.emit("ui_repeated_tool", {"tool": current_tool, "step": self.state.step_count})
-                intervention_msg = (
-                    f"[SYSTEM CRITIQUE] You just executed the exact same tool '{current_tool}' "
-                    f"with the exact same arguments. Repeating it will NOT yield new results. "
-                    f"STOP repeating yourself. Analyze the previous output, try a completely "
-                    f"different command/approach, or use 'FINAL_ANSWER' if you are stuck."
-                )
-                self.state.append_message({"role": "user", "content": intervention_msg})
-                self.state.increment_step()
-                time.sleep(self.POLL_DELAY)
-                return _LoopSignal.CONTINUE
+        # ── Fixation Breaker (Hard Stop -> force final_answer) ──────────────
+        # The small Orchestrator model cycles through a ROTATION of distinct
+        # calls (list ., read pyproject, list ., read main.py, list core, ...)
+        # that never repeat CONSECUTIVELY — so a "last == current" comparison
+        # never fires. Instead we track the SET of all executed signatures and
+        # count redundant (already-seen) calls, plus a sufficiency threshold on
+        # successful reads. Either condition forces final_answer on the next
+        # turn (tool_choice is pinned in _invoke_llm_and_normalize), breaking
+        # the non-converging loop without waiting for the step budget.
+        import json as _json
+        current_sig = f"{tool_name}:{_json.dumps(tool_args, sort_keys=True, ensure_ascii=False)}"
+        if not hasattr(self, "_executed_sigs"):
+            self._executed_sigs, self._redundant_count = set(), 0
+        if current_sig in self._executed_sigs:
+            self._redundant_count += 1
         else:
-            self._fixation_count = 0
-            self._last_tool_signature = current_signature
+            self._executed_sigs.add(current_sig)
+
+        if self._redundant_count >= 2 or self._real_reads() >= 5:
+            self._force_final = True
+            bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count})
+            return _LoopSignal.CONTINUE
 
         recent_slice = list(self._recent_calls)[-4:]
         if tool_call == ctx.last_command or tool_call in recent_slice:
             ctx.repeated += 1
+            self._fixation_count += 1
             if ctx.repeated >= 2 or (tool_call == ctx.last_command and ctx.repeated >= 1):
                 bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count})
                 self.state.append_message(
                     {
-                        "role": "system",
+                        "role": "user",
                         "content": (
-                            f"STOP! You have already executed '{tool_name}' with these exact "
+                            f"[SYSTEM CRITIQUE] STOP! You have already executed '{tool_name}' with these exact "
                             "arguments recently. Do NOT repeat failed commands or oscillate between "
                             "them. Try a different strategy or inspect files directly."
                         ),
@@ -1371,6 +1735,59 @@ class ExecutionLoop:
             "Please analyze the error and fix your command or strategy."
         )
 
+    def _is_answer_in_hand_or_goal_met(self) -> bool:
+        """Check if the evidence gathered so far satisfies the active goal or user prompt.
+
+        When true ('بوّابة الجواب في اليد'), the loop immediately forces a final
+        report instead of continuing to dispatch exploration tools (`execute_shell`,
+        directory scans) or waiting for the budget ceiling.
+        """
+        ctx = self._ctx
+        if ctx is None:
+            return False
+
+        # If a GoalSpec is active, delegate to the authoritative evaluator.
+        if _has_active_goal(self):
+            if self._goal and getattr(self._goal, "is_met", False):
+                return True
+            try:
+                from core.evidence import evaluate_goal_exit
+                res = evaluate_goal_exit(self._goal, self.evidence_log, require_tools=True)
+                if getattr(res, "ok", False):
+                    if self._goal:
+                        self._goal.is_met = True
+                    return True
+            except Exception:
+                pass
+            return False
+
+        # Without an active GoalSpec, check if targeted read/check prompts are answered
+        # by existing successful evidence records.
+        records = [r for r in self.evidence_log.get_records() if r.success and getattr(r, "output_snippet", "")]
+        if not records:
+            return False
+
+        prompt_lower = (ctx.user_prompt or "").strip().lower()
+        for rec in records:
+            tool = getattr(rec, "tool", "")
+            cmd_or_path = getattr(rec, "command_or_path", "") or ""
+            action = getattr(rec, "action", "") or ""
+            if tool == "file_system" and cmd_or_path and action in ("read", "edit", ""):
+                path_str = str(cmd_or_path).strip().lower()
+                if path_str and path_str not in (".", "/", ""):
+                    # If the exact path read is mentioned in the prompt (e.g. pyproject.toml),
+                    # we already have the requested file contents in evidence!
+                    if path_str in prompt_lower:
+                        return True
+                    # Or if prompt asks to read/inspect/check a file and we have at least 1 successful file read.
+                    if any(w in prompt_lower for w in ("read ", "check ", "inspect ", "show ", "cat ", "name ")):
+                        import os as _os
+                        base = _os.path.basename(path_str)
+                        if base and len(base) > 2 and base in prompt_lower:
+                            return True
+
+        return False
+
     def _pre_dispatch_guard(self, tool_call: ToolCall) -> "ToolResult | None":
         """Phase 4.5 cheap pre-checks that short-circuit a real tool dispatch.
 
@@ -1431,7 +1848,159 @@ class ExecutionLoop:
                         metadata={"deduped": True},
                     )
 
+        # ── Guard 3: Answer-in-hand / redundant exploration guard ────────────
+        # If the target file requested by the user has already been read into
+        # evidence, or if the model attempts to re-read/list the directory tree (path='.')
+        # after gathering successful reads, block the call and force final_answer.
+        if self._is_answer_in_hand_or_goal_met():
+            self._force_final = True
+            if tool_name in ("file_system", "execute_shell", "web_search", "search_knowledge_base"):
+                bus.emit("tool_security_blocked", {
+                    "command": f"{tool_name}({tool_args}) blocked: answer in hand",
+                    "step": self.state.step_count,
+                })
+                return ToolResult(
+                    success=True,
+                    stdout=(
+                        "[SYSTEM DIRECTIVE] Sufficient evidence has already been gathered to answer the user's prompt. "
+                        f"Do NOT execute more commands or scan directories. Immediately output your answer using: "
+                        '{"tool": "final_answer", "args": {"answer": "<your concise report from the evidence>"}}'
+                    ),
+                    returncode=0,
+                    status="success",
+                    metadata={"answer_in_hand_blocked": True},
+                )
+
+        if tool_name == "file_system" and isinstance(tool_args, dict):
+            path = str(tool_args.get("path") or "").strip().lower()
+            action = str(tool_args.get("action") or "").strip().lower()
+            has_reads = any(r.success and getattr(r, "tool", "") == "file_system" and str(getattr(r, "command_or_path", "")).strip().lower() not in (".", "/", "") for r in self.evidence_log.get_records())
+            if has_reads and (path in (".", "/", "") or action == "list" or any(str(r.command_or_path).strip().lower() == path for r in self.evidence_log.get_records() if r.success)):
+                self._force_final = True
+                return ToolResult(
+                    success=True,
+                    stdout=(
+                        f"[SYSTEM DIRECTIVE] You already read the target files ({path or '.'}). Do NOT list directories or re-read files. "
+                        'Immediately output {"tool": "final_answer", "args": {"answer": "<your concise report from the evidence>"}}'
+                    ),
+                    returncode=0,
+                    status="success",
+                    metadata={"redundant_read_blocked": True},
+                )
+
+        # ── Guard 4: Re-read / wider-scope barrier (no new justification) ────
+        # Point 3 of the convergence fix: a successful read of a source must not
+        # be repeated, nor may a wider-scope listing (path='.' or '/') be issued
+        # after a targeted read, unless a NEW explicit justification exists. This
+        # is the hard backstop that independent of is_answer_in_hand keeps the
+        # loop from re-touching already-read evidence.
+        if tool_name == "file_system" and isinstance(tool_args, dict):
+            action = str(tool_args.get("action") or "").lower()
+            path = str(tool_args.get("path") or "").strip()
+            path_l = path.lower()
+            reads = [
+                r for r in self.evidence_log.get_records()
+                if getattr(r, "success", False) and getattr(r, "tool", "") == "file_system"
+            ]
+            read_paths = {
+                str(getattr(r, "command_or_path", "")).strip().lower() for r in reads
+            }
+            recursive = str(tool_args.get("recursive", "")).lower() in ("true", "1", "yes")
+            is_root_list = path_l in (".", "/", "") and action == "list"
+            is_whole_tree_scan = is_root_list and recursive
+            # Phase 0 root fix — UNIFIED EXPLORATION CONTRACT.
+            # Guard 4 and the Structural Verifier (check_investigation_gates)
+            # must agree on what counts as "real exploration progress". The
+            # verifier requires: directories>=1, configuration>=1,
+            # (entrypoints>=1 OR modules>=1), files>=3. Guard 4 therefore
+            # PERMITS directed exploration that can satisfy those gates and
+            # ONLY blocks the pathological pattern:
+            #   (a) recursive whole-tree scan of '.'/'/'  → the exact "801-entry
+            #       tree wipe" loop;
+            #   (b) a SECOND non-recursive root listing (one discovery pass is
+            #       enough — directories>=1 is met by the first);
+            #   (c) re-reading an already-read exact file path.
+            # A single non-recursive `list .` is ALLOWED exactly once so the
+            # model can produce directories>=1; targeted `list <dir>` and every
+            # fresh file read are always allowed. This removes the deadlock
+            # where the guard blocked the very listing the verifier demanded.
+            if is_whole_tree_scan:
+                self._force_final = True
+                return ToolResult(
+                    success=True,
+                    stdout=(
+                        "[SYSTEM DIRECTIVE] A recursive whole-tree listing is not needed to answer this prompt. "
+                        "Use a single non-recursive directory listing plus targeted file_system reads of specific files. "
+                        'Immediately output {"tool": "final_answer", "args": {"answer": "<your concise report from the evidence>"}}'
+                    ),
+                    returncode=0,
+                    status="success",
+                    metadata={"whole_tree_scan_blocked": True},
+                )
+            if is_root_list:
+                # Permit exactly ONE non-recursive root listing, and only as a
+                # discovery pass BEFORE any file has been read. Once the model
+                # has read evidence, re-listing the root is redundant (it cannot
+                # produce new files) and must be blocked — this is what keeps
+                # the verifier's "files >= 3 reads" gate authoritative.
+                if ctx.root_list_count >= 1 or read_paths:
+                    self._force_final = True
+                    return ToolResult(
+                        success=True,
+                        stdout=(
+                            "[SYSTEM DIRECTIVE] The repository root was already listed (or you already have reads). "
+                            "Do NOT re-list directories. Use targeted file_system reads of specific files. "
+                            'Immediately output {"tool": "final_answer", "args": {"answer": "<your concise report from the evidence>"}}'
+                        ),
+                        returncode=0,
+                        status="success",
+                        metadata={"root_list_repeat_blocked": True},
+                    )
+                ctx.root_list_count += 1
+                # Allowed: first non-recursive root listing (satisfies the
+                # verifier's directories>=1 gate). Fall through to dispatch.
+                return None
+            # Targeted listing of a specific subdirectory is always allowed
+            # (produces directories / modules for the verifier).
+            if action == "list":
+                return None
+            # Re-read of an already-read exact path (action read/replace/append
+            # on the same file) → block and force final.
+            if action in ("read", "replace", "append", "delete", "") and path_l in read_paths:
+                self._force_final = True
+                return ToolResult(
+                    success=True,
+                    stdout=(
+                        f"[SYSTEM DIRECTIVE] The file '{path}' was already read into evidence this run. "
+                        "Do NOT re-read it. Immediately output your answer using: "
+                        '{"tool": "final_answer", "args": {"answer": "<your concise report from the evidence>"}}'
+                    ),
+                    returncode=0,
+                    status="success",
+                    metadata={"reread_blocked": True},
+                )
+
         return None
+
+    def _inject_guard_directive(self, pre: "ToolResult") -> None:
+        """Deliver a pre-dispatch guard directive to the model WITHOUT leaking it.
+
+        Channel-separation contract (Phase 0 root fix):
+          (a) PERSISTENCE — the directive is NEVER recorded in evidence_log /
+              output_snippet. Evidence = real tool outputs only.
+          (b) DELIVERY — it reaches the model as a control message (role "user"
+              tagged "[CONTROL]"), never disguised as a "[TOOL RESULT: ...]"
+              artifact that the model would re-narrate as raw evidence.
+
+        The guard keeps steering model behavior (convergence intact); only the
+        leak path is removed.
+        """
+        directive = getattr(pre, "stdout", "") or getattr(pre, "stderr", "") or ""
+        if directive:
+            self.state.append_message({
+                "role": "user",
+                "content": f"[CONTROL] {directive}",
+            })
 
     def _dispatch_and_record_evidence(self, tool_call: ToolCall) -> None:
         """Dispatch the validated tool and log the outcome to the EvidenceLog.
@@ -1455,17 +2024,33 @@ class ExecutionLoop:
             blocked = ConsentManager().confirm(tool_name, tool_args)
             if blocked is not None:
                 result = blocked
-                self.evidence_log.record(
+                blocked_rec = self.evidence_log.record(
                     tool=tool_name,
-                    command_or_path=(
-                        tool_args.get("command")
-                        or tool_args.get("path")
-                        or tool_args.get("query")
-                        or str(tool_args)[:60]
-                    ),
+                    command_or_path=_extract_cmd_or_path(tool_args),
                     success=blocked.success,
                     output_snippet=blocked.stdout or blocked.stderr,
                 )
+                # --- Safe Telemetry Injection (Blocked Tool) ---
+                _sys_logger = getattr(self, "logger", None) or getattr(self, "_logger", None)
+                if _sys_logger is None and hasattr(self, "context"):
+                    _sys_logger = getattr(self.context, "logger", None)
+                elif _sys_logger is None and hasattr(self, "ctx"):
+                    _sys_logger = getattr(self.ctx, "logger", None)
+                elif _sys_logger is None and hasattr(self, "_ctx") and self._ctx is not None:
+                    _sys_logger = getattr(self._ctx, "logger", None)
+
+                if _sys_logger and hasattr(_sys_logger, "log_execution"):
+                    _sys_logger.log_execution({
+                        "session_id": getattr(self.state, "session_id", "unknown"),
+                        "step": getattr(self.state, "step_count", 0),
+                        "type": "TOOL_EXECUTION_BLOCKED",
+                        "evidence_id": getattr(blocked_rec, "evidence_id", ""),
+                        "tool": tool_name,
+                        "command_or_path": str(tool_args)[:100],
+                        "success": blocked.success,
+                        "output_snippet": truncate(blocked.stdout or blocked.stderr or "", 200),
+                    })
+                # -------------------------------------------------
                 output = truncate(blocked.output or "", self.max_output_len)
                 feedback = self._build_tool_feedback(result, tool_name, tool_args, output)
                 self.state.append_message({
@@ -1476,20 +2061,98 @@ class ExecutionLoop:
                 time.sleep(self.POLL_DELAY)
                 return
 
+        # ── Edit Gateway (Phase 2.4) Human-in-the-Loop ────────────────────────
+        # Block the engine thread and wait for human approval before applying
+        # any file write/edit operation to disk. The UI receives a
+        # threading.Event and a decision_box dict; it sets decision_box["approved"]
+        # and calls event.set() when the operator responds to the approval prompt.
+        _is_write = False
+        if tool_name in ("edit_file", "replace_file_content"):
+            _is_write = True
+        elif tool_name == "file_system":
+            _action = (tool_args or {}).get("action", "") if isinstance(tool_args, dict) else ""
+            # All actions except read/list/empty are potentially destructive.
+            if _action not in ("", "read", "list", "view"):
+                _is_write = True
+
+        if _is_write:
+            _bridge = get_bridge()
+            _approval_event = threading.Event()
+            _decision_box: dict[str, bool] = {"approved": False}
+            _file_path = str(tool_args.get("path") or tool_args.get("file", ""))
+            _diff = str(tool_args.get("content") or tool_args.get("diff", ""))
+
+            _bridge.emit("edit_proposed",
+                file=_file_path,
+                diff=_diff,
+                event=_approval_event,
+                decision_box=_decision_box,
+            )
+            _bridge.emit("status_update", message="⏳ Waiting for human approval to apply edits...")
+
+            # FREEZE the engine thread until the operator responds (120s timeout).
+            _approval_event.wait(timeout=120)
+
+            if not _decision_box.get("approved", False):
+                _bridge.emit("status_update", message="✋ Edit rejected by user.")
+                _result = ToolResult(
+                    success=True,
+                    stdout="USER REJECTED THE EDIT. Manual override. Please revise your approach.",
+                    stderr="",
+                    output="USER REJECTED THE EDIT. Manual override. Please revise your approach.",
+                )
+                _rec = self.evidence_log.record(
+                    tool=tool_name,
+                    command_or_path=_extract_cmd_or_path(tool_args),
+                    success=True,
+                    output_snippet="Edit rejected by user",
+                    action=str(tool_args.get("action", "")) if isinstance(tool_args, dict) else "",
+                )
+                _output = truncate(_result.output or "", self.max_output_len)
+                _feedback = self._build_tool_feedback(_result, tool_name, tool_args, _output)
+                self.state.append_message({
+                    "role": "system",
+                    "content": f"[TOOL RESULT: {tool_name}]\n{_feedback}",
+                })
+                self.state.increment_step()
+                time.sleep(self.POLL_DELAY)
+                return
+
+            _bridge.emit("status_update", message="✅ Edit approved. Applying to disk...")
+
         result = self.dispatcher.dispatch(tool_name, tool_args)
 
-        cmd_summary = (
-            tool_args.get("command")
-            or tool_args.get("path")
-            or tool_args.get("query")
-            or str(tool_args)[:60]
-        )
-        self.evidence_log.record(
+        cmd_summary = _extract_cmd_or_path(tool_args)
+        rec = self.evidence_log.record(
             tool=tool_name,
             command_or_path=cmd_summary,
             success=getattr(result, "success", False),
             output_snippet=getattr(result, "output", "") or getattr(result, "stderr", ""),
+            action=str(tool_args.get("action", "")) if isinstance(tool_args, dict) else "",
         )
+        # ── Phase F: (diagnostic tokens removed) ────────────────────────
+        # ── Phase F: (PHASE_E diagnostic tokens removed) ─────────────────
+        # --- Safe Telemetry Injection ---
+        _sys_logger = getattr(self, "logger", None) or getattr(self, "_logger", None)
+        if _sys_logger is None and hasattr(self, "context"):
+            _sys_logger = getattr(self.context, "logger", None)
+        elif _sys_logger is None and hasattr(self, "ctx"):
+            _sys_logger = getattr(self.ctx, "logger", None)
+        elif _sys_logger is None and hasattr(self, "_ctx") and self._ctx is not None:
+            _sys_logger = getattr(self._ctx, "logger", None)
+
+        if _sys_logger and hasattr(_sys_logger, "log_execution"):
+            _sys_logger.log_execution({
+                "session_id": getattr(self.state, "session_id", "unknown"),
+                "step": getattr(self.state, "step_count", 0),
+                "type": "TOOL_EXECUTION",
+                "evidence_id": getattr(rec, "evidence_id", ""),
+                "tool": tool_name,
+                "command_or_path": cmd_summary,
+                "success": getattr(result, "success", False),
+                "output_snippet": truncate(getattr(result, "output", "") or getattr(result, "stderr", "") or "", 200),
+            })
+        # ---------------------------------
 
         output_val = getattr(result, "output", "") or getattr(result, "stderr", "") or str(result)
         output = truncate(output_val, self.max_output_len)
@@ -1555,6 +2218,8 @@ class ExecutionLoop:
 
         interrupted = False
         self._ctx = _LoopCtx(user_prompt=user_prompt)
+        # Phase F: reset synthesis directive flag per run.
+        self._synthesis_directive_injected = False
         # Scratch holders written by helpers, read by the orchestrator.
         self._last_response: str = ""
         self._active_tool: Optional[ToolCall] = None
@@ -1615,6 +2280,17 @@ class ExecutionLoop:
                 "tokens_saved_estimate": self._estimate_tokens_saved()
             })
 
+        # Phase 8 (RAG Auto-Trigger): if the user asks about a known codebase
+        # symbol and the model hasn't called search_knowledge_base yet this
+        # turn, force a RAG retrieval so the model sees real code instead of
+        # hallucinating. Small/fallback models (ORCA-FLASH) often skip tools;
+        # this guard keeps them honest. Placed AFTER the repetition guard so
+        # final_answer / thought-only terminations short-circuit first.
+        self._maybe_auto_trigger_rag()
+
+        if self._is_answer_in_hand_or_goal_met():
+            self._force_final = True
+
         response_text, normalized_resp = self._invoke_llm_and_normalize()
         if not response_text:
             return
@@ -1623,117 +2299,158 @@ class ExecutionLoop:
             return
 
         self._last_response = response_text
+        bridge = get_bridge()
+        bridge.emit("on_agent_thought", content=response_text)
 
         tool_call, signal = self._parse_and_validate_tool(response_text)
         if signal is _LoopSignal.CONTINUE:
             ctx = self._ctx
             if ctx is not None:
                 ctx.consecutive_no_tool_rounds += 1
+                ctx.total_no_tool_rounds += 1
                 if self._maybe_force_partial_answer():
                     return
             return
         if signal is _LoopSignal.TERMINATE:
-            # The parse helper already set self._last_response (e.g. a
-            # final_answer termination). Finalize via the no-tool-call path so
-            # the loop emits loop_completed with reason "no_tool_call".
             if self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
                 return
+            if self._maybe_force_partial_answer():
+                return
+            return
+
+        if tool_call is None:
             ctx = self._ctx
             if ctx is not None:
                 ctx.consecutive_no_tool_rounds += 1
-                if self._maybe_force_partial_answer():
-                    return
-            return
-        ctx = self._ctx
-        assert ctx is not None
-        if tool_call is None:
-            # Phase 4.5 — a reasoning round with no actionable tool call. Count
-            # it toward the consecutive-no-tool cap and, if the cap is breached
-            # near the budget, force a partial answer rather than spinning.
-            ctx.consecutive_no_tool_rounds += 1
-            if self._maybe_force_partial_answer():
-                return
+                ctx.total_no_tool_rounds += 1
             if self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
                 return
             if self._maybe_force_partial_answer():
                 return
             return
 
-        sig = self._handle_cycle_and_security(tool_call)
-        if sig is _LoopSignal.CONTINUE:
-            # A cycle/security block is also a non-productive round.
-            ctx.consecutive_no_tool_rounds += 1
-            if self._maybe_force_partial_answer():
+        if tool_call is not None:
+            sig = self._handle_cycle_and_security(tool_call)
+            if sig is _LoopSignal.CONTINUE:
+                ctx = self._ctx
+                if ctx is not None:
+                    ctx.consecutive_no_tool_rounds += 1
+                    ctx.total_no_tool_rounds += 1
+                    if self._maybe_force_partial_answer():
+                        return
                 return
-            return
-        if sig is _LoopSignal.TERMINATE:
-            return
+            if sig is _LoopSignal.TERMINATE:
+                return
+            # ── Pre-dispatch guard (answer-in-hand / redundant-read / path-jail) ──
+            # This is the LIVE choke-point: Guard 3 lives here, so the loop can
+            # actually block a re-read or shell call after evidence is in hand —
+            # without it the guard is dead code and the Orchestrator loops.
+            pre = self._pre_dispatch_guard(tool_call)
+            if pre is not None:
+                ctx = self._ctx
+                # ── Phase 0 root fix: channel separation ────────────────────
+                # Inject the guard directive as a CONTROL message for the model
+                # (see _inject_guard_directive for the contract). It is NEVER
+                # written to evidence_log / output_snippet — evidence = real
+                # tool outputs only. The guard keeps steering behavior
+                # (convergence intact) while the leak is removed at its source.
+                self._inject_guard_directive(pre)
+                self.state.increment_step()
+                self.state.prune_history()
+                time.sleep(self.POLL_DELAY)
+                # When the guard blocked a redundant/answer-in-hand call, the
+                # injected directive already tells the model to emit final_answer.
+                # Return and let the NEXT iteration parse that final_answer
+                # normally. Forcing a Partial answer here would maim the output
+                # exactly as forbidden by the convergence criterion — so we must
+                # NOT synthesize a Partial banner from a guard block.
+                return
+            self._active_tool = tool_call
+            if tool_call.tool in ("file_system", "edit_file", "replace_file_content"):
+                bridge.emit("edit_proposed", file=tool_call.args.get("path") or tool_call.args.get("file", ""), diff=tool_call.args.get("content") or tool_call.args.get("diff", ""))
+            self._dispatch_and_record_evidence(tool_call)
+            bridge.emit("status_update", message=f"Cycle completed. Step: {self.state.step_count}")
 
-        # Phase 4.5 — cheap pre-dispatch guards (workspace jail, web_search
-        # dedup). A returned ToolResult short-circuits the real dispatch so we
-        # neither waste a tool call nor consume external budget.
-        guard_result = self._pre_dispatch_guard(self._active_tool)
-        if guard_result is not None:
-            self._record_and_feedback(self._active_tool, guard_result)
-            return
+    def _maybe_auto_trigger_rag(self) -> None:
+        """Force a RAG search when the user asks about a known codebase symbol.
 
-        self._dispatch_and_record_evidence(self._active_tool)
-
-    def _record_and_feedback(self, tool_call: ToolCall, result: "ToolResult") -> None:
-        """Record a (possibly pre-dispatched) tool result and feed it back to the
-        model, mirroring the tail of ``_dispatch_and_record_evidence`` without
-        invoking the real dispatcher."""
+        Small/fallback models (ORCA-FLASH) frequently skip tool calls and
+        hallucinate. When the latest user message names a symbol that exists in
+        the local knowledge base (e.g. "EventBus", "KineticStateEngine"), we
+        inject a forced search_knowledge_base call so the model is anchored to
+        real code before it answers.
+        """
         ctx = self._ctx
-        tool_name = tool_call.tool
-        tool_args = tool_call.args
-        cmd_summary = (
-            tool_args.get("command")
-            or tool_args.get("path")
-            or tool_args.get("query")
-            or str(tool_args)[:60]
+        if ctx is None:
+            return
+        # Only trigger once per run (avoid loops).
+        if getattr(ctx, "rag_auto_triggered", False):
+            return
+        from engine.tool_registry import registry
+        if "search_knowledge_base" not in registry:
+            return
+
+        # Find the latest user message.
+        user_msg = ""
+        for msg in reversed(self.state.get_messages()):
+            if msg.get("role") == "user":
+                user_msg = msg.get("content", "")
+                break
+        if not user_msg:
+            return
+
+        # Known codebase symbols worth retrieving. Only trigger on explicit
+        # architectural/code questions — never on greetings or massless queries
+        # (those are caught by the Small-Talk guard in main.py before the loop
+        # runs, so we add a second safety net here).
+        triggers = (
+            "eventbus", "kineticstateengine", "renderer class", "dispatcher class",
+            "evidence log", "executionloop", "memorymanager", "toolregistry",
+            "hybridretriever", "rag search", "embedding model", "vector index",
+            "how does the eventbus", "how does the kinetic", "how does the renderer",
+            "explain the eventbus", "explain the kinetic", "architecture of the",
         )
-        # Only cache/web_search dedup-bookkeeping when a real dispatch would have
-        # happened; pre-dispatch rejections (path jail) still record evidence.
-        if tool_name == "web_search" and isinstance(tool_args, dict):
-            raw_query = tool_args.get("query")
-            if raw_query:
-                norm = re.sub(r"\s+", " ", str(raw_query).strip().lower())
-                if norm not in ctx.executed_search_queries:
-                    ctx.executed_search_queries.append(norm)
-                if getattr(result, "success", False):
-                    ctx.last_search_cache[norm] = getattr(result, "output", "") or getattr(result, "stderr", "")
+        _norm_user = user_msg.lower()
+        # Exclude pure greetings / short inputs.
+        if len(_norm_user.strip()) <= 10 or _norm_user.strip() in ("hi", "hello", "hey", "1hi"):
+            return
+        if not any(t in _norm_user for t in triggers):
+            return
+
+        # Mark triggered so we don't loop.
+        ctx.rag_auto_triggered = True
+
+        # Build a focused query from the user message.
+        query = user_msg[:200].strip()
+        tool_call = ToolCall(
+            tool="search_knowledge_base",
+            args={"action": "search", "query": query, "k": 3},
+        )
+        bus.emit("tool_started", {"tool": "search_knowledge_base", "args": tool_call.args, "step": self.state.step_count})
+        result = self.dispatcher.dispatch("search_knowledge_base", tool_call.args)
+        bus.emit("tool_completed", {
+            "tool": "search_knowledge_base",
+            "result": result,
+            "success": result.success,
+            "returncode": result.returncode,
+            "step": self.state.step_count,
+        })
+        output = truncate(getattr(result, "output", "") or "", self.max_output_len)
+        feedback = self._build_tool_feedback(result, "search_knowledge_base", tool_call.args, output)
         self.evidence_log.record(
-            tool=tool_name,
-            command_or_path=cmd_summary,
-            success=getattr(result, "success", False),
-            output_snippet=getattr(result, "output", "") or getattr(result, "stderr", ""),
+            tool="search_knowledge_base",
+            command_or_path=query[:60],
+            success=result.success,
+            output_snippet=output,
         )
-        output_val = getattr(result, "output", "") or getattr(result, "stderr", "") or str(result)
-        output = truncate(output_val, self.max_output_len)
-        if ctx is not None:
-            rec = self.evidence_log.get_records()[-1] if self.evidence_log.get_records() else None
-            ctx.tool_interactions.append(_ToolInteraction(
-                step=self.state.step_count,
-                tool=tool_name,
-                ok=bool(getattr(result, "success", False)),
-                exit_code=int(getattr(result, "returncode", 0) or 0),
-                path_hint=(cmd_summary or "")[:80],
-                summary=f"{'SUCCESS' if getattr(result, 'success', False) else 'FAILURE'}: {cmd_summary}".strip(),
-                output=output,
-                evidence_id=rec.evidence_id if rec else "",
-                critical=bool(rec.critical) if rec else False,
-            ))
-        feedback = self._build_tool_feedback(result, tool_name, tool_args, output)
         self.state.append_message({
             "role": "system",
-            "content": f"[TOOL RESULT: {tool_name}]\n{feedback}",
+            "content": f"[TOOL RESULT: search_knowledge_base]\n{feedback}",
         })
-        # A real dispatch happened (or a dedup hit) → reset the no-tool counter.
-        if ctx is not None:
-            ctx.consecutive_no_tool_rounds = 0
         self.state.increment_step()
-        self.state.prune_history()
         time.sleep(self.POLL_DELAY)
+
+
 
     def _maybe_force_partial_answer(self, force_cap: bool = False) -> bool:
         """Phase 4.5: near budget ceiling or consecutive reasoning cap reached, force a partial/summary answer.
@@ -1757,13 +2474,80 @@ class ExecutionLoop:
         token_ratio = token_est / MAX_BUDGET_TOKENS if MAX_BUDGET_TOKENS else 0
         step_ratio = self.state.step_count / self.state.max_steps if getattr(self.state, "max_steps", 0) else 0
         is_budget = max(time_ratio, token_ratio, step_ratio) >= BUDGET_SOFT_WARN_RATIO
-        is_cap = ctx.consecutive_no_tool_rounds > MAX_CONSECUTIVE_NO_TOOL_ROUNDS
+        # The consecutive-no-tool cap is the authoritative terminator for
+        # casual (no active GoalSpec) reasoning loops. When a verifiable goal
+        # IS active, the GoalSpec exit gate owns termination (emitting
+        # 'goal_not_met'), so the cap must yield to it instead of forcing a
+        # partial answer. The discriminator is the active goal, not whether
+        # evidence was gathered.
+        # Phase D: suppress no-tool cap when investigation is needed AND
+        # reads are making progress (increasing). This gives the model enough
+        # budget to reach >=3 reads then synthesize. Cap fires only for
+        # chitchat loops or stuck-investigation (reads not increasing).
+        _is_making_progress = (
+            _prompt_requires_investigation(ctx.user_prompt, has_active_goal=_has_active_goal(self))
+            and self._real_reads() > self._last_read_count
+        )
+        self._last_read_count = self._real_reads()
+        is_cap = (
+            (ctx.consecutive_no_tool_rounds > MAX_CONSECUTIVE_NO_TOOL_ROUNDS
+             or ctx.total_no_tool_rounds > MAX_CONSECUTIVE_NO_TOOL_ROUNDS * 2)
+            and getattr(self.state, "active_goal", None) is None
+            and not _is_making_progress
+        )
+        is_answer_in_hand = self._is_answer_in_hand_or_goal_met()
 
-        if not force_cap and not is_budget and not is_cap:
+        # Convergence fix: a guard block (Guard 3/4) set _force_final because the
+        # model already had enough evidence or tried a redundant/wider-scope call.
+        # Terminate with a CLEAN answer from evidence — never the "[Partial answer"
+        # banner, which is the maimed output the convergence criterion forbids.
+        if getattr(self, "_force_final", False):
+            _lr = getattr(self, "_last_response", "") or ""
+            if _lr and not _looks_like_tool_call(_lr) and not _is_thought_only(_lr):
+                if not self._emit_final(_lr, "answer_in_hand"):
+                    return False
+            else:
+                if not self._emit_final("", "answer_in_hand"):
+                    return False
+            return True
+
+        if not force_cap and not is_budget and not is_cap and not is_answer_in_hand:
             return False
         # Already terminating with a real answer — don't double-emit.
-        if getattr(self, "_last_response", "") and safe_strip(getattr(self, "_last_response", "")):
+        # BUT a raw tool-call JSON left in _last_response (the loop stores every
+        # model response there, including tool calls) is NOT a real answer — if
+        # we skip on it, the run dumps that raw JSON as the "final answer".
+        # Only suppress synthesis when _last_response is an actual report, i.e.
+        # it was set by a terminating path (final_answer / no_tool_call), not by
+        # the per-step assignment of a tool-call payload.
+        _lr = getattr(self, "_last_response", "") or ""
+        _lr_stripped = safe_strip(_lr)
+        # If the stored response is already a clean final_answer extracted by the
+        # terminating path, don't double-emit. But if it's leftover text/thought on
+        # a consecutive no-tool cap (or budget cap), we MUST terminate cleanly instead
+        # of returning False (which would loop forever).
+        if _lr_stripped and _extract_final_answer(_lr) is not None:
             return False
+
+        # Check if we have successful evidence gathered so far.
+        has_evidence = any(rec.success and rec.output_snippet for rec in self.evidence_log.get_records())
+        if not has_evidence and _lr_stripped and not _is_thought_only(_lr) and not _looks_like_tool_call(_lr):
+            # Dify / zero-evidence casual termination: if no tools were ever called
+            # and the model produced clean text that isn't just a thought block, emit
+            # it directly as the final response instead of a verbose Partial banner.
+            if not self._emit_final(_lr_stripped, "no_tool_cap"):
+                return False
+            return True
+
+        if is_answer_in_hand or (has_evidence and _lr_stripped and not _is_thought_only(_lr) and not _looks_like_tool_call(_lr)):
+            reason_str = "answer_in_hand" if is_answer_in_hand else "no_tool_cap"
+            if _lr_stripped and not _is_thought_only(_lr) and not _looks_like_tool_call(_lr):
+                if not self._emit_final(_lr_stripped, reason_str):
+                    return False
+            else:
+                if not self._emit_final("", reason_str):
+                    return False
+            return True
 
         # Build a partial summary from the most-recent successful evidence.
         lines = []
@@ -1787,6 +2571,124 @@ class ExecutionLoop:
         self.state.update_status("COMPLETED")
         bus.emit("loop_completed", {"reason": "partial_answer_budget" if is_budget else "partial_answer_cap", "output": partial})
         bus.emit("show_final_answer", {"output": partial})
+        return True
+
+    def _synthesize_from_evidence(self, reason: str) -> str:
+        """Build a clean Markdown summary from the evidence gathered so far.
+
+        Used as a safety net so the user never sees a raw tool-call JSON dumped
+        as the "final answer" — every termination path funnels through
+        ``_emit_final``, which falls back here when the stored response is a raw
+        tool call or empty.
+        """
+        ctx = self._ctx
+        lines = []
+        for rec in reversed(self.evidence_log.get_records()):
+            if rec.success and rec.output_snippet:
+                snippet = rec.output_snippet[:300].strip()
+                if snippet:
+                    lines.append(f"- [{rec.tool}] {snippet}")
+            if len(lines) >= 5:
+                break
+        summary = "\n".join(lines) if lines else "(no successful tool output captured yet)"
+        if reason in ("answer_in_hand", "goal_satisfied", "no_tool_cap", "consecutive_reasoning_limit") and lines:
+            return f"Based on the gathered evidence:\n\n{summary}"
+        task = ctx.user_prompt if ctx else ""
+        return (
+            f"[Synthesized answer — {reason}]\n"
+            f"Task: {task}\n"
+            f"What I found:\n{summary}\n"
+            f"(Agent stopped before a clean final_answer; summary built from collected evidence.)"
+        )
+
+    def _emit_final(self, output: str, reason: str) -> bool:
+        """Single choke point for every final answer — never emits raw tool JSON.
+
+        Phase 0 convergence: the verify_fresh gate is called INSIDE this function
+        so every emission path (natural/partial/forced/shutdown) is verified.
+
+        - No active goal: pass immediately (no reads required).
+        - Active goal: require >= 3 real file reads (read action, not list).
+        On rejection: inject a concise directive and return False (caller continues).
+        On hard cap exceeded: emit an explicit failure message.
+        On pass: emit normally.
+
+        Returns True if emitted, False if rejected (caller should continue loop).
+        """
+        if _looks_like_tool_call(output) or not safe_strip(output or ""):
+            output = self._synthesize_from_evidence(reason)
+            self._last_response = output
+
+        # ── Phase 0 verify_fresh gate (single choke point) ────────────────
+        ctx = self._ctx
+        if ctx is not None:
+            # Gate discriminator: casual chat ("hi") → pass immediately.
+            # Investigation / active-goal prompts → require real reads.
+            needs_verify = _prompt_requires_investigation(
+                ctx.user_prompt, has_active_goal=_has_active_goal(self)
+            )
+            if needs_verify:
+                # Phase D: unified read counter from _real_reads().
+                real_reads = self._real_reads()
+                # If reads >= 3, reset force_tool and let model answer freely.
+                # Phase F: separate gates — reads gate + echo gate.
+                # Gate 1: insufficient reads (real_reads < 3).
+                # Gate 2: raw echo — model pasted a directory listing verbatim
+                #   ("listing for '" or "directory listing") instead of
+                #   synthesizing. "based on the gathered evidence:" is a
+                #   legitimate synthesis lead-in, NOT an echo marker.
+                # Combined: block if insufficient reads OR raw echo.
+                _is_listing_only = real_reads < 3
+                _is_echo = any(
+                    m in (output or "").lower()
+                    for m in ("listing for '", "directory listing")
+                )
+                _is_listing_only = _is_listing_only or _is_echo
+                if not _is_listing_only:
+                    # Sufficient reads: reset force_tool, let model emit final_answer.
+                    self._force_tool = False
+                else:
+                    self._evidence_rejection_count += 1
+                    if self._evidence_rejection_count > self.MAX_EVIDENCE_RETRIES:
+                        # Hard cap exceeded: emit explicit failure, never truncated echo.
+                        self._force_tool = False
+                        output = (
+                            f"[Convergence failed — inspected {real_reads} file(s), "
+                            f"minimum required: 3. Please refine your query or "
+                            f"request specific files to read.]"
+                        )
+                        self._last_response = output
+                    else:
+                        # Reject: force tool call + inject concrete file suggestions.
+                        self._force_tool = True
+                        # Derive file suggestions from latest listing evidence.
+                        _file_suggestions = self._extract_listing_files()
+                        _hint = _derive_read_hint(ctx.user_prompt)
+                        if not _file_suggestions and _hint:
+                            _file_suggestions = _hint.lstrip(" (e.g. ").rstrip(")")
+                        if _file_suggestions:
+                            _suggestion_line = (
+                                f" Suggested files to read: {_file_suggestions}."
+                            )
+                        else:
+                            _suggestion_line = " Call file_system.read on specific source files."
+                        rejection_msg = (
+                            f"[CONTROL] FINAL_ANSWER rejected — {real_reads} file(s) read, "
+                            f"minimum is 3. You MUST call file_system with action='read' to read actual "
+                            f"source files.{_suggestion_line} "
+                            f"Do NOT emit final_answer until you have read >=3 files."
+                        )
+                        self.state.append_message({"role": "user", "content": rejection_msg})
+                        self.state.increment_step()
+                        return False
+            else:
+                # No investigation needed (chitchat): reset force_tool.
+                self._force_tool = False
+
+        # ── Normal emit path ──────────────────────────────────────────────
+        self.state.update_status("COMPLETED")
+        bus.emit("loop_completed", {"reason": reason, "output": output})
+        bus.emit("show_final_answer", {"output": output})
         return True
 
     def _finalize_loop(self, interrupted: bool) -> None:

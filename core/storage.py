@@ -767,6 +767,26 @@ class UnifiedStorage:
     def set_sqlite_path(self, path: Path | str) -> None:
         self._sqlite_path = Path(path)
 
+    @property
+    def session_manager(self) -> Any:
+        with self._lock:
+            return self._get_session_mgr()
+
+    @property
+    def memory_manager(self) -> Any:
+        with self._lock:
+            return self._get_memory_mgr()
+
+    @property
+    def todo_manager(self) -> Any:
+        with self._lock:
+            return self._get_todo_mgr()
+
+    @property
+    def evidence_log(self) -> Any:
+        with self._lock:
+            return self._get_evidence_log()
+
     def _get_session_mgr(self) -> Any:
         if self._session_mgr is None:
             self._session_mgr = SessionManager(root=self._sessions_dir)

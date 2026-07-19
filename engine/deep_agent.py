@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List
 
-from engine.events import bus
+from core.kernel.events import bus
 from engine.interfaces import DispatcherProtocol
 from engine.state import RuntimeState, GoalSpec
 from engine.consent import ConsentManager

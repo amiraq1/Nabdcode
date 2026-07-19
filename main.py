@@ -110,7 +110,7 @@ def _extract_final_answer_text(raw: Any) -> str:
 
 def wire_events(ctx: AppContext) -> dict:
     """Subscribe all event handlers. Every output goes through renderer."""
-    from engine.events import bus
+    from core.kernel.events import bus
     from engine.ui_theme import map_tool_to_badge, select_status_verb
 
     renderer = ctx.renderer
@@ -135,6 +135,12 @@ def wire_events(ctx: AppContext) -> dict:
         renderer.thought_start()
 
     def _on_llm_token(p: dict) -> None:
+        # When the interactive TerminalVisualizer owns the TTY (REPL mode), it
+        # is the single renderer and wire_events yields to it. In one-shot mode
+        # the visualizer is built without listeners, so this flag stays False
+        # and wire_events is the sole renderer. Exactly one renderer per mode.
+        if getattr(bus, "_on_tool_completed_active", False):
+            return
         nonlocal _token_buf, _held_buf
         content = p.get("token", "")
         _token_buf += content
@@ -154,6 +160,8 @@ def wire_events(ctx: AppContext) -> dict:
         metrics.record_api_call(duration=p.get("duration", 1.0))
 
     def _on_tool_started(p: dict) -> None:
+        if getattr(bus, "_on_tool_completed_active", False):
+            return
         nonlocal _last_tool_args, _last_tool_name
         tool = p.get("tool") or p.get("name", "")
         args = p.get("args") or {}
@@ -163,6 +171,8 @@ def wire_events(ctx: AppContext) -> dict:
         renderer.flush()
 
     def _on_tool_completed(p: dict) -> None:
+        if getattr(bus, "_on_tool_completed_active", False):
+            return
         nonlocal _last_stage
         result = p.get("result")
         if result is None:
@@ -327,7 +337,7 @@ def main() -> None:
 
     from core.kernel.state import RuntimeState
     from engine.loop import ExecutionLoop, ToolRequiredError
-    from engine.events import bus
+    from core.kernel.events import bus
     from ui.repl_termux import TerminalVisualizer
     from core.app_context import AppContext
     from core.constants import TODO_DISCIPLINE
@@ -363,7 +373,11 @@ def main() -> None:
             except Exception as exc:
                 sys.stderr.write(f"[Warning] Session restore failed: {exc}\n")
     wire_events(ctx)
-    visualizer = TerminalVisualizer(event_bus=bus, state=state)
+    # One-shot / non-interactive mode: the direct Renderer (wire_events) owns
+    # stdout. Construct the visualizer WITHOUT event listeners so it never
+    # becomes a competing second renderer (plan 1.1: single renderer, no
+    # runtime flag negotiation between two output owners).
+    visualizer = TerminalVisualizer(event_bus=bus, state=state, register_listeners=False)
 
     # Isolate provider state file per session
     from llm_router import router as _provider_router
@@ -420,6 +434,7 @@ def main() -> None:
         " - Every factual statement about codebase/filesystem must be backed by tool output, file read, or verified memory.\n"
         " - If after using tools you still lack proof, state: \"I don\\'t have sufficient evidence.\"\n"
         " - Never invent file names, architectures, or statistics.\n"
+        " - WORKSPACE ROOT: Your current working directory IS the repository root (the smart-agent project). ALWAYS use paths relative to it — e.g. `ls -la`, `cat main.py`, `ls core/`, `cat engine/loop.py`. The path `/workspace` DOES NOT EXIST on this system — never use it. For file_system and execute_shell, use relative paths (or `.`) only.\n"
         "\n"
         "BEHAVIOR:\n"
         "- Max 2 thoughts before action.\n"
@@ -489,17 +504,23 @@ def main() -> None:
         )
         try:
             result = engine.run(one_shot_query)
+            # Single renderer (plan 1.1): in one-shot mode the direct Renderer
+            # owns stdout. The visualizer is constructed WITHOUT registering
+            # event listeners, so it never competes with wire_events for output.
             if result:
-                visualizer._on_loop_completed({"response": result})
+                ctx.renderer.stream_chunk(result)
             else:
-                visualizer._on_loop_completed({"response": "(Session completed - no text returned)"})
+                ctx.renderer.stream_chunk("(Session completed - no text returned)")
+            ctx.renderer.flush()
         except ToolRequiredError as exc:
             _cleanup_after_streamed_failure(state, ctx, exc)
         except KeyboardInterrupt:
             ctx.renderer.think_end()
-            visualizer.console.print("\n[bold yellow]⚠ Execution interrupted by user.[/bold yellow]")
+            sys.stdout.write("\n[bold yellow]⚠ Execution interrupted by user.[/bold yellow]\n")
+            sys.stdout.flush()
         except Exception as exc:
-            visualizer._on_loop_completed({"response": exc})
+            ctx.renderer.stream_chunk(str(exc))
+            ctx.renderer.flush()
             ctx.logger.error(f"Execution failed: {exc}")
         finally:
             ctx.session_manager.messages = state.get_messages()
@@ -555,6 +576,35 @@ def main() -> None:
                 sys.stdout.flush()
                 continue
 
+            if user_input.lower().startswith(("/refactor", "nabd refactor", "/dag", "/resume", "nabd resume")):
+                parts = user_input.split()
+                is_resume = user_input.lower().startswith(("/resume", "nabd resume"))
+                target_files_list = parts[1:] if len(parts) > 1 and not is_resume else ["target_dummy.py"]
+                sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {user_input}\033[0m\n")
+                sys.stdout.flush()
+                try:
+                    from core.llm import get_secure_model
+                    from tools.secure_tools import SecureGraphifyTool
+                    from core.dag.launcher import launch_nabdos_core
+                    
+                    llm = get_secure_model()
+                    ws = str(get_workspace_root() if 'get_workspace_root' in globals() else Path.cwd())
+                    graphify = SecureGraphifyTool(workspace_dir=ws)
+                    taste_rules = ["All functions MUST have strict Type Hints.", "Use clear docstrings and comments."]
+                    
+                    launch_nabdos_core(
+                        llm_engine=llm,
+                        graphify_tool=graphify,
+                        workspace_dir=ws,
+                        target_files=target_files_list,
+                        taste_rules=taste_rules,
+                        resume=is_resume
+                    )
+                except Exception as dag_err:
+                    sys.stdout.write(f"\n\033[91m❌ [DAG Launcher Error] {dag_err}\033[0m\n\n")
+                    sys.stdout.flush()
+                continue
+
             # Replace the prompt_toolkit line with a background-highlighted version
             # so the user's input is visually distinct from the agent response.
             safe_display = sanitize(user_input)
@@ -562,6 +612,13 @@ def main() -> None:
             sys.stdout.flush()
 
             clean_prompt = normalize(user_input)[:10000]
+
+            # 🚀 --------------------------------------------------
+            # [ترقيع العمى البصري]: تصفير ذاكرة الواجهة قبل كل استعلام
+            # --------------------------------------------------
+            if hasattr(visualizer, "_final_answer_rendered"):
+                visualizer._final_answer_rendered = False
+            # --------------------------------------------------
 
             state.reset_step_count()
             engine = ExecutionLoop(

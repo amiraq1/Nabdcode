@@ -4,6 +4,12 @@ import subprocess
 
 from rich.console import Console
 
+# Force .env loading before reading OPENROUTER_MODEL for the banner.
+try:
+    import core._env  # noqa: F401
+except Exception:
+    pass
+
 console = Console()
 
 
@@ -17,7 +23,9 @@ def get_git_repository_name():
     return "Local Workspace"
 
 
-def draw(model_name="ORCA-FLASH"):
+def draw(model_name=None):
+    if model_name is None:
+        model_name = os.getenv("OPENROUTER_MODEL", "ORCA-FLASH").split("/")[-1]
     # تقسيم أسطر الشعار لتلوين كل سطر بشكل مستقل
     logo_lines = [
         "█▄ █ ▄▀█ █▄▀ █▀▄ █▀▀ █▀█ █▀▄ █▀▀",  # السطر العلوي

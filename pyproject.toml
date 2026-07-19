@@ -18,7 +18,7 @@ dependencies = [
 nabdcode = "main:main"
 
 [tool.setuptools]
-py-modules = ["main", "llm_router", "nabd_logo", "vfs"]
+py-modules = ["main", "llm_router", "nabd_logo"]
 packages = ["core", "engine", "tools", "ui"]
 
 [tool.black]

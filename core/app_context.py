@@ -23,7 +23,7 @@ from core.parser import pin_workspace_root
 from core.todo import TodoManager
 from engine.renderer import Renderer
 from engine.tool_registry import registry
-from tools import ShellTool, FileSystemTool, WebSearchTool, SearchMemoryTool
+from tools import ShellTool, FileSystemTool, WebSearchTool, SearchMemoryTool, RagSearchTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool, GraphifyTool, GraphIntelTool
 from tools.todo import TodoWriteTool
 from tools.termux_monitor import TermuxMonitorTool
 
@@ -49,9 +49,9 @@ class AppContext:
         pin_workspace_root(config.workspace_root)
         storage = UnifiedStorage(root_dir=Path(config.root_dir))
         storage.set_sqlite_path(os.path.join(config.root_dir, "workspace_memory.db"))
-        session_mgr = storage._get_session_mgr()
-        memory_mgr = storage._get_memory_mgr()
-        todo_manager = storage._get_todo_mgr()
+        session_mgr = storage.session_manager
+        memory_mgr = storage.memory_manager
+        todo_manager = storage.todo_manager
         evidence_log = storage._get_evidence_log(max_records=config.max_evidence_records)
         logger = Logger(log_dir=config.log_dir)
         metrics = MetricsEngine()
@@ -60,16 +60,19 @@ class AppContext:
         # Register all tools
         _security_engine = _KernelSecurityEngine()
         for tool_cls in [ShellTool, FileSystemTool, WebSearchTool,
-                         SearchMemoryTool, TodoWriteTool, TermuxMonitorTool]:
+                         SearchMemoryTool, TodoWriteTool, TermuxMonitorTool,
+                         RagSearchTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool, GraphifyTool]:
             tool = (
                 tool_cls(workspace=config.root_dir)
-                if tool_cls is FileSystemTool
+                if tool_cls in (FileSystemTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool, GraphifyTool)
                 else SearchMemoryTool(memory_manager=memory_mgr)
                 if tool_cls is SearchMemoryTool
                 else TodoWriteTool(todo_manager=todo_manager)
                 if tool_cls is TodoWriteTool
                 else ShellTool(security_engine=_security_engine)
                 if tool_cls is ShellTool
+                else RagSearchTool(workspace_root=config.root_dir)
+                if tool_cls is RagSearchTool
                 else tool_cls()
             )
             try:

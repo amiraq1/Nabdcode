@@ -6,7 +6,7 @@ cyber-verbs and renders a single, zero-flicker live status line via
 
 Design
 ──────
-* Subscribes to the existing ``engine.events.bus`` events. It does NOT invent
+* Subscribes to the existing ``core.kernel.events.bus`` events. It does NOT invent
   new event names and does NOT mutate any execution architecture.
 * A dedicated daemon spinner thread owns the ``Live`` context. It advances the
   Braille spinner frame every 100ms and calls ``live.update(refresh=True)`` so
@@ -40,7 +40,7 @@ from rich.console import Console, RenderableType
 from rich.live import Live
 from rich.text import Text
 
-from engine.events import bus
+from core.kernel.events import bus
 
 
 # Braille spinner frames, advanced at 100ms.
@@ -51,6 +51,7 @@ _SPINNER_FRAMES: tuple[str, ...] = (
 # Kinetic vocabulary — randomly sampled per phase entry.
 _LLM_VERBS: tuple[str, ...] = ("Structuring...", "Architecting...", "Contemplating...")
 _TOOL_VERBS: tuple[str, ...] = ("Sculpting...", "Injecting...", "Patching...", "Choreographing...")
+_RAG_VERBS: tuple[str, ...] = ("Querying Memory Matrix...", "Retrieving Neural Context...", "Indexing Code Vectors...", "Embedding Knowledge...")
 _VERIFY_VERBS: tuple[str, ...] = ("Auditing...", "Verifying...", "Recalibrating...")
 # Phase5 (GoalSpec): objective-aware verbs shown while the Verifier evaluates
 # the active GoalSpec's success criteria — distinct from generic verification.
@@ -177,7 +178,11 @@ class KineticStateEngine:
         self._enter_phase("idle", _IDLE_VERB, reset_tokens=False)
 
     def _on_tool_start(self, payload: Any) -> None:
-        self._enter_phase("tool", random.choice(_TOOL_VERBS))
+        tool_name = (payload or {}).get("tool") or (payload or {}).get("name", "")
+        if "knowledge_base" in tool_name or "rag" in tool_name:
+            self._enter_phase("rag", random.choice(_RAG_VERBS))
+        else:
+            self._enter_phase("tool", random.choice(_TOOL_VERBS))
 
     def _on_tool_done(self, payload: Any) -> None:
         self._enter_phase("idle", _IDLE_VERB, reset_tokens=False)
@@ -288,6 +293,13 @@ class KineticStateEngine:
 
     def _build(self, frame: str, verb: str, tokens: int) -> Text:
         """Compose the single, low-profile live status line."""
+        if self._phase == "rag":
+            # Neon blue for RAG phase — matches the Memory Matrix cyber-verb style
+            return Text.assemble(
+                Text(frame + " ", style="bold cyan"),
+                Text(f"{verb.strip()} ", style="bold cyan"),
+                Text(f"· {_fmt_tokens(tokens)} tokens" if tokens > 0 else "", style="dim")
+            )
         if self._phase == "goal":
             return Text.assemble(
                 Text(frame + " ", style="bold cyan"),

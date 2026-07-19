@@ -434,7 +434,7 @@ def _format_args(kind: str, tool: str, args: dict) -> tuple[str, str]:
         return f"[{path}]", ""
     if kind == "TODOS":
         return "[plan]", ""
-    if kind in ("SEARCH", "MEMORY"):
+    if kind in ("SEARCH", "MEMORY", "RAG"):
         query = args.get("query", "")
         return f'["{query[:40]}"]', ""
     return f"[{tool}]", ""

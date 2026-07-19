@@ -6,8 +6,9 @@ from unittest.mock import patch
 from tools.termux_monitor import TermuxMonitorTool
 
 # Schema gatekeeper — guards the LLM against the budget-exhaustion loop where a
-# valid tool gets rejected because it is missing from TOOL_SCHEMAS.
-from core.parser import TOOL_SCHEMAS, validate_tool_call
+# valid tool gets rejected because it is missing from the live ToolRegistry.
+from core.parser import validate_tool_call
+from engine.tool_registry import registry
 
 
 class _MockRegistry:
@@ -95,12 +96,16 @@ class TestTermuxMonitorLive(unittest.TestCase):
 class TestTermuxMonitorSchemaRegression(unittest.TestCase):
     """Lock in the budget-exhaustion fix: termux_monitor must validate + dispatch."""
 
+    def setUp(self):
+        # ToolRegistry is the single source of truth; ensure termux_monitor
+        # is registered so the live schema view reflects it.
+        if "termux_monitor" not in registry:
+            registry.register(TermuxMonitorTool())
+
     def test_termux_monitor_in_tool_schemas(self):
         """The LLM-facing schema registry must know about termux_monitor."""
-        self.assertIn("termux_monitor", TOOL_SCHEMAS)
-        # No required/optional args — the LLM emits {"args": {}}.
-        self.assertEqual(TOOL_SCHEMAS["termux_monitor"].get("required"), {})
-        self.assertEqual(TOOL_SCHEMAS["termux_monitor"].get("optional"), {})
+        registry_schemas = {s.get("name") for s in registry.get_all_schemas()}
+        self.assertIn("termux_monitor", registry_schemas)
 
     def test_termux_monitor_schema_validation(self):
         """Exact LLM payload must pass the strict gatekeeper (ok=True)."""

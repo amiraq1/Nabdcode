@@ -20,6 +20,8 @@ class _FlushFileHandler(logging.FileHandler):
             pass
 
 
+import json
+
 class Logger:
     def __init__(self, log_dir: Path):
         self.log_dir = Path(log_dir)
@@ -27,6 +29,8 @@ class Logger:
         
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self.log_file = self.log_dir / f"session_{timestamp}.log"
+        self.engine_log_file = self.log_dir / "engine.log"
+        self.execution_jsonl_file = self.log_dir / "agent_execution.jsonl"
         
         self._logger = logging.getLogger(f"AmmarAgent_{timestamp}")
         self._logger.setLevel(logging.INFO)
@@ -35,9 +39,12 @@ class Logger:
         if not self._logger.handlers:
             # Line-buffered, immediate-flush handler (no in-RAM buffering).
             file_handler = _FlushFileHandler(self.log_file, encoding="utf-8")
+            engine_handler = _FlushFileHandler(self.engine_log_file, encoding="utf-8")
             formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
             file_handler.setFormatter(formatter)
+            engine_handler.setFormatter(formatter)
             self._logger.addHandler(file_handler)
+            self._logger.addHandler(engine_handler)
 
     def info(self, msg: str):
         self._logger.info(msg)
@@ -47,6 +54,18 @@ class Logger:
 
     def error(self, msg: str):
         self._logger.error(msg)
+
+    def log_execution(self, record: dict) -> None:
+        """Append a structured JSONL execution record to agent_execution.jsonl immediately."""
+        try:
+            if "timestamp" not in record:
+                record["timestamp"] = datetime.now(timezone.utc).isoformat()
+            line = json.dumps(record, ensure_ascii=False) + "\n"
+            with open(self.execution_jsonl_file, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+        except Exception:
+            pass
 
     def flush(self) -> None:
         """Push any buffered records to disk immediately.

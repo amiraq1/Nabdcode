@@ -6,8 +6,8 @@ Tool call parsing, JSON extraction, forgiving fallback for small/fallback models
 The orchestrator ``validate_tool_call`` has been decomposed into two pure
 helper functions (CC ≤ 3 each) that delegate self-validation entirely to
 the tool's own ``validate_and_parse`` via the ``ToolCallable`` protocol.
-The legacy ``TOOL_SCHEMAS`` path is preserved as a fallback but is rarely
-reached in modern code paths.
+Tool schemas are now sourced exclusively from the live ``ToolRegistry``
+(``engine.tool_registry.registry.get_all_schemas()``); no legacy fallback dict.
 """
 
 from __future__ import annotations
@@ -70,47 +70,6 @@ def normalize(text: str) -> str:
 class ToolCall:
     tool: str
     args: dict[str, Any]
-
-
-# ---------------------------------------------------------------------
-# Tool Schemas (legacy fallback)
-# ---------------------------------------------------------------------
-
-TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
-    "execute_shell": {
-        "required": {"command": str},
-        "optional": {"timeout": int},
-        "constraints": {"command": {"max_length": 4096}},
-    },
-    "web_search": {
-        "required": {"query": str},
-        "optional": {"limit": int},
-    },
-    "file_system": {
-        "required": {"action": str, "path": str},
-        "optional": {"content": str, "old_text": str, "new_text": str},
-        "actions": {"read": [], "write": ["content"], "append": ["content"], "replace": ["old_text", "new_text"]},
-    },
-    "search_memory": {
-        "required": {"query": str},
-        "optional": {"limit": int},
-    },
-    "todo_write": {
-        "required": {"todos": list},
-        "optional": {},
-    },
-    "termux_monitor": {
-        "required": {},
-        "optional": {},
-    },
-    "browser_action": {
-        "required": {"action": str},
-        "optional": {"url": str},
-        "actions": {"navigate": ["url"], "get_text": []},
-    },
-}
-
-
 # =========================================================================
 # validate_tool_call — pure structural gatekeeper (CC ≤ 3)
 # =========================================================================
@@ -485,15 +444,110 @@ def _parse_react_style(text: str, registry: Any) -> ToolCall | None:
 
 
 def extract_json_from_response(text: str) -> str | None:
+    """Extract a JSON object from an LLM response, tolerating prose prefixes.
+
+    Priority:
+      1. ```json fenced block (canonical)
+      2. First balanced ``{...}`` object found anywhere in the text (forgiving)
+      3. Whole-string ``{...}`` (legacy)
+    """
     if not text or not safe_strip(text):
         return None
     text = normalize(str(text))
+
+    # 1. Fenced ```json block
     match = JSON_PATTERN.search(text)
     if match:
         return safe_strip(match.group(1))
+
+    # 1b. OpenAI function-calling payload ({"tool_call":{"function":{"name":..,"arguments":..}}}).
+    #     Must run before the generic JSON extractor (#2) because the whole
+    #     text is valid JSON keyed by "tool_call", not the canonical "tool".
+    try:
+        from core.xml_tool_parser import openai_fc_to_json
+
+        _fc = openai_fc_to_json(text)
+        if _fc is not None:
+            return _fc
+    except Exception:
+        pass
+
+    # 2. Forgiving: find first balanced {...} object anywhere in prose
+    balanced = _extract_first_json_object(text)
+    if balanced is not None:
+        return balanced
+
+    # 3. Legacy whole-string object
     text_stripped = safe_strip(text)
     if text_stripped.startswith("{") and text_stripped.endswith("}"):
         return text_stripped
+
+    # 4. XML-style tool call (e.g. <execute_shell><command>ls</command></execute_shell>),
+    #    emitted by some fallback models. Convert the first recognized tag to
+    #    canonical JSON so the rest of the pipeline (validation / final_answer)
+    #    works unchanged.
+    try:
+        from core.xml_tool_parser import xml_tool_to_json
+
+        _xml = xml_tool_to_json(text)
+        if _xml is not None:
+            return _xml
+    except Exception:
+        pass
+
+    # 4b. OpenAI function-calling payload ({"tool_call":{"function":{"name":..,"arguments":..}}}).
+    try:
+        from core.xml_tool_parser import openai_fc_to_json
+
+        _fc = openai_fc_to_json(text)
+        if _fc is not None:
+            return _fc
+    except Exception:
+        pass
+
+    # 4c. Anthropic <function>/<invoke> wrapper with <parameter name="k">v</parameter>.
+    try:
+        from core.xml_tool_parser import function_xml_to_json
+
+        _fx = function_xml_to_json(text)
+        if _fx is not None:
+            return _fx
+    except Exception:
+        pass
+
+    return None
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    """Return the first balanced JSON object substring starting at '{'.
+
+    Handles braces nested inside string literals by tracking quotes. Returns
+    ``None`` when no balanced object is found (e.g. unclosed brace).
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
     return None
 
 

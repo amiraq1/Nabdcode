@@ -36,6 +36,35 @@ class TestTodoDisciplineInjected(unittest.TestCase):
         agent_md = Path("AGENT.md").read_text(encoding="utf-8")
         self.assertIn("Language & Communication Policy", agent_md)
 
+    def test_python_and_code_exploration_policy_injected(self):
+        from core.constants import PYTHON_AND_CODE_EXPLORATION_POLICY
+        state = RuntimeState(session_id="test_python_policy")
+        state.append_message({"role": "user", "content": "Calculate the sum of primes"})
+        loop = ExecutionLoop(state=state, llm_provider=lambda msgs: "ok")
+        messages = loop._inject_runtime_context([{"role": "user", "content": "Calculate the sum of primes"}])
+        system_content = messages[0]["content"]
+        self.assertIn("Python Execution & Code Intelligence Policy", system_content)
+        self.assertIn("python_repl", system_content)
+        self.assertIn("code_intelligence", system_content)
+
+    def test_taste_profile_injected(self):
+        state = RuntimeState(session_id="test_taste_injection")
+        state.append_message({"role": "user", "content": "Write some clean code"})
+        loop = ExecutionLoop(state=state, llm_provider=lambda msgs: "ok")
+        messages = loop._inject_runtime_context([{"role": "user", "content": "Write some clean code"}])
+        system_content = messages[0]["content"]
+        self.assertIn("Developer Taste Profile (Mandatory Rules)", system_content)
+        self.assertIn("Prefer zero-dependency solutions when possible.", system_content)
+
+    def test_graphify_policy_injected(self):
+        state = RuntimeState(session_id="test_graphify_injection")
+        state.append_message({"role": "user", "content": "Explain structure"})
+        loop = ExecutionLoop(state=state, llm_provider=lambda msgs: "ok")
+        messages = loop._inject_runtime_context([{"role": "user", "content": "Explain structure"}])
+        system_content = messages[0]["content"]
+        self.assertIn("Graphify Knowledge Graph Policy (Mandatory)", system_content)
+        self.assertIn("graphify_tool", system_content)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,42 @@ from ui.theme import (
 console = Console(theme=CUSTOM_THEME)
 
 
+def _ui_looks_like_tool_call(text: str) -> bool:
+    """UI-side mirror of engine.loop._looks_like_tool_call.
+
+    True when ``text`` is (or contains) a raw tool-call JSON — e.g. the last
+    model response was another tool invocation rather than a real report. The
+    FINAL ANSWER card and the streaming renderer must NEVER draw such payloads;
+    this is the last wall that catches any leak from the loop/streaming paths.
+    """
+    if not text:
+        return False
+    candidates = [text.strip()]
+    for m in re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL):
+        candidates.append(m)
+    brace = text.find("{")
+    if brace != -1:
+        candidates.append(text[brace:])
+    for cand in candidates:
+        cand = cand.strip()
+        if not cand.startswith("{"):
+            continue
+        try:
+            obj = json.loads(cand)
+        except (json.JSONDecodeError, TypeError):
+            end = cand.rfind("}")
+            if end != -1:
+                try:
+                    obj = json.loads(cand[: end + 1])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            else:
+                continue
+        if isinstance(obj, dict) and "tool" in obj:
+            return True
+    return False
+
+
 # Single source of truth for the always-on TODO view.
 #
 # DESIGN NOTE (unification): previously this REPL re-parsed the persisted
@@ -477,6 +513,11 @@ async def render_agent_events(kinetic=None) -> None:
                 if "final_answer".startswith(stripped):
                     held_buf += content
                     continue
+                # Last wall (streaming): if the accumulated text is (or contains)
+                # a raw tool-call payload, do NOT stream it to the terminal —
+                # it would render as raw JSON bypassing the on_final_answer guard.
+                if _ui_looks_like_tool_call(token_buf):
+                    continue
                 to_print = held_buf + content
                 held_buf = ""
                 # The very first token means the agent began answering: stop
@@ -683,7 +724,9 @@ async def run_repl(agent, agent_runner_func=None) -> None:
 
                 if not (bus_ref and getattr(bus_ref, "_final_answer_rendered", False)) and not (bus_ref and getattr(bus_ref, "_tokens_streamed", False)):
                     clean_resp = extract_clean_answer(response_text)
-                    if clean_resp:
+                    # Last wall (fallback render): never draw a leaked raw
+                    # tool-call payload as the agent's answer.
+                    if clean_resp and not _ui_looks_like_tool_call(clean_resp):
                         console.print(
                             Panel(
                                 Markdown(clean_resp),
@@ -771,13 +814,19 @@ def extract_clean_answer(raw_text: Any) -> str:
 class TerminalVisualizer:
     """المسؤول عن التقاط أحداث الـ Event Bus وتحويلها إلى لوحات بصرية متحركة داخل Termux"""
 
-    def __init__(self, event_bus, state):
+    def __init__(self, event_bus, state, register_listeners: bool = True):
         self.event_bus = event_bus
         self.state = state
         self.live_context = None
         if self.event_bus:
             self.event_bus._final_answer_rendered = False
-        self._register_listeners()
+        # Single-renderer rule (plan 1.1): only ONE renderer owns stdout. In
+        # one-shot / non-interactive mode main.py wires the direct renderer
+        # (wire_events) instead, so we must NOT register a second competing
+        # renderer here. The caller decides which renderer is active — no
+        # runtime flag negotiation between two renderers.
+        if register_listeners:
+            self._register_listeners()
 
     def _subscribe_with_fallback(self, event_name, handler):
         """Wrap handler with try/except to prevent subscriber crashes."""
@@ -845,6 +894,11 @@ class TerminalVisualizer:
             self.stop()
             tool_name = data.get("tool") or data.get("tool_name") or "?"
             raw_output = data.get("output", "")
+            if not raw_output:
+                _res = data.get("result")
+                if _res is not None:
+                    raw_output = (getattr(_res, "output", "") or getattr(_res, "stdout", "")
+                                  or getattr(_res, "stderr", ""))
 
             # Safe string conversion
             output_text = str(raw_output).strip() if raw_output is not None else ""
@@ -911,7 +965,14 @@ class TerminalVisualizer:
         output = extract_clean_answer(raw_output)
         if not output:
             return
-
+        # Last wall: never render a raw tool-call payload as the "answer".
+        # If a leaked tool JSON reaches here (despite loop-side hardening),
+        # replace it with a clear notice so the FINAL ANSWER card stays clean.
+        if _ui_looks_like_tool_call(output):
+            output = (
+                "⚠️ The agent did not emit a valid final report — it ended on a "
+                "tool call instead of `final_answer`. No structured answer was produced."
+            )
         if self.event_bus:
             self.event_bus._final_answer_rendered = True
 
@@ -972,8 +1033,11 @@ class TerminalVisualizer:
             else:
                 style_key = "final_answer"
 
-            # If show_final_answer already rendered normally, don't duplicate unless error or warning
-            if self.event_bus and getattr(self.event_bus, "_final_answer_rendered", False) and style_key == "final_answer":
+            # If show_final_answer already rendered the answer card, never
+            # duplicate it here — regardless of style_key. The FINAL ANSWER
+            # card is the single source of the answer; on_loop_completed is a
+            # secondary terminal event that must stay silent once it fired.
+            if self.event_bus and getattr(self.event_bus, "_final_answer_rendered", False):
                 return
 
             panel = Panel(

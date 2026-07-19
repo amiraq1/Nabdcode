@@ -770,3 +770,167 @@ class SecureBrowserTool(SecureTool):
         if not result.success:
             return f"Error ({result.returncode}): {result.stderr or result.stdout}"
         return str(result.stdout or result.stderr).strip()
+
+
+class SecureCodeIntelligenceTool(SecureTool):
+    """smolagents-compatible wrapper around CodeIntelligenceTool."""
+
+    name = "secure_code_intelligence"
+    description = (
+        "AST structural code intelligence for Python files. "
+        "Actions: 'list_symbols' (returns classes, methods, and functions with line numbers/docstrings) or "
+        "'get_definition' (finds exact file path, line range, and docstring where a symbol is defined). "
+        "Required args: action, path. Optional: symbol."
+    )
+    inputs = {
+        "action": {
+            "type": "string",
+            "description": "One of: list_symbols, get_definition.",
+        },
+        "path": {
+            "type": "string",
+            "description": "Target file path or directory within workspace (use '.' for workspace root).",
+        },
+        "symbol": {
+            "type": "string",
+            "description": "Symbol name (required for get_definition).",
+            "required": False,
+            "nullable": True,
+        },
+    }
+    output_type = "string"
+
+    def __init__(self, workspace: str | Path = ".", *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        from tools.code_intelligence import CodeIntelligenceTool
+        self._tool = CodeIntelligenceTool(workspace=workspace)
+
+    def forward(self, action: str = "", path: str = ".", symbol: str = "", **kwargs: Any) -> str:
+        act = action or kwargs.get("action", "")
+        if not act:
+            return "Error: code_intelligence requires an 'action' argument ('list_symbols' or 'get_definition')."
+        result = self._tool.execute(action=str(act), path=str(path or kwargs.get("path", ".")), symbol=str(symbol or kwargs.get("symbol", "")), **kwargs)
+        if not result.success:
+            return f"Error ({result.returncode}): {result.stderr or result.stdout}"
+        return str(result.stdout or result.stderr).strip()
+
+
+class SecurePythonREPLTool(SecureTool):
+    """smolagents-compatible wrapper around PythonREPLTool."""
+
+    name = "secure_python_repl"
+    description = (
+        "A Python execution shell inside a secure sandbox directory (.nabd/sandbox). "
+        "Includes AST safety verification and a 15-second circuit breaker for infinite loops. "
+        "Required arg: 'code' (str). Use print() to output results."
+    )
+    inputs = {
+        "code": {
+            "type": "string",
+            "description": "The valid Python script to execute. Use print() to output results.",
+        },
+    }
+    output_type = "string"
+
+    def __init__(self, workspace: str | Path = ".", *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        from tools.python_repl import PythonREPLTool
+        self._tool = PythonREPLTool(workspace=workspace)
+
+    def forward(self, code: str = "", **kwargs: Any) -> str:
+        code_str = code or kwargs.get("code", "")
+        if not code_str:
+            return "Error: python_repl requires a 'code' argument."
+        result = self._tool.execute(code=str(code_str))
+        if not result.success:
+            return f"Error ({result.returncode}): {result.stderr or result.stdout}"
+        return str(result.stdout or result.stderr).strip()
+
+
+class SecureTasteManagerTool(SecureTool):
+    """smolagents-compatible wrapper around TasteManagerTool."""
+
+    name = "secure_taste_manager"
+    description = (
+        "Manage and update the developer's Neuro-Symbolic Taste Profile (.nabd/taste_profile.json). "
+        "Use this tool when the user explicitly corrects your coding style, architecture, "
+        "or asks you to 'remember' a specific preference for all future interactions."
+    )
+    inputs = {
+        "action": {
+            "type": "string",
+            "description": "The action to perform: 'view' (to see current taste), 'add_rule', or 'remove_rule'.",
+        },
+        "category": {
+            "type": "string",
+            "description": "The category to modify: 'architectural_rules', 'code_styling', 'language_preferences', or 'custom_rules'. Optional for 'view'.",
+            "nullable": True,
+        },
+        "rule": {
+            "type": "string",
+            "description": "The exact text of the rule to add or remove. Optional for 'view'.",
+            "nullable": True,
+        },
+    }
+    output_type = "string"
+
+    def __init__(self, taste_engine: Optional[Any] = None, workspace: str | Path = ".", *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        from tools.taste_manager import TasteManagerTool
+        self._tool = TasteManagerTool(taste_engine=taste_engine, workspace=workspace)
+
+    def forward(self, action: str = "", category: Optional[str] = None, rule: Optional[str] = None, **kwargs: Any) -> str:
+        act = action or kwargs.get("action", "")
+        if not act:
+            return "Error: taste_manager requires an 'action' argument ('view', 'add_rule', or 'remove_rule')."
+        return self._tool.forward(
+            action=str(act),
+            category=category or kwargs.get("category"),
+            rule=rule or kwargs.get("rule"),
+        )
+
+
+class SecureGraphifyTool(SecureTool):
+    """smolagents-compatible wrapper around GraphifyTool."""
+
+    name = "secure_graphify_tool"
+    description = (
+        "Consult the graphify knowledge graph for codebase and architecture questions. "
+        "Use 'query <question>' for general structure, 'path <A> <B>' for relationships between components, "
+        "'explain <concept>' for focused details, and 'update' after modifying code files."
+    )
+    inputs = {
+        "action": {
+            "type": "string",
+            "description": "The graphify action to perform: 'query', 'path', 'explain', or 'update'.",
+        },
+        "target": {
+            "type": "string",
+            "description": "The search query, concept to explain, or the source node for 'path' action. Optional for 'update'.",
+            "nullable": True,
+        },
+        "target_b": {
+            "type": "string",
+            "description": "The destination node. ONLY used when action is 'path'.",
+            "nullable": True,
+        },
+    }
+    output_type = "string"
+
+    def __init__(self, workspace_dir: str | Path = ".", workspace: str | Path | None = None, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        from tools.graphify_tool import GraphifyTool
+        path_arg = workspace or workspace_dir or kwargs.get("workspace") or kwargs.get("workspace_dir") or "."
+        self._tool = GraphifyTool(workspace_dir=path_arg)
+
+    def forward(self, action: str = "", target: Optional[str] = None, target_b: Optional[str] = None, **kwargs: Any) -> str:
+        act = action or kwargs.get("action", "")
+        if not act:
+            return "Error: graphify_tool requires an 'action' argument ('query', 'path', 'explain', or 'update')."
+        return self._tool.forward(
+            action=str(act),
+            target=target or kwargs.get("target"),
+            target_b=target_b or kwargs.get("target_b"),
+        )
+
+

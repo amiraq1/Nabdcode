@@ -74,6 +74,17 @@ class EventBus:
                     import sys
                     print(f"[EventBus] subscriber failed for event {event_name}: {e}", file=sys.stderr)
 
+        # Bridge to UIBridge if not originating from bridge (avoids loops)
+        try:
+            if isinstance(payload, dict) and payload.get("_from_bridge"):
+                return
+            from core.ui_bridge import get_bridge
+            bridge = get_bridge()
+            if bridge and hasattr(bridge, "_relay_from_bus"):
+                bridge._relay_from_bus(event_name, payload)
+        except Exception:
+            pass
+
 
 # Singleton instance used by the entire system
 bus = EventBus()

@@ -90,4 +90,28 @@ LANGUAGE_POLICY: Final[str] = """
 - All explanations, code, comments, logs, status messages, plans, reports, TODOs, commit messages, documentation, and examples MUST be in English.
 """
 
+PYTHON_AND_CODE_EXPLORATION_POLICY: Final[str] = """
+## Python Execution & Code Intelligence Policy (Mandatory)
+1. **Executing Python Code**: To execute Python snippets, math calculations, data analysis, or logic verification, you MUST use the `python_repl` (`secure_python_repl`) tool. NEVER use `execute_shell` (`secure_shell`) to run `python -c ...` or `python3 -c ...` (which is blocked by kernel security).
+2. **Exploring Code & Definitions**: To list classes/methods or locate definitions in Python files, you MUST use the `code_intelligence` (`secure_code_intelligence`) tool with actions `list_symbols` or `get_definition`. NEVER use blind full-file reading or raw `grep` for structure discovery when `code_intelligence` can provide precise AST symbol mapping.
+3. **No Hallucination on Gate Rejections**: If a command or tool call is rejected by kernel security or validation, do NOT invent or fabricate execution results. Report the block or switch to the appropriate dedicated tool (`python_repl` or `code_intelligence`).
+"""
+
+GRAPHIFY_KNOWLEDGE_GRAPH_POLICY: Final[str] = """
+## Graphify Knowledge Graph Policy (Mandatory)
+For any question about this repo's architecture, structure, components, or how to add/modify/find code, your first action MUST be `graphify_tool` with action="query" and target="<question>" when graphify-out/graph.json exists.
+
+Triggers: "how do I…", "where is…", "what does … do", "add/modify a ", "explain the architecture", or anything that depends on how files or classes relate.
+
+Rules:
+1. Use action="query" and target="<question>" for general structure discovery.
+2. Use action="path" for relationships between <A> and <B>.
+3. Use action="explain" for focused concepts.
+These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+4. If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+5. Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+6. Only read source files when (a) modifying/debugging specific code, (b) the graph lacks the needed detail, or (c) the graph is missing or stale.
+7. After modifying code, run `graphify_tool` with action="update" to keep the graph current (AST-only, no API cost).
+"""
+
 

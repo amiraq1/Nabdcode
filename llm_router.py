@@ -189,10 +189,10 @@ class ProviderRouter:
     def generate_response(self, m, logger=None, **kwargs):
         return "".join(self.generate_stream(m, logger=logger, **kwargs))
 
-base_model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash-free")
+base_model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
 FALLBACK_MODELS = [
-    "deepseek/deepseek-v4-flash-free",        # فلاش مجاني وسريع جداً من Orca/OpenRouter
-    "deepseek/deepseek-v4-pro-free",          # برو مجاني عالي الدقة من Orca/OpenRouter
+    "deepseek/deepseek-v4-flash",        # فلاش مجاني وسريع جداً من Orca/OpenRouter
+    "deepseek/deepseek-v4-pro",          # برو مجاني عالي الدقة من Orca/OpenRouter
     "google/gemini-2.5-flash",                # سريع جداً وممتاز للاستنتاج
     "meta-llama/llama-3.1-8b-instruct:free",  # مستقر جداً للأوامر
     "mistralai/mistral-nemo:free",            # خفيف وسريع
@@ -207,17 +207,31 @@ def handle_provider_fallback(exception_error: Exception) -> str:
     return current_fallback
 
 providers = []
-# 1. Vanguard: OrcaRouter DeepSeek models (#1 & #2)
-if OrcaRouterClient:
+# Phase F: if OPENROUTER_MODEL is explicitly set to a non-default model,
+# use that model as the PRIMARY provider (priority 0) instead of forcing ORCA-FLASH.
+# This ensures the banner and actual model match what the user configured.
+_env_model = os.getenv("OPENROUTER_MODEL", "")
+_is_default = not _env_model or _env_model in ("deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-flash-free")
+
+if not _is_default:
+    # Non-default model → use it as primary with OpenRouterClient.
     try:
-        providers.append(ProviderState(name="ORCA-FLASH", client=OrcaRouterClient(model="deepseek/deepseek-v4-flash-free"), priority=0))
-        providers.append(ProviderState(name="ORCA-PRO", client=OrcaRouterClient(model="deepseek/deepseek-v4-pro-free"), priority=1))
+        providers.append(ProviderState(name=f"OR-0:{_env_model.split('/')[-1]}", client=OpenRouterClient(model=_env_model), priority=0))
     except Exception:
         pass
 
-# 2. OpenRouter primary base model
+# 1. Vanguard: OrcaRouter DeepSeek models (#1 & #2) — only when default or no explicit override.
+if OrcaRouterClient and _is_default:
+    try:
+        providers.append(ProviderState(name="ORCA-FLASH", client=OrcaRouterClient(model="deepseek/deepseek-v4-flash"), priority=0 if _is_default else 10))
+        providers.append(ProviderState(name="ORCA-PRO", client=OrcaRouterClient(model="deepseek/deepseek-v4-pro"), priority=1 if _is_default else 11))
+    except Exception:
+        pass
+
+# 2. OpenRouter primary base model (fallback when ORCA is available, primary otherwise)
 try:
-    providers.append(ProviderState(name="OR-0", client=OpenRouterClient(model=base_model), priority=2))
+    _or0_priority = 0 if (not _is_default and not any(p.priority == 0 for p in providers)) else (2 if _is_default else 12)
+    providers.append(ProviderState(name="OR-0", client=OpenRouterClient(model=base_model), priority=_or0_priority))
 except Exception:
     pass
 

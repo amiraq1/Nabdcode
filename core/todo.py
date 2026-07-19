@@ -68,6 +68,12 @@ class TodoManager:
         return item
 
     def _get(self, item_id: int) -> TodoItem:
+        # Tool args may arrive as text ("1") from the LLM — normalize to int,
+        # otherwise  item.id == item_id  becomes  1 == "1"  = False and fails silently.
+        try:
+            item_id = int(item_id)
+        except (TypeError, ValueError):
+            raise KeyError(f"TODO item #{item_id!r} not found (invalid id)")
         for item in self._items:
             if item.id == item_id:
                 return item

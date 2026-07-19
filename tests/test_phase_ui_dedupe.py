@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from engine.renderer import Renderer
-from engine.events import bus
+from core.kernel.events import bus
 from core.ui_bridge import UIBridge
 
 

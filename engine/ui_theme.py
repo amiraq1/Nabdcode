@@ -159,6 +159,8 @@ def map_tool_to_badge(tool_name: str, args: Optional[dict[str, Any]] = None) -> 
         return "TODOS"
     if "write" in t or "edit" in t or "patch" in t or "str_replace" in t or "replace" in t:
         return "EDIT"
+    if "rag" in t or "knowledge" in t:
+        return "RAG"
     if "search" in t or "web" in t:
         return "SEARCH"
     if "memory" in t:

@@ -1,6 +1,62 @@
 # Task State Log
 
 ## Completed
+- **Completed** | `write-a-function-that-returns-42-1971` | 2026-07-19 06:47:27 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-18373` | 2026-07-19 06:32:14 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-60697` | 2026-07-19 06:31:18 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-99170` | 2026-07-19 06:28:58 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-87685` | 2026-07-19 06:12:04 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-44968` | 2026-07-19 06:06:06 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-31423` | 2026-07-19 05:57:37 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-17084` | 2026-07-19 05:56:37 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-90288` | 2026-07-19 00:08:26 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-64334` | 2026-07-19 00:06:28 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-11547` | 2026-07-18 23:29:32 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-71067` | 2026-07-18 23:18:10 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-14191` | 2026-07-18 23:17:09 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-56043` | 2026-07-18 23:13:49 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-90458` | 2026-07-18 23:07:21 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-48837` | 2026-07-18 23:02:41 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-74442` | 2026-07-18 22:54:37 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-35257` | 2026-07-18 22:46:29 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-68128` | 2026-07-18 22:29:54 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-78290` | 2026-07-18 22:21:36 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-85146` | 2026-07-18 22:19:03 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-1803` | 2026-07-18 19:50:40 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-16786` | 2026-07-18 19:50:20 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-29509` | 2026-07-18 19:41:30 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-3402` | 2026-07-18 13:16:31 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-87255` | 2026-07-18 13:09:25 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-11738` | 2026-07-18 13:08:15 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-25471` | 2026-07-18 12:01:00 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-95327` | 2026-07-18 07:50:27 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-2600` | 2026-07-18 07:43:22 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-63541` | 2026-07-18 07:40:52 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-16191` | 2026-07-18 07:09:31 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-42045` | 2026-07-18 06:53:50 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-1455` | 2026-07-18 06:43:30 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-95113` | 2026-07-18 06:40:15 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-3756` | 2026-07-18 06:37:28 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-67430` | 2026-07-18 06:34:59 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-15088` | 2026-07-18 06:32:10 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-972` | 2026-07-18 06:29:16 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-91273` | 2026-07-18 06:26:46 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-77642` | 2026-07-18 06:24:07 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-87588` | 2026-07-18 06:22:53 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-37873` | 2026-07-18 05:48:33 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-56934` | 2026-07-17 21:53:56 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-83326` | 2026-07-17 19:27:34 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-2156` | 2026-07-17 18:36:01 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-30891` | 2026-07-17 18:09:03 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-98700` | 2026-07-17 09:39:21 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-93030` | 2026-07-17 08:50:38 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-10992` | 2026-07-17 08:49:40 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-40254` | 2026-07-17 08:25:27 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-98111` | 2026-07-17 08:18:34 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-61165` | 2026-07-17 07:29:35 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-44517` | 2026-07-17 07:14:31 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-88753` | 2026-07-17 07:13:35 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-97353` | 2026-07-17 07:07:14 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-1846` | 2026-07-17 08:39:36 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-88528` | 2026-07-17 00:04:46 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-28768` | 2026-07-17 00:01:28 — attempts=1
@@ -56,6 +112,63 @@
 - **Completed** | `call-1-state-md-in-progress-termux-stat-75937` | 2026-07-13 13:38:31
 ## Completed
 - **Completed** | `create-a-python-script-named-hello-nabd-7170` | 2026-07-13 13:34:58
+## Phase 0 — Convergence Fix (LIVE CLOSED, 2026-07-19)
+Verification status: **VERIFIED against code + tests + live run.** The "plan"
+doc ("المرحلة 0 — تثبيت التقارب") is NOT a file in this repo — it lives in
+conversation context. Recorded against the criteria as quoted by the user.
+
+Root cause found: `_pre_dispatch_guard` (Guard 3 / answer-in-hand gate) was
+DEFINED but DEAD — never called from `_run_once` or `_dispatch_and_record_evidence`.
+So the Orchestrator could re-read / shell / re-list after evidence was in hand → loop.
+
+Fixes applied:
+- `engine/loop.py`: Guard 3 now wired into `_run_once` (line 2071) before dispatch;
+  on block, records evidence, injects directive, forces final_answer. No real tool runs.
+- `engine/loop.py`: NEW Guard 4 (lines 1749/1782/1797) — blocks re-read of same path
+  and wider-scope list (path='.'/'/') after a targeted read; forces `_force_final`.
+- `core/ui_bridge.py`: removed bridge→EventBus relay (no `bus.emit` in `emit()`);
+  one-way flow bus→bridge only. Kills the echo-loop risk from the bidirectional relay.
+- `main.py` + `ui/repl_termux.py`: one-shot mode builds TerminalVisualizer with
+  `register_listeners=False`, so wire_events/Renderer is the SOLE stdout owner in
+  one-shot (no competing second renderer). REPL mode keeps visualizer as sole owner.
+
+Evidence:
+- `pytest tests/test_phase5_goalspec.py tests/test_phase5_harden.py -v` → 32 PASSED
+  (all names green: test_goalspec_*, test_loop_blocks_false_success_when_goal_unmet,
+  test_evidence_feedback_loop_soft_interception, test_fixation_breaker_soft_interception, etc.)
+- NEW `tests/test_phase0_live_convergence.py` → 3 PASSED (proves shell/relist/re-read
+  are intercepted in the REAL loop path, not just the dead guard fn).
+- Full suite: 585 passed, 0 failed.
+- LIVE: `python3 main.py "read pyproject.toml and give me the project name"` → RC=0,
+  one `READ [pyproject.toml]`, ends "name = nabd-os", NO execute_shell, NO Partial
+  banner, NO tree wipe. Criterion MET.
+- NOTE: the live run uses ORCA-FLASH which exits on cycle 1; the looping-Orchestrator
+  branch is proven by test_phase0_live_convergence (stubbed spin), not by this run.
+
+## Phase 0 — Convergence Fix (LIVE CLOSED, 2026-07-19) — UPDATE 2
+User diagnostics (readlink/ls/grep across ~/smart-agent + ~/Nabdcode) confirmed:
+- `bin/nabdcode` does `cd .../smart-agent; exec python3 main.py` → the LIVE binary
+  runs `~/smart-agent`. `~/Nabdcode` is a STALE duplicate, referenced by NOTHING in
+  the running tree (only a docstring word + unrelated test string). Fixes apply.
+- Verified via grep: no `bus.emit` inside `UIBridge.emit()` (bridge→bus relay gone).
+
+GAP FOUND BY USER DIAGNOSTICS (session sess_6ecaeadf, 02:37 post-fix):
+- The model did `file_system list path=. recursive=true` → "Directory listing for
+  '.'(recursive) — 801 entries" — the EXACT tree wipe. First Guard 4 only blocked
+  list AFTER a prior read; a bare first whole-tree scan slipped through.
+- CORRECTION: Guard 4 now blocks the FIRST whole-tree scan (recursive list of
+  '.'/'/') unconditionally, no prior read required. Plus: when a guard sets
+  _force_final, _maybe_force_partial_answer emits a CLEAN answer from evidence and
+  NEVER the "[Partial answer" banner (the maimed output the criterion forbids).
+- NEW test test_first_whole_tree_scan_blocked_without_prior_read proves it.
+
+Live re-verification (this update):
+- `python3 main.py "read pyproject.toml and give me the project name"` → RC=0,
+  one READ, ends `name = "nabd-os"`, no shell, no Partial, no tree wipe.
+- `python3 main.py "list the entire repo tree recursively"` → RC=0,
+  tree-wipe(801 entries)=0, Partial banner=0 (was the maimed failure mode).
+- pytest full suite: 586 passed, 0 failed. Named gates 32 passed; convergence 4 passed.
+
 ## Escalated to Human
 
 ## In Progress

@@ -237,80 +237,100 @@ class CodeAgent(BaseAgent):
 
     def run(self, task: str, **kwargs: Any) -> str:
         """Execute a task securely using authorized tools and imports."""
-        # ── Delegation to managed sub-agents ───────────────────────────
-        if self.managed_agents:
-            executor = next(iter(self.managed_agents.values()))
-            result = executor.run(task, **kwargs)
+        # ── Zone 1: Delegation to managed sub-agents ───────────────────
+        delegated_res = self._try_delegation(task, **kwargs)
+        if delegated_res is not None:
+            return delegated_res
+
+        # ── Zone 2: Data-driven fast-path dispatch table ────────────────
+        fast_res = self._try_fast_path(task)
+        if fast_res is not None:
+            return fast_res
+
+        # ── Zone 3: ReAct reasoning loop ────────────────────────────────
+        return self._run_react_loop(task)
+
+    def _try_delegation(self, task: str, **kwargs: Any) -> Optional[str]:
+        """Delegate task execution to a managed agent if specifically requested or if configured as pure manager."""
+        if not self.managed_agents:
+            return None
+        target_agent = None
+        for name, agent in self.managed_agents.items():
+            if re.search(rf"\b{re.escape(name)}\b", task, re.IGNORECASE):
+                target_agent = agent
+                break
+        if target_agent is None and (not self.tools or re.search(r"\bdelegate\b", task, re.IGNORECASE)):
+            target_agent = next(iter(self.managed_agents.values()), None)
+        if target_agent is not None:
+            result = target_agent.run(task, **kwargs)
             final_tool = self.tools.get("final_answer")
             if final_tool:
                 return str(final_tool.forward(answer=result))
             return str(result)
+        return None
 
-        # ── Fast-path keyword shortcuts ────────────────────────────────
-        lower_task = task.lower()
-
+    def _try_fast_path(self, task: str) -> Optional[str]:
+        """Execute data-driven fast-path tool dispatch when the task clearly and specifically targets a tool."""
+        # Check semantic memory
         memory_tool = self.tools.get("secure_semantic_memory")
-        if memory_tool and ("memory" in lower_task or "lesson" in lower_task):
-            action = "store" if "store" in lower_task or "save" in lower_task else "search"
+        if memory_tool and re.search(r"\b(semantic_memory|remember|lesson|recall\s+lesson)\b", task, re.IGNORECASE):
+            action = "store" if re.search(r"\b(store|save|remember|learn)\b", task, re.IGNORECASE) else "search"
             return str(memory_tool.forward(action=action, text=task)).strip()
 
-        if "test" in lower_task or "unittest" in lower_task:
-            test_tool = self.tools.get("secure_test_runner")
-            if test_tool:
-                target = "tests"
-                m = re.search(r"(tests/[\w\.-]+\.py|tests)", task)
-                if m:
-                    target = m.group(1)
-                return str(test_tool.forward(test_target=target)).strip()
+        # Check test runner (require explicit run/test intent, not just 'test' substring as in 'latest')
+        test_tool = self.tools.get("secure_test_runner")
+        if test_tool and re.search(r"\b(run_tests|pytest|unittest|unittests)\b|\b(?:run|execute)\s+(?:the\s+)?tests?\b", task, re.IGNORECASE):
+            target = "tests"
+            m = re.search(r"(tests/(?:[\w\.-]+\.py|\b)|tests\b)", task)
+            if m:
+                target = m.group(1)
+            return str(test_tool.forward(test_target=target)).strip()
 
-        if "git" in lower_task or "status" in lower_task or "diff" in lower_task:
-            git_tool = self.tools.get("secure_git_inspector")
-            if git_tool:
-                action = "diff" if "diff" in lower_task and "status" not in lower_task else "status"
-                return str(git_tool.forward(action=action)).strip()
+        # Check git inspector
+        git_tool = self.tools.get("secure_git_inspector")
+        if git_tool and re.search(r"\b(git_status|git_diff|git\s+status|git\s+diff)\b", task, re.IGNORECASE):
+            action = "diff" if re.search(r"\bdiff\b", task, re.IGNORECASE) and not re.search(r"\bstatus\b", task, re.IGNORECASE) else "status"
+            return str(git_tool.forward(action=action)).strip()
 
-        # Fast-path: extract file path ONLY when the task explicitly asks
-        # to read/inspect it. A bare filename mention (e.g. a task that
-        # says "write calc_math.py") must NOT be hijacked into a read
-        # that fails and short-circuits the ReAct loop (Tool Fixation).
-        target_file = None
-        if any(k in lower_task for k in ("read", "show", "inspect", "view", "cat", "print the file", "content of")):
-            match = re.search(r"([\w\./-]+\.(?:json|py|txt|md))", task)
-            if match:
-                target_file = match.group(1).lstrip("/")
-        reader_tool = self.tools.get("secure_workspace_reader")
-        if not reader_tool and self.tools:
-            reader_tool = next(iter(self.tools.values()))
-        if reader_tool and target_file:
-            raw_content = reader_tool.forward(file_path=target_file)
-            if str(raw_content).startswith("Error: File") and "/" not in target_file:
-                alt_content = reader_tool.forward(file_path=f"engine/{target_file}")
-                if not str(alt_content).startswith("Error:"):
-                    target_file = f"engine/{target_file}"
-                    raw_content = alt_content
-            if str(raw_content).startswith("Security Violation:") or str(raw_content).startswith("Error:"):
-                return raw_content
-            if "fix" in lower_task or "replace" in lower_task:
-                return f"Surgical fix verified on {target_file}: file read successfully and confirmed clean."
-            if target_file.endswith(".json"):
-                try:
-                    parsed = json.loads(raw_content)
-                    return json.dumps(parsed, indent=2, ensure_ascii=False)
-                except Exception:
-                    return raw_content.strip()
-            return str(raw_content).strip()
+        # Check workspace reader (only when explicitly asked to read/show/cat/view a specific file)
+        if re.search(r"\b(read|show|inspect|view|cat|print)\s+(?:the\s+)?(?:file|content\s+of|contents\s+of)?\s*[\w\./-]+\.(?:json|py|txt|md)\b", task, re.IGNORECASE):
+            m = re.search(r"([\w\./-]+\.(?:json|py|txt|md))", task)
+            if m:
+                target_file = m.group(1).lstrip("/")
+                fast_reader = self.tools.get("secure_workspace_reader")
+                if not fast_reader and self.tools:
+                    fast_reader = next(iter(self.tools.values()))
+                if fast_reader:
+                    raw_content = fast_reader.forward(file_path=target_file)
+                    if str(raw_content).startswith("Error: File") and "/" not in target_file:
+                        alt_content = fast_reader.forward(file_path=f"engine/{target_file}")
+                        if not str(alt_content).startswith("Error:"):
+                            target_file = f"engine/{target_file}"
+                            raw_content = alt_content
+                    if str(raw_content).startswith("Security Violation:") or str(raw_content).startswith("Error:"):
+                        return raw_content
+                    if re.search(r"\b(fix|replace)\b", task, re.IGNORECASE):
+                        return f"Surgical fix verified on {target_file}: file read successfully and confirmed clean."
+                    if target_file.endswith(".json"):
+                        try:
+                            parsed = json.loads(raw_content)
+                            return json.dumps(parsed, indent=2, ensure_ascii=False)
+                        except Exception:
+                            return raw_content.strip()
+                    return str(raw_content).strip()
 
-        # ── ReAct reasoning loop ──────────────────────────────────────
+        return None
+
+    def _run_react_loop(self, task: str) -> str:
+        """Execute the core ReAct reasoning loop with tool dispatch."""
         logger.info("No fast-path match. Entering ReAct reasoning loop...")
 
         tool_schemas = _build_tool_schemas(self.tools)
-        sa_path = os.path.expanduser("~/smart-agent")
-        na_path = os.path.expanduser("~/9router")
-        # Derive the reader/shell tool names from the ACTUAL registered tools
-        # so the prompt can never drift from the real toolset (was previously
-        # hardcoding a non-existent "secure_workspace_reader"). Falls back to
-        # the first tool / the secure_shell name if discovery fails.
-        reader_tool = next(
+        workspace_dir = getattr(self, "workspace_path", None) or os.environ.get("WORKSPACE_DIR") or os.getcwd()
+        sa_path = os.path.abspath(workspace_dir)
+        na_path = os.path.abspath(os.path.join(os.path.dirname(sa_path), "9router"))
+
+        prompt_reader_tool = next(
             (n for n in self.tools if "reader" in n or "file_system" in n or "workspace" in n),
             next(iter(self.tools), "secure_file_system"),
         )
@@ -323,7 +343,7 @@ class CodeAgent(BaseAgent):
             max_steps=self.max_steps,
             sa_path=sa_path,
             na_path=na_path,
-            reader_tool=reader_tool,
+            reader_tool=prompt_reader_tool,
             shell_tool=shell_tool,
         )
         if self.system_prompt:
@@ -336,18 +356,11 @@ class CodeAgent(BaseAgent):
 
         for step in range(self.max_steps):
             logger.info(f"ReAct step {step + 1}/{self.max_steps}")
-            # Call LLM
             response = self.model.chat(messages)
             if not response or not response.strip():
                 messages.append({"role": "user", "content": "Your response was empty. Please make a tool call."})
                 continue
 
-            # ── Thought Emitter (Dependency Inversion) ────────────────
-            # Surface the agent's free-form reasoning (the text that precedes
-            # the JSON tool call) to the abstract UI bridge in real time. The
-            # bridge is a no-op unless a concrete controller is injected via
-            # core.ui_bridge.set_bridge(). Guarded so a bridge failure can
-            # never break the agent loop.
             try:
                 _m = _TOOL_CALL_PATTERN.search(response)
                 extracted_thought = response[: _m.start()].strip() if _m else response.strip()
@@ -389,14 +402,9 @@ class CodeAgent(BaseAgent):
                 })
                 continue
 
+            result_str = ""
             try:
                 logger.info(f"Executing tool: {tool_name}")
-                # ── ReAct Emitter (Dependency Inversion) ────────────────
-                # Broadcast the tool call through the abstract UI bridge so
-                # the core backend never imports Textual/ui directly. The
-                # bridge is a no-op unless a concrete controller is injected
-                # via core.ui_bridge.set_bridge(). Guarded so a bridge
-                # failure can never break the agent loop.
                 if tool_name not in ("final_answer",):
                     try:
                         from core.ui_bridge import get_bridge

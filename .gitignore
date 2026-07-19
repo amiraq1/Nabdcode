@@ -52,3 +52,8 @@ textual/
 core/state/*.json
 *.jsonl
 workspace/config.json
+# scratch / diagnostics — do not commit
+*.bak
+*.dbgbak
+.test_scratch/
+graphify-out/

@@ -1,6 +1,6 @@
 import concurrent.futures
 import threading
-from engine.events import bus
+from core.kernel.events import bus
 from engine.tool_registry import registry
 from engine.state import RuntimeState
 from core.kernel.protocols import ToolCallable
@@ -13,6 +13,13 @@ _SHARED_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_WORKERS)
 # Admission control: only allow _MAX_WORKERS pending tasks at a time.
 # This prevents unbounded queue growth when all workers are busy.
 _POOL_SEMAPHORE = threading.BoundedSemaphore(_MAX_WORKERS)
+_dispatch_ctx = threading.local()
+
+
+def is_dispatching() -> bool:
+    """Return True if the current thread is executing a tool inside Dispatcher.dispatch."""
+    return getattr(_dispatch_ctx, "active", False)
+
 
 
 class Dispatcher:
@@ -58,7 +65,14 @@ class Dispatcher:
             # Use __call__ for self-validating entry point (Pydantic validation
             # + UI bridge events). Falls through to execute() for tools without
             # args_schema (backward compatible).
-            future = _SHARED_POOL.submit(tool, **kwargs)
+            def _run_tool():
+                _dispatch_ctx.active = True
+                try:
+                    return tool(**kwargs)
+                finally:
+                    _dispatch_ctx.active = False
+
+            future = _SHARED_POOL.submit(_run_tool)
             try:
                 result: ToolResult = future.result(timeout=timeout)
                 # Ensure result is always ToolResult (SecureTool.__call__ returns

@@ -15,7 +15,28 @@ import core._env  # auto-load .env variables
 
 logger = logging.getLogger("nabd.llm")
 
-DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash-free")
+
+class PostPreservingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """
+    معالج مخصص يمنع urllib من تحويل طلبات POST إلى GET عند مواجهة 
+    إعادة توجيه (301, 302, 307, 308)، ويحافظ على الحمولة (Payload).
+    """
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if req.get_method() == "POST" and code in (301, 302, 303, 307, 308):
+            new_req.method = "POST"
+            new_req.data = req.data
+            if req.has_header("Content-type"):
+                new_req.add_unredirected_header("Content-Type", req.get_header("Content-type"))
+            elif req.has_header("Content-Type"):
+                new_req.add_unredirected_header("Content-Type", req.get_header("Content-Type"))
+        return new_req
+
+
+# تنشيط المعالج المضاد للرصاص عالمياً في جميع استدعاءات urllib.request
+urllib.request.install_opener(urllib.request.build_opener(PostPreservingRedirectHandler()))
+
+DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
 
 
 # ── Provider configuration ─────────────────────────────────────────────────
@@ -208,6 +229,21 @@ class OpenRouterClient:
                         raise OpenRouterError("No choices returned.")
                     message = choices[0].get("message", {})
                     content = message.get("content")
+                    # Native function-calling: if the provider returns structured
+                    # tool_calls, normalize to the canonical {"tool":name,"args":args}
+                    # text form so the rest of the pipeline (parser/verifier) is
+                    # unchanged. This is the primary path; XML/JSON text parsing
+                    # remains a fallback for providers without FC support.
+                    tool_calls = message.get("tool_calls")
+                    if tool_calls:
+                        fc = (tool_calls[0] or {}).get("function", {}) or {}
+                        _name = fc.get("name", "") or ""
+                        _raw = fc.get("arguments", "{}")
+                        try:
+                            _args = json.loads(_raw) if isinstance(_raw, str) else (_raw or {})
+                        except (json.JSONDecodeError, TypeError):
+                            _args = {}
+                        return json.dumps({"tool": _name, "args": _args}, ensure_ascii=False)
                     if content is None:
                         raise OpenRouterError("Empty model response.")
                     return sanitize(content)
@@ -267,7 +303,7 @@ class LocalClient:
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            self.config.base_url,
+            self.base_url,
             headers=self.headers,
             method="POST",
             data=body,
@@ -275,7 +311,8 @@ class LocalClient:
         last_error: Exception | None = None
         for attempt in range(self.config.retries + 1):
             try:
-                with urllib.request.urlopen(request, timeout=self.config.timeout) as response:
+                opener = urllib.request.build_opener(PostPreservingRedirectHandler())
+                with opener.open(request, timeout=self.config.timeout) as response:
                     if response.status != 200:
                         raise RuntimeError(f"HTTP {response.status}")
                     raw = response.read()
@@ -334,17 +371,18 @@ class LocalClient:
         payload["stream"] = True  # Force stream=True for this code path
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            self.config.base_url,
+            self.base_url,
             headers=self.headers,
             method="POST",
             data=body,
         )
-        from engine.events import bus
+        from core.kernel.events import bus
 
         accumulated: list[str] = []
         STREAM_READ_TIMEOUT = 60.0
         try:
-            with urllib.request.urlopen(request, timeout=STREAM_READ_TIMEOUT) as response:
+            opener = urllib.request.build_opener(PostPreservingRedirectHandler())
+            with opener.open(request, timeout=STREAM_READ_TIMEOUT) as response:
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
@@ -381,7 +419,7 @@ class LocalClient:
 # ── OrcaRouter client ──────────────────────────────────────────────────────
 
 class OrcaRouterClient(OpenRouterClient):
-    BASE_URL = os.getenv("ORCAROUTER_BASE_URL", "https://orcarouter.ai/api/v1/chat/completions")
+    BASE_URL = os.getenv("ORCAROUTER_BASE_URL", "https://www.orcarouter.ai/api/v1/chat/completions")
 
     def __init__(
         self,
@@ -394,7 +432,7 @@ class OrcaRouterClient(OpenRouterClient):
             api_key=api_key,
             model=model,
             config=config,
-            base_url=base_url or os.getenv("ORCAROUTER_BASE_URL", "https://orcarouter.ai/api/v1/chat/completions"),
+            base_url=base_url or os.getenv("ORCAROUTER_BASE_URL", "https://www.orcarouter.ai/api/v1/chat/completions"),
         )
 
     @property

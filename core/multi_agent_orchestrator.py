@@ -13,6 +13,8 @@ broadcast through the safe UIBridge fan-out so logs capture the loop.
 
 from __future__ import annotations
 
+import concurrent.futures
+import json
 import logging
 import os
 import re
@@ -37,10 +39,14 @@ from core.tool_factory import build_skill_tools
 from core.context_manager import RepositoryContextManager
 from core.ui_bridge import get_bridge
 from core.uv_isolation_manager import UvIsolationManager
-from engine.events import bus
+from core.kernel.events import bus
 from tools.secure_tools import (
     SecureFileSystemTool,
     SecureWebSearchTool,
+    SecureCodeIntelligenceTool,
+    SecurePythonREPLTool,
+    SecureTasteManagerTool,
+    SecureGraphifyTool,
 )
 
 # Local package roots that are NOT third-party (treat as internal, never
@@ -159,6 +165,10 @@ class CoderAgent:
                 # Real edit/write capability so coding tasks are truthful.
                 SecureFileSystemTool(workspace=workspace_path),
                 SecureWebSearchTool(),
+                SecureCodeIntelligenceTool(workspace=workspace_path),
+                SecurePythonREPLTool(workspace=workspace_path),
+                SecureTasteManagerTool(workspace=workspace_path),
+                SecureGraphifyTool(workspace_dir=workspace_path),
                 # Dynamically discovered skills (BaseSkill -> Tool adapter),
                 # e.g. web_fetcher, systematic_debugging.
                 *build_skill_tools(),
@@ -167,8 +177,9 @@ class CoderAgent:
             name="Coder",
             description=(
                 "A dedicated coding worker. Writes and edits files via "
-                "secure_file_system, searches the web, and uses skills. It has "
-                "NO shell access and NO raw workspace reader — to use a "
+                "secure_file_system, searches the web, executes Python logic via "
+                "secure_python_repl, maps code structure via secure_code_intelligence, manages taste profile via secure_taste_manager, queries knowledge graph via secure_graphify_tool, and uses skills. "
+                "It has NO shell access and NO raw workspace reader — to use a "
                 "third-party library, write the import in the code payload and "
                 "NABD OS will provision it via an isolated uv environment."
             ),
@@ -231,6 +242,8 @@ class OrchestratorAgent:
 
     def __init__(self, model: Any | None = None) -> None:
         self._model = model or get_secure_model()
+        from core.kernel.security import get_workspace_root
+        self.workspace_dir = str(get_workspace_root())
         self.coder = CoderAgent(self._model)
         self.verifier = VerifierAgent(self._model)
         # Shared execution scratchpad: the single source of truth passed
@@ -490,3 +503,168 @@ class OrchestratorAgent:
                 MemoryStore.add_lesson(f"Orchestrated solution for: {task[:80]}")
         except Exception:
             pass
+
+    def _extract_json_from_llm(self, text: str) -> dict:
+        """Helper to extract clean JSON from LLM response text."""
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            if not isinstance(text, str):
+                return {"nodes": [], "edges": [], "error": "Invalid response type"}
+            match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except Exception:
+                    pass
+            return {"nodes": [], "edges": [], "error": "Invalid JSON format from LLM"}
+
+    def process_graphify_chunks_parallel(self, file_chunks: list, prompt_template: str = "", max_workers: int = 3):
+        """Step B2: Dispatch ALL subagents in parallel to process codebase chunks.
+
+        Includes intelligent token-optimization routing (pure-code bypass) and LLM extraction.
+        """
+        results = []
+        total_chunks = len(file_chunks)
+
+        # 1. Load semantic extraction spec into memory once
+        extraction_spec_path = os.path.join(self.workspace_dir, "references", "extraction-spec.md")
+        extraction_prompt = prompt_template
+        if not extraction_prompt and os.path.exists(extraction_spec_path):
+            with open(extraction_spec_path, "r", encoding="utf-8") as f:
+                extraction_prompt = f.read()
+
+        print(f"🚀 [Dispatcher] Launching {total_chunks} Sub-Agents in PARALLEL mode (Max Workers: {max_workers})...")
+
+        def agent_task(chunk_data):
+            chunk_num = chunk_data.get('chunk_num', 0)
+            content = chunk_data.get('content', '')
+            file_type = chunk_data.get('type', 'code')
+
+            # 2. Token Optimization Routing (pure-code bypass)
+            if file_type == 'code':
+                print(f"⏩ [Agent {chunk_num}] Skipping deep extraction for pure-code chunk.")
+                return {"chunk_id": chunk_num, "nodes": [], "edges": [], "skipped": True}
+
+            # 3. Prepare Prompt for text/docs/architecture files (Deep Mode)
+            prompt = extraction_prompt.replace("CHUNK_NUM", str(chunk_num))\
+                                      .replace("TOTAL_CHUNKS", str(total_chunks))\
+                                      .replace("FILE_LIST", content)\
+                                      .replace("DEEP_MODE", "true")
+
+            print(f"🧠 [Agent {chunk_num}] Querying LLM for semantic extraction ({file_type})...")
+
+            # 4. Real LLM Inference
+            try:
+                llm_engine = getattr(self, "llm_engine", None)
+                if llm_engine and hasattr(llm_engine, "generate"):
+                    llm_response = llm_engine.generate(prompt)
+                elif callable(self._model):
+                    llm_response = self._model([{"role": "user", "content": prompt}])
+                elif hasattr(self._model, "generate"):
+                    llm_response = self._model.generate(prompt)
+                else:
+                    llm_response = str(self._model)
+
+                # 5. Extract clean JSON from LLM response
+                parsed_data = self._extract_json_from_llm(llm_response)
+                parsed_data["chunk_id"] = chunk_num
+                return parsed_data
+            except Exception as e:
+                print(f"❌ [Agent {chunk_num}] LLM Inference failed: {e}")
+                return {"chunk_id": chunk_num, "nodes": [], "edges": [], "error": str(e)}
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_chunk = {executor.submit(agent_task, chunk): chunk for chunk in file_chunks}
+
+                for future in concurrent.futures.as_completed(future_to_chunk):
+                    result = future.result()
+                    results.append(result)
+                    print(f"✅ [Dispatcher] Agent finished Chunk {result['chunk_id']} successfully!")
+
+        except Exception as e:
+            print(f"⚠️ [Dispatcher] Parallel dispatch failed (Resource Exhaustion/OOM): {e}")
+            print("🔄 [Dispatcher] Falling back to SERIAL Path (Graceful Fallback)...")
+
+            results = []
+            for chunk in file_chunks:
+                try:
+                    result = agent_task(chunk)
+                    results.append(result)
+
+                    chunk_num = chunk.get('chunk_num', 0)
+                    chunk_path = os.path.join(self.workspace_dir, "graphify-out", f".graphify_chunk_{chunk_num}.json")
+                    os.makedirs(os.path.dirname(chunk_path), exist_ok=True)
+                    with open(chunk_path, "w", encoding="utf-8") as f:
+                        json.dump(result, f, ensure_ascii=False, indent=2)
+
+                    print(f"✅ [Serial] Agent finished and saved Chunk {chunk_num}")
+                except Exception as inner_e:
+                    print(f"❌ [Serial] Agent failed on Chunk {chunk.get('chunk_num')}: {inner_e}")
+
+        results.sort(key=lambda x: x.get("chunk_id", 0))
+        self._aggregate_graph_results(results)
+        return results
+
+    def _aggregate_graph_results(self, all_results: list):
+        """Aggregate all subagent graph outputs into a single JSON."""
+        final_graph = {"nodes": [], "edges": [], "hyperedges": []}
+
+        for res in all_results:
+            final_graph["nodes"].extend(res.get("nodes", []))
+            final_graph["edges"].extend(res.get("edges", []))
+
+        output_path = os.path.join(self.workspace_dir, "graphify-out", ".graphify_semantic_new.json")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(final_graph, f, ensure_ascii=False, indent=2)
+
+        print(f"🎯 [Aggregation] Successfully merged all chunks into {output_path}!")
+
+
+MultiAgentOrchestrator = OrchestratorAgent
+
+
+# ── NabdOS Deterministic DAG Refactoring Bridge ──────────────────────────────
+from core.dag.context import NabdExecutionContext
+from core.dag.executor import NabdDAGExecutor
+from core.dag.nodes.reasoner import ReasonerNode
+from core.dag.nodes.sentinel import SentinelNode
+from core.dag.nodes.executor import ExecutorNode
+from core.dag.nodes.reader import ReaderNode
+from core.dag.nodes.terminal import TerminalNode
+from core.dag.base import BaseNode
+
+class EndNode(BaseNode):
+    def __init__(self):
+        super().__init__("end")
+    def execute(self, context: NabdExecutionContext):
+        print("\n🎉 [End Node] NabdOS DAG Pipeline Finished!")
+        return None
+
+def trigger_nabdos_dag_refactoring(llm_engine, workspace_dir, target_files, taste_rules, graphify_tool=None):
+    print("\n⚔️  Activating NabdOS Deterministic DAG Pipeline (with Spatial Reader)...")
+    
+    # 1. تهيئة الذاكرة المركزية
+    context = NabdExecutionContext(
+        workspace_dir=workspace_dir,
+        target_files=target_files,
+        taste_rules=taste_rules
+    )
+    
+    # 2. تجهيز المايسترو (DAG Executor)
+    engine = NabdDAGExecutor()
+    
+    # 3. تمرير الأداة والـ LLM الحقيقي للعقد!
+    engine.register_node(ReaderNode(graphify_tool=graphify_tool))
+    engine.register_node(ReasonerNode(llm_engine=llm_engine)) 
+    engine.register_node(SentinelNode())
+    engine.register_node(ExecutorNode())
+    engine.register_node(TerminalNode())
+    engine.register_node(EndNode())
+    
+    # 4. الإطلاق الحتمي من محطة المسح المكاني
+    return engine.execute(start_node_id="reader_node", context=context)
+

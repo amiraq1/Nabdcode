@@ -1,6 +1,6 @@
 import time
 from typing import Dict, Any
-from engine.events import bus
+from core.kernel.events import bus
 
 class MetricsEngine:
     def __init__(self):

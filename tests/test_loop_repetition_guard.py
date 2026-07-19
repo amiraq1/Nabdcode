@@ -18,7 +18,7 @@ class TestLoopRepetitionGuard(unittest.TestCase):
         # Ensure safe shutdown returns cleanly
         loop._safe_shutdown = MagicMock(return_value="ABORTED_SAFE")
 
-        loop.run("Hello test")
+        loop.run("Check workspace files and fix bugs")
 
         # LLM should be called exactly 3 times (1st appearance, 2nd appearance, 3rd appearance triggers kill switch)
         self.assertEqual(mock_llm.call_count, 3)
@@ -52,7 +52,7 @@ class TestLoopRepetitionGuard(unittest.TestCase):
         loop = ExecutionLoop(llm_provider=mock_llm, state=state)
         loop._safe_shutdown = MagicMock(return_value="ABORTED_SAFE")
 
-        loop.run("Hello test")
+        loop.run("Check workspace files and fix bugs")
 
         self.assertEqual(mock_llm.call_count, 3)
         loop._safe_shutdown.assert_called_once()
@@ -83,7 +83,7 @@ class TestFinalAnswerTermination(unittest.TestCase):
     def test_final_answer_terminates_without_tool_loop(self):
         """A casual 'hi' answered with final_answer must terminate in ONE step,
         not loop on 'Unknown tool final_answer' corrections."""
-        from engine.events import bus
+        from core.kernel.events import bus
 
         state = RuntimeState(session_id="test-final-answer")
         mock_llm = MagicMock(
@@ -113,9 +113,9 @@ class TestFinalAnswerTermination(unittest.TestCase):
         self.assertEqual(state.status, "COMPLETED")
 
     def test_final_answer_not_in_rejected_tool_prompts(self):
-        """final_answer must bypass TOOL_SCHEMAS validation, never emitting
+        """final_answer must bypass tool-schema validation, never emitting
         tool_validation_failed for it."""
-        from engine.events import bus
+        from core.kernel.events import bus
 
         state = RuntimeState(session_id="test-final-answer-no-reject")
         mock_llm = MagicMock(

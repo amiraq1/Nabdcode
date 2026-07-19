@@ -14,14 +14,14 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from engine.renderer import Renderer
-from engine.events import bus
+from core.kernel.events import bus
 from core.evidence import EvidenceLog, VerifierError
 
 # ── Helper to check what events are subscribed ──────────────────────────
 
 def _is_event_subscribed(event_name: str) -> bool:
     """Check if an event has at least one subscriber."""
-    from engine.events import bus
+    from core.kernel.events import bus
     return event_name in bus._subscribers and len(bus._subscribers[event_name]) > 0
 
 
