@@ -6,6 +6,27 @@ from enum import Enum
 from typing import Any, Optional
 
 from core.parser import ToolCall
+from core.prompts import BROWSER_FEWSHOT_EXAMPLES, CRITICAL_RULES_FOR_TOOL_CALLING
+
+
+# ── Shared loop constants (consumed by context + dispatch mixins) ────────────
+TOOL_WINDOW: Final[int] = 2
+CHAT_WINDOW: Final[int] = 12
+MAX_CRITICAL_FULL: Final[int] = 3
+
+TOOL_FEWSHOT_FALLBACK: Final[str] = (
+    f"{CRITICAL_RULES_FOR_TOOL_CALLING}\n\n"
+    "## Tool Call Format (few-shot)\n"
+    "You MUST call a tool by outputting ONLY one JSON object. No prose.\n\n"
+    "Example 1 — search the local codebase knowledge base (RAG) for code context:\n"
+    '{"tool": "search_knowledge_base", "args": {"action": "search", "query": "EventBus fault isolation try except", "k": 3}}\n\n'
+    "Example 2 — run a shell command:\n"
+    '{"tool": "execute_shell", "args": {"command": "ls -la"}}\n\n'
+    "Example 3 — finish a conversational reply:\n"
+    '{"tool": "final_answer", "args": {"answer": "Here is your answer."}}\n\n'
+    f"{BROWSER_FEWSHOT_EXAMPLES}\n\n"
+    "Output ONLY one JSON object. No prose."
+)
 
 
 class _LoopSignal(Enum):
