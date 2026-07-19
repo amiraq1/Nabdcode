@@ -339,6 +339,7 @@ class _LoopSignal(Enum):
     CONTINUE = "continue"   # skip the rest of this iteration (continue)
     TERMINATE = "terminate"  # leave the loop entirely (return)
     PROCEED = "proceed"     # keep going through the iteration body
+    FINAL_ANSWER = "final_answer"  # smolagents termination convention, handled as a clean stop
 
 
 @dataclass
@@ -1411,7 +1412,7 @@ class ExecutionLoop:
             final_answer = _extract_final_answer(raw_json)
             if final_answer is not None:
                 self._last_response = final_answer
-                return None, _LoopSignal.TERMINATE
+                return None, _LoopSignal.FINAL_ANSWER
 
             from engine.tool_registry import registry as _registry
             is_valid, error = validate_tool_call(raw_json, _registry)
@@ -1623,7 +1624,11 @@ class ExecutionLoop:
         # a small/fallback model emits it in loose ReAct prose ("FINAL_ANSWER
         # ...") the forgiving parser surfaces it as a ToolCall here; short-circuit
         # to a clean termination instead of dispatching a non-registered tool
-        # (which would be rejected and loop forever).
+        # (which would be rejected and loop forever). Run the verifier inline so
+        # the evidence-rejection side effects (increment count + inject [CONTROL])
+        # stay synchronous — unit tests (test_evidence_feedback_loop_soft_interception)
+        # depend on this; _run_once centralizes only the raw-JSON final_answer path
+        # (signal FINAL_ANSWER from _parse_and_validate_tool).
         if tool_name == "final_answer":
             answer = ""
             if isinstance(tool_args, dict):
@@ -2443,6 +2448,17 @@ class ExecutionLoop:
                     return
             return
         if signal is _LoopSignal.TERMINATE:
+            if self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
+                return
+            if self._maybe_force_partial_answer():
+                return
+            return
+        if signal is _LoopSignal.FINAL_ANSWER:
+            # Centralized final_answer termination (smolagents convention). The
+            # answer was stored in self._last_response by the detecting site
+            # (_parse_and_validate_tool or _handle_cycle_and_security). Route
+            # through _verify_claim_or_self_correct so the goal-exit gate stays
+            # authoritative and emission happens exactly once, via _emit_final.
             if self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
                 return
             if self._maybe_force_partial_answer():
