@@ -30,7 +30,7 @@ class TestTodoWriteTool(unittest.TestCase):
         self.tool.execute(action="plan", items=["Task 1"])
         res = self.tool.execute(action="update", item_id=1, status="done", verification_note="")
         self.assertFalse(res.success)
-        self.assertIn("Cannot mark TODO #1 done without a verification_note", res.stderr)
+        self.assertIn("lacks concrete, on-topic evidence", res.stderr)
 
     def test_update_action_done_success(self):
         self.tool.execute(action="plan", items=["Task 1"])

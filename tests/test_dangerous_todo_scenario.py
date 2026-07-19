@@ -24,7 +24,7 @@ class TestDangerousTodoScenario(unittest.TestCase):
         # If agent attempts to cheat and mark done without valid verification note:
         cheat_result = tool.execute(action="update", item_id=2, status="done", verification_note="")
         self.assertFalse(cheat_result.success)
-        self.assertIn("Cannot mark TODO #2 done without a verification_note", cheat_result.stderr)
+        self.assertIn("lacks concrete, on-topic evidence", cheat_result.stderr)
         # Verify item #2 remains IN_PROGRESS
         self.assertEqual(manager.all()[1].status, TodoStatus.IN_PROGRESS)
 

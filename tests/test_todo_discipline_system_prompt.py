@@ -1,9 +1,28 @@
 """Automated verification suite ensuring TODO_DISCIPLINE is injected into the system prompt."""
 
 import unittest
+from pathlib import Path
+import pytest
 from core.constants import TODO_DISCIPLINE
 from engine.loop import ExecutionLoop
 from engine.state import RuntimeState
+
+
+@pytest.fixture(autouse=True)
+def graphify_graph(tmp_path, monkeypatch):
+    """Simulate an active graphify workspace by creating graph.json.
+
+    The injection gate (beb116a) only injects GRAPHIFY_KNOWLEDGE_GRAPH_POLICY
+    when graphify-out/graph.json exists, so the test must provide one.
+    Redirect get_workspace_root() to the temp dir used by the gate.
+    """
+    graph_dir = tmp_path / "graphify-out"
+    graph_dir.mkdir()
+    (graph_dir / "graph.json").write_text('{"nodes": [], "edges": []}')
+    monkeypatch.setattr(
+        "core.kernel.security.get_workspace_root",
+        lambda: str(tmp_path),
+    )
 
 
 class TestTodoDisciplineInjected(unittest.TestCase):

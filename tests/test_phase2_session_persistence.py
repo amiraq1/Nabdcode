@@ -28,7 +28,7 @@ def test_todo_serialization_roundtrip():
     mgr = TodoManager()
     mgr.set_plan(["step one", "step two", "step three"])
     mgr.mark_in_progress(1)
-    mgr.mark_done(1, verification_note="verified by test")
+    mgr.mark_done(1, verification_note="py_compile: 0 errors across 3 files")
 
     serialized = mgr.to_serializable()
     assert len(serialized) == 3
@@ -40,7 +40,7 @@ def test_todo_serialization_roundtrip():
     assert items[0].id == 1
     assert items[0].text == "step one"
     assert items[0].status == TodoStatus.DONE
-    assert items[0].verification_note == "verified by test"
+    assert items[0].verification_note == "py_compile: 0 errors across 3 files"
     assert items[1].status == TodoStatus.PENDING
     assert items[2].text == "step three"
 
@@ -172,7 +172,7 @@ def test_full_session_save_and_restore():
         # Simulate TodoManager with 3 items
         tman = TodoManager()
         tman.set_plan(["list files", "read main", "summarize"])
-        tman.mark_done(1, verification_note="done")
+        tman.mark_done(1, verification_note="ls -la: found 3 files")
 
         # Save (same as main.py after each turn)
         sm.todos = tman.to_serializable()
@@ -193,7 +193,7 @@ def test_full_session_save_and_restore():
         assert "todos" in data
         assert len(data["todos"]) == 3
         assert data["todos"][0]["status"] == "done"
-        assert data["todos"][0]["verification_note"] == "done"
+        assert data["todos"][0]["verification_note"] == "ls -la: found 3 files"
 
         restored_tman = TodoManager()
         restored_tman.restore(data["todos"])
@@ -266,3 +266,4 @@ if __name__ == "__main__":
     test_evidence_log_counter_continuity()
     test_systematic_planning_goal_persistence()
     print("All Phase 2 tests passed.")
+
