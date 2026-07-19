@@ -299,6 +299,16 @@ def _resolve_default_provider() -> Callable[[list[dict[str, Any]], Any], str]:
     return execute_agent_with_memory
 
 
+def _resolve_default_verifier() -> Callable[[str, str, str, Any], str]:
+    """Lazily resolve the independent verifier LLM (step6 DI seam).
+
+    Mirrors ``_resolve_default_provider``: imported at call time to keep the
+    engine.loop import graph acyclic (engine.loop -> llm_router -> core).
+    """
+    from llm_router import run_verifier_check
+    return run_verifier_check
+
+
 def _build_dispatcher(state: RuntimeState) -> "DispatcherProtocol":
     """Lazily construct the concrete Dispatcher.
 
@@ -368,6 +378,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin):
         *,
         max_output_len: int = 2000,
         llm_provider: Callable[[list[dict[str, Any]]], str] | None = None,
+        verifier_provider: Callable[[str, str, str, Any], str] | None = None,
         dispatcher: DispatcherProtocol | None = None,
         evidence_log: EvidenceLog | None = None,
         logger: Any = None,
@@ -379,6 +390,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin):
         # engine.loop never needs a module-level import of engine.dispatcher.
         self.dispatcher = dispatcher or _build_dispatcher(state)
         self.llm_provider = llm_provider or _resolve_default_provider()
+        self._verifier_provider = verifier_provider or _resolve_default_verifier()
+        self._verifier_calls = 0  # step6: per-run budget for independent checker
         self.max_output_len = max_output_len
         self._recent_calls: deque[ToolCall] = deque(maxlen=16)
         self.evidence_log = evidence_log or EvidenceLog()

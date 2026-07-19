@@ -5,6 +5,7 @@ CRITICAL: _emit_final is the single choke point for ALL terminations.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from typing import TYPE_CHECKING
@@ -17,6 +18,40 @@ from engine.goal_verifier import evaluate_goal_exit, MAX_GOAL_RETRIES
 
 if TYPE_CHECKING:
     pass
+
+# step6: budget for independent-checker calls per run (bounded token/time cost).
+MAX_VERIFIER_CALLS: int = 2
+
+
+def _parse_verifier_verdict(raw: str) -> bool | None:
+    """Extract the boolean verdict from the checker's JSON response.
+
+    Returns True (pass) / False (fail) / None (unparseable). Never raises.
+    """
+    if not raw:
+        return None
+    # Find the first {...} JSON object anywhere (flash models may prefix prose).
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    blob = raw[start : end + 1]
+    try:
+        data = json.loads(blob)
+    except Exception:
+        return None
+    v = str(data.get("verdict", "")).strip().lower()
+    if v == "pass":
+        return True
+    if v == "fail":
+        return False
+    return None
+
+
+def _resolve_default_verifier() -> Callable[[str, str, str, Any], str]:
+    """Lazily resolve the independent verifier LLM (DI seam, avoids import cycle)."""
+    from llm_router import run_verifier_check
+    return run_verifier_check
 
 
 class _ConvergenceMixin:
@@ -119,6 +154,60 @@ class _ConvergenceMixin:
         # Fallback: no unread .py files found — suggest directory itself.
         return f"{listing_dir}/__init__.py"
 
+    def _build_evidence_summary(self) -> str:
+        """Minimal, isolated evidence summary for the independent checker.
+
+        Deliberately excludes the maker's reasoning chain / chat history — only
+        the successful records' tool + output snippet (capped) are shown, so the
+        checker judges on evidence, not on the maker's self-assessment (R3).
+        """
+        lines = []
+        for rec in self.evidence_log.get_records():
+            if rec.success and rec.output_snippet:
+                snippet = rec.output_snippet[:300].strip()
+                if snippet:
+                    lines.append(f"- [{rec.tool}] {snippet}")
+        return "\n".join(lines) if lines else "(no successful evidence collected)"
+
+    def _run_independent_checker(self) -> bool:
+        """Run the independent LLM checker over an ISOLATED context.
+
+        Returns True if the checker accepts (pass), False if it rejects (fail).
+        The checker receives ONLY {goal, final_answer, evidence_summary} — never
+        the maker's full conversation memory. This is the semantic gate layered
+        ON TOP of the mandatory rule-based gates (evaluate_goal_exit / reads
+        gate). Bounded to MAX_VERIFIER_CALLS per run; any failure (missing
+        verifier, network error, unparseable verdict) falls back to the existing
+        deterministic behavior (R8) so termination never breaks.
+        """
+        verifier = getattr(self, "_verifier_provider", None)
+        if verifier is None:
+            return True  # no checker configured → don't block (fallback R8)
+        budget = getattr(self, "_verifier_calls", 0)
+        if budget >= MAX_VERIFIER_CALLS:
+            return True  # budget exhausted → fall back to mandatory gates (R7/R8)
+        self._verifier_calls = budget + 1
+        try:
+            goal = self._ctx.user_prompt if self._ctx is not None else ""
+            answer = getattr(self, "_last_response", "") or ""
+            summary = self._build_evidence_summary()
+            raw = verifier(goal, answer, summary, logger=self._logger)
+            verdict = _parse_verifier_verdict(raw)
+            if verdict is None:
+                # Unparseable → treat as pass-through (don't block on noise).
+                return True
+            return verdict
+        except Exception as exc:  # network/timeout/provider down
+            if self._logger is not None:
+                try:
+                    self._logger.warning(
+                        f"[Verifier] independent checker failed, falling back to "
+                        f"mandatory gates: {exc}"
+                    )
+                except Exception:
+                    pass
+            return True
+
     def _verify_claim_or_self_correct(self) -> _LoopSignal:
         """Run the L1 Structural Verifier against the final non-tool response.
 
@@ -133,6 +222,30 @@ class _ConvergenceMixin:
         ctx = self._ctx
         assert ctx is not None
         bus.emit("ui_no_tool_call", {"step": self.state.step_count})
+
+        # ── step6: independent LLM checker (semantic gate, layered ON TOP) ──
+        # Runs ONLY at the termination decision, over an ISOLATED context
+        # {goal, final_answer, evidence_summary}. If it rejects, re-enter the
+        # loop with a concise critique instead of blindly emitting. The
+        # mandatory rule-based gates below still apply regardless of this result.
+        if not self._run_independent_checker():
+            critique = (
+                "[VERIFIER REJECT]: The independent checker found your final "
+                "answer is not sufficiently grounded in the collected evidence. "
+                "Do NOT claim completion. Re-enter the loop, gather stronger "
+                "evidence (read actual source, not just listings), and address "
+                "the gaps before answering."
+            )
+            self.state.append_message({"role": "user", "content": critique})
+            bus.emit("verifier_critique", {
+                "step": self.state.step_count,
+                "attempt": getattr(self._ctx, "goal_correct_count", 0),
+                "max_attempts": MAX_VERIFIER_CALLS,
+                "critique": critique,
+                "goal_blocked": True,
+            })
+            self.state.increment_step()
+            return _LoopSignal.CONTINUE
 
         if self._goal is not None and self._goal.raw_prompt.strip():
             bus.emit("goal_verify", {

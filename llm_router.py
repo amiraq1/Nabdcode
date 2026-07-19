@@ -263,3 +263,72 @@ def execute_agent_with_memory(state_or_messages: Any, logger=None, **kwargs: Any
     else:
         messages = str(state_or_messages)
     return router.generate_response(messages, logger=logger, **kwargs)
+
+
+# ── Independent verifier router (Maker ≠ Checker, step6) ────────────────────
+# A SEPARATE ProviderRouter instance, same provider (gemini-2.5-flash) but an
+# isolated state_key so its circuit-breaker/cooldown state never couples to the
+# main agent's routing. The verifier sees ONLY {goal, final_answer, evidence
+# summary} — never the maker's full conversation memory — preserving checker
+# independence (see phase6 spec R3).
+verifier_providers = [
+    ProviderState(
+        name="VERIFIER",
+        client=OpenRouterClient(model="google/gemini-2.5-flash"),
+        priority=0,
+    )
+]
+verifier_router = ProviderRouter(verifier_providers, state_key="verifier")
+
+
+VERIFIER_SYSTEM_PROMPT = (
+    "You are a STRICT, adversarial verification reviewer. Your ONLY job is to "
+    "judge whether the agent's final answer is actually supported by the "
+    "evidence it collected — NOT to be helpful, NOT to agree, NOT to give the "
+    "benefit of the doubt.\n\n"
+    "You will receive THREE things and NOTHING ELSE: (1) the original task/goal, "
+    "(2) the agent's final answer, (3) a summary of the evidence records the "
+    "agent collected. You do NOT see the agent's reasoning chain or chat "
+    "history, so you cannot be biased by its self-assessment.\n\n"
+    "REJECT the answer (fail) if ANY of these hold:\n"
+    "  • It makes claims not directly backed by the evidence summary.\n"
+    "  • The evidence is insufficient, vague, or consists only of listings/"
+    "directory scans without reading actual source content.\n"
+    "  • It goes off-topic or answers a different question than the goal.\n"
+    "  • It is a raw tool call, a thought block, or non-substantive filler.\n"
+    "  • It hedges/guesses file paths or APIs not present in the evidence.\n\n"
+    "ACCEPT (pass) ONLY when the answer is concretely grounded in the supplied "
+    "evidence and directly addresses the goal.\n\n"
+    "Respond with STRICT JSON only, no prose:\n"
+    '{"verdict": "pass" | "fail", "reasons": ["..."], "missing": ["..."]}\n'
+    "verdict must be exactly \"pass\" or \"fail\". reasons = why you judged it. "
+    "missing = evidence/criteria still absent (empty list if pass)."
+)
+
+
+def run_verifier_check(
+    goal_prompt: str,
+    final_answer: str,
+    evidence_summary: str,
+    logger=None,
+    **kwargs: Any,
+) -> str:
+    """Run the independent checker LLM on a MINIMAL, isolated context.
+
+    The checker receives ONLY {goal, final_answer, evidence_summary} — the
+    maker's full conversation memory is deliberately NOT passed, so the checker
+    cannot be biased by the maker's own self-assessment (Maker ≠ Checker).
+    Temperature is forced to 0 for deterministic, non-lenient judgments.
+    """
+    user_content = (
+        f"TASK/GOAL:\n{goal_prompt}\n\n"
+        f"AGENT FINAL ANSWER:\n{final_answer}\n\n"
+        f"EVIDENCE SUMMARY (collected records):\n{evidence_summary}"
+    )
+    messages = [
+        {"role": "system", "content": VERIFIER_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+    # Force deterministic, strict judgment regardless of caller kwargs.
+    kwargs["temperature"] = 0
+    return verifier_router.generate_response(messages, logger=logger, **kwargs)
