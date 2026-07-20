@@ -386,7 +386,16 @@ class _ConvergenceMixin:
                     for m in ("listing for '", "directory listing")
                 )
                 _is_listing_only = _is_listing_only or _is_echo
-                if not _is_listing_only:
+                # Single-file exemption (Phase 0 refinement): a legitimate
+                # one-file task (real_reads == 1, no echo, non-tool answer) is
+                # grounded in evidence — route it through synthesis instead of
+                # slamming it with [Convergence failed]. Only 0 reads (no
+                # evidence at all) or raw echo remain rejected.
+                if real_reads == 1 and not _is_echo and not _looks_like_tool_call(output):
+                    self._force_tool = False
+                    output = self._synthesize_from_evidence("single_file_ok")
+                    self._last_response = output
+                elif not _is_listing_only:
                     # Sufficient reads: reset force_tool, let model emit final_answer.
                     self._force_tool = False
                 else:

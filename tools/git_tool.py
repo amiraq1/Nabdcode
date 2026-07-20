@@ -23,8 +23,7 @@ GIT_ARG_VALIDATOR = re.compile(r'^[a-zA-Z0-9_./-]+$')
 
 class GitPushArgs(BaseModel):
     commit_message: str = Field(
-        ...,
-        min_length=5,
+        "chore: automated secure commit",
         max_length=200,
         description="Commit message describing the changes being pushed.",
     )
@@ -96,8 +95,8 @@ class GitPushTool(BaseTool):
     description: str = (
         "Push commits to a remote branch and automatically record git diff "
         "verification evidence in evidence_log. "
-        "Required: commit_message (str, min 5 chars). Optional: branch (default 'main'), "
-        "remote (default 'origin')."
+        "Optional: commit_message (default 'chore: automated secure commit'), "
+        "branch (default 'main'), remote (default 'origin')."
     )
 
     @property
