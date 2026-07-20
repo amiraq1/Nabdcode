@@ -58,17 +58,12 @@ class UvIsolationManager:
 
             # 3. Build and run the isolated command.
             cmd = self._build_command(tmp_path, dependencies)
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+            proc = default_guard.run_infra(cmd, timeout=timeout)
             return {
-                "success": proc.returncode == 0,
-                "stdout": proc.stdout,
-                "stderr": proc.stderr,
-                "exit_code": proc.returncode,
+                "success": proc[0] == 0,
+                "stdout": proc[1],
+                "stderr": proc[2],
+                "exit_code": proc[0],
             }
         except subprocess.TimeoutExpired as exc:
             # Hard timeout: report failure, leave no orphan confirmed.

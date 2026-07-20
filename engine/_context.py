@@ -107,7 +107,7 @@ class _ContextMixin:
             user turns compete equally in the sliding window, so the most
             recent question is never displaced by a stale greeting.
         """
-        from engine.loop import _has_active_goal
+        from engine._loop_helpers import _has_active_goal
         ctx = self._ctx
         interactions = ctx.tool_interactions if ctx is not None else []
 

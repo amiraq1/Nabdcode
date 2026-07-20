@@ -36,7 +36,7 @@ class _BudgetMixin:
         Emits ``loop_completed`` with ``reason="budget_exhausted"`` and returns
         ``TERMINATE`` on breach. Otherwise returns ``PROCEED``.
         """
-        from engine.loop import (
+        from engine._loop_helpers import (
             _prompt_requires_investigation,
             _has_active_goal,
         )

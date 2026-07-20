@@ -38,41 +38,31 @@ class TestGraphifyTool(unittest.TestCase):
         path_missing = self.tool.forward(action="path", target="nodeA")
         self.assertIn("Error: Action 'path' requires both 'target' (Node A) and 'target_b'", path_missing)
 
-    @patch("subprocess.run")
+    @patch("core.kernel.subprocess_guard.default_guard.run_infra")
     def test_mock_subprocess_run_success(self, mock_run):
         # Create dummy graphify-out directory
         os.makedirs(os.path.join(self.test_dir, "graphify-out"), exist_ok=True)
 
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Found node: core/kernel/security.py -> SecurityEngine"
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
+        mock_run.return_value = (0, "Found node: core/kernel/security.py -> SecurityEngine", "")
 
         res = self.tool.forward(action="query", target="security")
         self.assertEqual(res, "Found node: core/kernel/security.py -> SecurityEngine")
         mock_run.assert_called_once_with(
             ["graphify", "query", "security"],
             cwd=self.test_dir,
-            capture_output=True,
-            text=True,
             timeout=30,
         )
 
-    @patch("subprocess.run", side_effect=FileNotFoundError)
+    @patch("core.kernel.subprocess_guard.default_guard.run_infra", return_value=(-1, "", "'graphify' command not found. Is it installed and in your system PATH?"))
     def test_graphify_cli_not_found(self, mock_run):
         os.makedirs(os.path.join(self.test_dir, "graphify-out"), exist_ok=True)
         res = self.tool.forward(action="query", target="auth")
-        self.assertIn("Execution Error: 'graphify' command not found", res)
+        self.assertIn("Graphify CLI Error [-1]: 'graphify' command not found", res)
 
-    @patch("subprocess.run")
+    @patch("core.kernel.subprocess_guard.default_guard.run_infra")
     def test_execute_returns_tool_result(self, mock_run):
         os.makedirs(os.path.join(self.test_dir, "graphify-out"), exist_ok=True)
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Explanation of taste engine."
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
+        mock_run.return_value = (0, "Explanation of taste engine.", "")
 
         result = self.tool.execute(action="explain", target="TasteEngine")
         self.assertTrue(result.success)

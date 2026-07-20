@@ -46,36 +46,22 @@ class TerminalNode(BaseNode):
             context.shared_memory['human_feedback'] = f"System Sandbox blocked your command: {command}. Do NOT use forbidden commands."
             return Edge(target_node_id="reasoner_node", reason="Sandbox violation")
 
-        # 2. التنفيذ الفعلي (Subprocess Execution)
+        # 2. التنفيذ الفعلي (Subprocess Execution) — عبر الحارس المركزي (shell=False)
         print(" ⚙️ [Terminal] Executing command in isolated shell...")
-        try:
-            result = subprocess.run(
-                command, 
-                shell=True, 
-                cwd=context.workspace_dir, 
-                capture_output=True, 
-                text=True, 
-                timeout=30 # مهلة زمنية لمنع الأوامر المعلقة (Infinite Loops)
-            )
+        returncode, stdout, stderr = default_guard.run_agent_command(
+            command, timeout=30
+        )
 
-            # 3. توجيه المسار بناءً على النتيجة (التعافي الذاتي)
-            if result.returncode == 0:
-                print(f" ✅ [Terminal] Success! Output:\n{result.stdout.strip()[:200]}...")
-                context.shared_memory['terminal_output'] = result.stdout
-                # إذا نجح الاختبار، ننهي المسار بسلام
-                return Edge(target_node_id="end", reason="Tests/Command passed successfully")
-            else:
-                print(f" ❌ [Terminal] Command Failed. Output:\n{result.stderr.strip()[:200]}...")
-                # تغذية العقل بالخطأ ليصلحه
-                context.shared_memory['execution_error'] = f"Command `{command}` failed with output:\n{result.stderr}"
-                print(" ⏪ [Terminal] Routing back to Reasoner to fix the code...")
-                return Edge(target_node_id="reasoner_node", reason="Command failed, requesting self-healing")
-
-        except subprocess.TimeoutExpired:
-            print(" ⏰ [Terminal] Command execution timed out (30s).")
-            context.shared_memory['execution_error'] = f"Command `{command}` timed out."
-            return Edge(target_node_id="reasoner_node", reason="Timeout, requesting self-healing")
-        except Exception as e:
-            print(f" ⚠️ [Terminal] Unknown Shell Error: {e}")
-            context.error_flags = True
-            return Edge(target_node_id="end", reason="Fatal shell error")
+        # 3. توجيه المسار بناءً على النتيجة (التعافي الذاتي)
+        if returncode == 0:
+            print(f" ✅ [Terminal] Success! Output:\n{stdout.strip()[:200]}...")
+            context.shared_memory['terminal_output'] = stdout
+            # إذا نجح الاختبار، ننهي المسار بسلام
+            return Edge(target_node_id="end", reason="Tests/Command passed successfully")
+        else:
+            err = stderr or "Security Violation: command blocked."
+            print(f" ❌ [Terminal] Command Failed. Output:\n{err.strip()[:200]}...")
+            # تغذية العقل بالخطأ ليصلحه
+            context.shared_memory['execution_error'] = f"Command `{command}` failed with output:\n{err}"
+            print(" ⏪ [Terminal] Routing back to Reasoner to fix the code...")
+            return Edge(target_node_id="reasoner_node", reason="Command failed, requesting self-healing")

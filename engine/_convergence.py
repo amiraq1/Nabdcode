@@ -217,7 +217,7 @@ class _ConvergenceMixin:
         loop (or terminates with reason ``goal_not_met``) if its criteria are
         not proven against live evidence.
         """
-        from engine.loop import _has_active_goal, _prompt_requires_investigation
+        from engine._loop_helpers import _has_active_goal, _prompt_requires_investigation
 
         ctx = self._ctx
         assert ctx is not None

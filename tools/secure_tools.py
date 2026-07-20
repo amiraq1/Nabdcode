@@ -15,12 +15,12 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
-import subprocess
 import time
 from typing import Any, Dict, Final, List, Optional, Type
 
 from tools.base import BaseTool
 from tools.models import ToolResult
+from core.kernel.subprocess_guard import default_guard
 
 # ── Pydantic schema support ──────────────────────────────────────────────
 try:
@@ -306,31 +306,24 @@ class SecureGitInspector(SecureTool):
         cmd = ALLOWED_GIT_COMMANDS[action]
 
         try:
-            result = subprocess.run(
+            returncode, stdout, stderr = default_guard.run_infra(
                 cmd,
                 cwd=str(self.repo_path),
-                shell=False,
-                capture_output=True,
-                text=True,
                 timeout=self.timeout,
             )
             duration = time.time() - start_time
             logger.info(
-                f"[{self.name}] Execution finished (exit code {result.returncode}, {duration:.3f}s)"
+                f"[{self.name}] Execution finished (exit code {returncode}, {duration:.3f}s)"
             )
 
-            out_sanitized = _sanitize(result.stdout)
-            err_sanitized = _sanitize(result.stderr)
+            out_sanitized = _sanitize(stdout)
+            err_sanitized = _sanitize(stderr)
 
-            if result.returncode != 0:
+            if returncode != 0:
                 return f"Error executing git {action}: {err_sanitized or 'Unknown error'}"
 
             return out_sanitized if out_sanitized.strip() else f"Git {action} returned empty output."
 
-        except subprocess.TimeoutExpired:
-            duration = time.time() - start_time
-            logger.warning(f"[{self.name}] Execution timed out ({duration:.3f}s)")
-            return f"Error: Git {action} timed out."
         except FileNotFoundError:
             return "Error: git executable not found."
         except (PermissionError, OSError) as exc:
@@ -387,29 +380,22 @@ class SecureTestRunner(SecureTool):
         cmd = ["python3", "-m", "unittest", "discover", "-s", target_path, "--"]
 
         try:
-            result = subprocess.run(
+            returncode, stdout, stderr = default_guard.run_infra(
                 cmd,
                 cwd=str(self.repo_path),
-                shell=False,
-                capture_output=True,
-                text=True,
                 timeout=self.timeout,
             )
             duration = time.time() - start_time
             logger.info(
-                f"[{self.name}] Execution finished (exit code {result.returncode}, {duration:.3f}s)"
+                f"[{self.name}] Execution finished (exit code {returncode}, {duration:.3f}s)"
             )
 
-            out_sanitized = _sanitize(result.stdout)
-            err_sanitized = _sanitize(result.stderr)
+            out_sanitized = _sanitize(stdout)
+            err_sanitized = _sanitize(stderr)
 
             combined = f"{out_sanitized}\n{err_sanitized}".strip()
             return combined if combined else "Tests executed, but no output was returned."
 
-        except subprocess.TimeoutExpired:
-            duration = time.time() - start_time
-            logger.warning(f"[{self.name}] Execution timed out ({duration:.3f}s)")
-            return "Error: Test runner timed out (Possible infinite loop detected in tests)."
         except FileNotFoundError:
             return "Error: python3 executable not found."
         except (PermissionError, OSError) as exc:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import time
 from enum import Enum
 from pathlib import Path
@@ -11,6 +10,7 @@ from typing import Final
 from tools.base import BaseTool
 from tools.models import ToolResult
 from core.sanitize import sanitize
+from core.kernel.subprocess_guard import default_guard
 
 
 class GraphAction(str, Enum):
@@ -71,21 +71,19 @@ class GraphIntelTool(BaseTool):
                 ),
             )
         try:
-            proc = subprocess.run(
+            proc = default_guard.run_infra(
                 [exe, *args],
                 cwd=str(self.workspace),
-                capture_output=True,
-                text=True,
                 timeout=timeout,
             )
-        except subprocess.TimeoutExpired:
-            return ToolResult(success=False, stderr=f"graphify timed out after {timeout}s.")
+        except FileNotFoundError:
+            return ToolResult(success=False, stderr=f"{exe} not found on PATH.")
         except Exception as exc:
             return ToolResult(success=False, stderr=f"{type(exc).__name__}: {exc}")
 
-        out = (proc.stdout or "").strip()
-        err = (proc.stderr or "").strip()
-        ok = proc.returncode == 0
+        out = (proc[1] or "").strip()
+        err = (proc[2] or "").strip()
+        ok = proc[0] == 0
         text = out if ok else (err or out or "graphify failed with no output.")
         if len(text) > MAX_OUTPUT_CHARS:
             text = text[:MAX_OUTPUT_CHARS] + "\n\n... [TRUNCATED graph output]"

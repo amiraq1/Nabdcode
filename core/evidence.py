@@ -250,6 +250,106 @@ class StructuralVerifier:
         return ids
 
     @classmethod
+    def _select_records(cls, claim: str,
+                        records: Dict[str, EvidenceRecord],
+                        max_records: int) -> Dict[str, EvidenceRecord]:
+        """Apply the E-id vs last-N successful record selection policy."""
+        explicit_ids = cls._extract_referenced_evidence_ids(claim)
+        if explicit_ids:
+            selected: Dict[str, EvidenceRecord] = {}
+            for eid in explicit_ids:
+                rec = records.get(eid)
+                if rec:
+                    selected[eid] = rec
+            if not selected:
+                return VerificationResult(
+                    ok=False,
+                    findings=[
+                        f"Claim references evidence IDs {sorted(explicit_ids)}"
+                        f" but none exist in the evidence log"
+                    ],
+                    level="L1",
+                    scores={},
+                )
+            return selected
+
+        # Last N successful records
+        def _numeric_eid(r: EvidenceRecord) -> int:
+            m = re.search(r"(\d+)", r.evidence_id)
+            return int(m.group(1)) if m else -1
+
+        successful = sorted(
+            [r for r in records.values() if r.success],
+            key=_numeric_eid,
+            reverse=True,
+        )
+        return {r.evidence_id: r for r in successful[:max_records]}
+
+    @classmethod
+    def _build_corpus(cls, selected: Dict[str, EvidenceRecord]) -> tuple[str, bool, list[str]]:
+        """Build the evidence corpus + empty-output findings.
+
+        Returns ``(evidence_corpus, has_output, empty_findings)``.
+        """
+        evidence_parts: list[str] = []
+        empty_success: list[str] = []
+        for rec in selected.values():
+            if rec.success:
+                text = (rec.output_snippet + " " + rec.command_or_path).lower()
+                evidence_parts.append(text)
+                for subj in rec.covered_subjects:
+                    evidence_parts.append(subj)
+                if not rec.output_snippet.strip():
+                    empty_success.append(rec.evidence_id)
+        corpus = " ".join(evidence_parts)
+        has_output = any(r.output_snippet.strip() for r in selected.values() if r.success)
+        findings = (
+            [f"Successful evidence {'/'.join(empty_success)} has empty output content"]
+            if empty_success else []
+        )
+        return corpus, has_output, findings
+
+    @classmethod
+    def _empty_corpus_result(cls, is_final_claim: bool, claim: str,
+                             findings: list[str]) -> Optional[VerificationResult]:
+        """Early-exit when the evidence corpus is empty.
+
+        Returns a VerificationResult when an early termination applies, else None.
+        """
+        if is_final_claim and any(
+            k in claim.lower()
+            for k in ("found", "there are", "total", "i counted", "enumeration result")
+        ):
+            return VerificationResult(
+                ok=False,
+                findings=findings + ["Evidence output is empty for claim requiring output enumeration"],
+                level="L1",
+                scores={"matches": 0, "total": 1, "overlap": 0.0},
+            )
+        # Non-final or non-enumeration: skip with a soft signal.
+        return VerificationResult(
+            ok=True,
+            findings=findings + ["needs_more_evidence"],
+            level="L1",
+            scores={"matches": 0, "total": 1, "overlap": 0.0},
+        )
+
+    @classmethod
+    def _handle_count_query(cls, claim_low: str, evidence_low: str) -> Optional[VerificationResult]:
+        """Fast-path for count queries whose evidence contains a pattern marker."""
+        is_count_query = any(k in claim_low for k in ("how many", "count how many", "number of"))
+        if not is_count_query:
+            return None
+        if any(k in evidence_low for k in ("re.compile", "_pattern", "pattern")):
+            return VerificationResult(
+                ok=True,
+                findings=["count_query_verified"],
+                level="L1",
+                scores={"matches": 1, "total": 1, "overlap": 1.0},
+            )
+        return None
+
+    @classmethod
     def verify(cls, claim: str,
                records: Dict[str, EvidenceRecord],
                max_records: int = 10,
@@ -270,87 +370,22 @@ class StructuralVerifier:
                 scores={},
             )
 
-        # E-id selection policy
-        explicit_ids = cls._extract_referenced_evidence_ids(claim)
-        if explicit_ids:
-            selected: Dict[str, EvidenceRecord] = {}
-            for eid in explicit_ids:
-                rec = records.get(eid)
-                if rec:
-                    selected[eid] = rec
-            if not selected:
-                return VerificationResult(
-                    ok=False,
-                    findings=[
-                        f"Claim references evidence IDs {sorted(explicit_ids)}"
-                        f" but none exist in the evidence log"
-                    ],
-                    level="L1",
-                    scores={},
-                )
-        else:
-            # Last N successful records
-            def _numeric_eid(r: EvidenceRecord) -> int:
-                m = re.search(r"(\d+)", r.evidence_id)
-                return int(m.group(1)) if m else -1
+        selected = cls._select_records(claim, records, max_records)
+        # _select_records returns a VerificationResult only on explicit-ID miss.
+        if not isinstance(selected, dict):
+            return selected  # type: ignore[return-value]
 
-            successful = sorted(
-                [r for r in records.values() if r.success],
-                key=_numeric_eid,
-                reverse=True,
-            )
-            selected = {r.evidence_id: r for r in successful[:max_records]}
-
-        # Build evidence corpus from selected records only
-        evidence_parts: list[str] = []
-        empty_success: list[str] = []
-        for rec in selected.values():
-            if rec.success:
-                text = (rec.output_snippet + " " + rec.command_or_path).lower()
-                evidence_parts.append(text)
-                for subj in rec.covered_subjects:
-                    evidence_parts.append(subj)
-                if not rec.output_snippet.strip():
-                    empty_success.append(rec.evidence_id)
-
-        evidence_corpus = " ".join(evidence_parts)
-        has_output = any(r.output_snippet.strip() for r in selected.values() if r.success)
-
-        # Report empty-output findings
-        findings: list[str] = []
-        if empty_success:
-            findings.append(
-                f"Successful evidence {'/'.join(empty_success)} has empty output content"
-            )
+        evidence_corpus, has_output, findings = cls._build_corpus(selected)
 
         if not has_output or not evidence_corpus.strip() or evidence_corpus.strip() in ("", "0 lines", "[]"):
-            if not is_final_claim:
-                return VerificationResult(
-                    ok=True,
-                    findings=findings + ["needs_more_evidence"],
-                    level="L1",
-                    scores={"matches": 0, "total": 1, "overlap": 0.0},
-                )
-            if any(k in claim.lower() for k in ("found", "there are", "total", "i counted", "enumeration result")):
-                return VerificationResult(
-                    ok=False,
-                    findings=findings + ["Evidence output is empty for claim requiring output enumeration"],
-                    level="L1",
-                    scores={"matches": 0, "total": 1, "overlap": 0.0},
-                )
+            return cls._empty_corpus_result(is_final_claim, claim, findings)
 
         claim_low = claim.lower()
-        is_count_query = any(k in claim_low for k in ("how many", "count how many", "number of"))
         evidence_low = evidence_corpus.lower()
 
-        if is_count_query:
-            if any(k in evidence_low for k in ("re.compile", "_pattern", "pattern")):
-                return VerificationResult(
-                    ok=True,
-                    findings=["count_query_verified"],
-                    level="L1",
-                    scores={"matches": 1, "total": 1, "overlap": 1.0},
-                )
+        count_result = cls._handle_count_query(claim_low, evidence_low)
+        if count_result is not None:
+            return count_result
 
         claim_tokens = _extract_technical_tokens(claim)
 

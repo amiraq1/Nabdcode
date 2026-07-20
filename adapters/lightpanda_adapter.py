@@ -39,10 +39,8 @@ class LightpandaAdapter:
             env["LIGHTPANDA_DISABLE_TELEMETRY"] = "1"
             
             # تشغيل Lightpanda وعزلها في Session Group مخصصة لمنع تسريب العمليات
-            self.process = subprocess.Popen(
+            self.process = default_guard.spawn_infra(
                 ["lightpanda", "mcp", "--port", str(self.port)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
                 env=env,
                 preexec_fn=os.setsid if hasattr(os, "setsid") else None
             )

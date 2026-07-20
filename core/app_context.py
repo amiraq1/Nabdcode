@@ -59,9 +59,18 @@ class AppContext:
 
         # Register all tools
         _security_engine = _KernelSecurityEngine()
-        for tool_cls in [ShellTool, FileSystemTool, WebSearchTool,
+        # Phase 1.1: GraphifyTool needs the graphify CLI + a built graph
+        # (graphify-out/graph.json). When absent, registering it lets the model
+        # waste exploration steps on "command not found", starving the >=3-read
+        # convergence gate. Register it only when the graph actually exists —
+        # self-heals once graphify is fixed and the graph is built.
+        from pathlib import Path as _Path
+        _tool_classes = [ShellTool, FileSystemTool, WebSearchTool,
                          SearchMemoryTool, TodoWriteTool, TermuxMonitorTool,
-                         RagSearchTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool, GraphifyTool]:
+                         RagSearchTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool]
+        if _Path(config.root_dir, "graphify-out", "graph.json").exists():
+            _tool_classes.append(GraphifyTool)
+        for tool_cls in _tool_classes:
             tool = (
                 tool_cls(workspace=config.root_dir)
                 if tool_cls in (FileSystemTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool, GraphifyTool)

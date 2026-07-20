@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import ast
 import os
-import subprocess
 from pathlib import Path
 from typing import Any, Final, Optional, Tuple, Type
 
 from tools.base import BaseModel, BaseTool, Field
 from tools.models import ToolResult
+from core.kernel.subprocess_guard import default_guard
 
 
 class PythonREPLArgs(BaseModel):
@@ -114,41 +114,40 @@ class PythonREPLTool(BaseTool):
             )
 
         try:
-            result = subprocess.run(
+            result = default_guard.run_infra(
                 ["python3", str(script_path)],
+                timeout=self.timeout,
                 cwd=str(self.sandbox_dir),
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,  # Circuit breaker
             )
-            output = result.stdout + result.stderr
-            if result.returncode == 0:
+            output = result[1] + result[2]
+            if result[0] == 0:
                 final_out = output if output.strip() else "Code executed successfully with no output. (Did you forget to print()?)"
                 return ToolResult(
                     success=True,
                     stdout=final_out,
-                    stderr=result.stderr,
+                    stderr=result[2],
                     returncode=0,
                     metadata={"tool": self.name, "sandbox": str(self.sandbox_dir)},
                 )
             else:
+                # Guard catches TimeoutExpired internally and reports it in stderr.
+                if "timed out" in result[2]:
+                    return ToolResult(
+                        success=False,
+                        stderr=f"Execution Error: Script timed out after {self.timeout} seconds. Possible infinite loop.",
+                        returncode=-1,
+                        status="error",
+                        metadata={"tool": self.name, "sandbox": str(self.sandbox_dir), "timeout": self.timeout},
+                    )
                 return ToolResult(
                     success=False,
-                    stdout=result.stdout,
-                    stderr=result.stderr or "Execution Error",
-                    returncode=result.returncode,
+                    stdout=result[1],
+                    stderr=result[2] or "Execution Error",
+                    returncode=result[0],
                     status="error",
                     metadata={"tool": self.name, "sandbox": str(self.sandbox_dir)},
                 )
 
-        except subprocess.TimeoutExpired:
-            return ToolResult(
-                success=False,
-                stderr=f"Execution Error: Script timed out after {self.timeout} seconds. Possible infinite loop.",
-                returncode=-1,
-                status="error",
-                metadata={"tool": self.name, "sandbox": str(self.sandbox_dir), "timeout": self.timeout},
-            )
         except Exception as exc:
             return ToolResult(
                 success=False,

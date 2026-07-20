@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
 import time
 import uuid
 from typing import Any, Dict, Optional, Type
@@ -12,6 +11,7 @@ from tools.base import BaseTool, BaseModel, Field
 from tools.models import ToolResult
 from core.evidence import EvidenceRecord
 from tools.secure_tools import SecureGitInspector  # moved to top (Phase 3 DI)
+from core.kernel.subprocess_guard import default_guard
 
 
 GIT_ARG_VALIDATOR = re.compile(r'^[a-zA-Z0-9_./-]+$')
@@ -47,17 +47,13 @@ def push_and_verify_evidence(
 ) -> Dict[str, EvidenceRecord]:
     """Execute git push and automatically record deterministic git diff verification evidence."""
     # 1. Execute real git push
-    push_res = subprocess.run(
-        ["git", "push", remote, branch],
-        capture_output=True,
-        text=True,
-    )
-    push_raw = (push_res.stdout or "") + (push_res.stderr or "")
+    push_res = default_guard.run_git(["git", "push", remote, branch], timeout=30)
+    push_raw = (push_res[1] or "") + (push_res[2] or "")
     push_rec = EvidenceRecord(
         tool_name="git_push",
         input=f"{remote} {branch}",
         raw_output=push_raw,
-        exit_code=push_res.returncode,
+        exit_code=push_res[0],
         timestamp=time.time(),
         call_id=str(uuid.uuid4()),
     )
@@ -65,17 +61,13 @@ def push_and_verify_evidence(
 
     # 2. Automatically execute git diff HEAD origin/main without manual intervention
     diff_target = f"{remote}/{branch}"
-    diff_res = subprocess.run(
-        ["git", "diff", "HEAD", diff_target],
-        capture_output=True,
-        text=True,
-    )
-    diff_raw = (diff_res.stdout or "") + (diff_res.stderr or "")
+    diff_res = default_guard.run_git(["git", "diff", "HEAD", diff_target], timeout=30)
+    diff_raw = (diff_res[1] or "") + (diff_res[2] or "")
     diff_rec = EvidenceRecord(
         tool_name="git_diff",
         input=f"HEAD {diff_target}",
         raw_output=diff_raw,
-        exit_code=diff_res.returncode,
+        exit_code=diff_res[0],
         timestamp=time.time(),
         call_id=str(uuid.uuid4()),
     )

@@ -57,3 +57,7 @@ workspace/config.json
 *.dbgbak
 .test_scratch/
 graphify-out/
+# root-level scratch (untracked, kept on disk)
+/live_surgery.py
+/run_dag_test.py
+/test_dispatcher.py

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import shlex
-import subprocess
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.security import split_pipe_segments, validate
 from core.sanitize import sanitize
+from core.kernel.subprocess_guard import default_guard
 
 
 # ---------------------------------------------------------------------------
@@ -138,15 +138,9 @@ def _handle_piped(segments: List[List[str]], timeout: int) -> Tuple[int, str, st
 # ---------------------------------------------------------------------------
 
 def _handle_simple(args: List[str], timeout: int) -> Tuple[int, str, str]:
-    """Run a single command via ``subprocess.run``."""
-    result = subprocess.run(
-        args,
-        shell=False,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    return result.returncode, sanitize(result.stdout or ""), sanitize(result.stderr or "")
+    """Run a single command via the centralized SubprocessGuard (shell=False)."""
+    code, out, err = default_guard.run_agent_command(" ".join(args), timeout=timeout)
+    return code, sanitize(out), sanitize(err)
 
 
 # ---------------------------------------------------------------------------

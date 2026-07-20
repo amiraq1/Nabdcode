@@ -110,10 +110,9 @@ class TestSecureGitInspector(unittest.TestCase):
         result = self.inspector.forward("status")
         self.assertFalse(result.startswith("Security Violation"))
 
-    @patch("subprocess.run")
+    @patch("core.kernel.subprocess_guard.default_guard.run_infra")
     def test_timeout_handling(self, mock_run):
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["git"], timeout=10)
+        mock_run.return_value = (-1, "", "execution timed out after 10s")
         result = self.inspector.forward("status")
         self.assertIn("timed out", result)
 
@@ -134,10 +133,9 @@ class TestSecureTestRunner(unittest.TestCase):
         result = self.runner.forward("unit")
         self.assertFalse(result.startswith("Security Violation"))
 
-    @patch("subprocess.run")
+    @patch("core.kernel.subprocess_guard.default_guard.run_infra")
     def test_timeout_handling(self, mock_run):
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["python3"], timeout=30)
+        mock_run.return_value = (-1, "", "execution timed out after 30s")
         result = self.runner.forward("unit")
         self.assertIn("timed out", result)
 

@@ -8,9 +8,10 @@ Translates agent requests into local 'graphify' CLI invocations with timeout pro
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 from typing import Final, Optional
+
+from core.kernel.subprocess_guard import default_guard
 
 try:
     from pydantic import BaseModel, Field
@@ -78,26 +79,22 @@ class GraphifyTool(BaseTool):
             return "Error: Invalid action. Supported actions are 'query', 'path', 'explain', 'update'."
 
         try:
-            result = subprocess.run(
+            result = default_guard.run_infra(
                 cmd,
                 cwd=self.workspace_dir,
-                capture_output=True,
-                text=True,
                 timeout=30,
             )
 
-            output = result.stdout.strip()
-            error = result.stderr.strip()
+            output = result[1].strip()
+            error = result[2].strip()
 
-            if result.returncode != 0:
-                return f"Graphify CLI Error [{result.returncode}]: {error or output}"
+            if result[0] != 0:
+                return f"Graphify CLI Error [{result[0]}]: {error or output}"
 
             return output if output else f"Success: Action '{action}' completed with no output."
 
         except FileNotFoundError:
             return "Execution Error: 'graphify' command not found. Is it installed and in your system PATH?"
-        except subprocess.TimeoutExpired:
-            return "Execution Error: Graphify command timed out after 30 seconds."
         except Exception as e:
             return f"Unexpected Error: {str(e)}"
 

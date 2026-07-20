@@ -1010,7 +1010,10 @@ class TerminalVisualizer:
         """Handle final answer or error from ExecutionLoop with Panel styling and resilience against VerifyError."""
         try:
             self.stop()
-            raw_response = data.get("response") if isinstance(data, dict) else data
+            raw_response = data.get(
+            "output",
+            data.get("response")
+        ) if isinstance(data, dict) else data
 
             # CRITICAL SAFEGUARD: Handle non-string payloads
             if raw_response is None:

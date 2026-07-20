@@ -1,8 +1,8 @@
 import os
 import shutil
-import subprocess
 
 from rich.console import Console
+from core.kernel.subprocess_guard import default_guard
 
 # Force .env loading before reading OPENROUTER_MODEL for the banner.
 try:
@@ -15,9 +15,9 @@ console = Console()
 
 def get_git_repository_name():
     try:
-        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=1)
-        if result.returncode == 0:
-            return os.path.basename(result.stdout.strip())
+        result = default_guard.run_infra(["git", "rev-parse", "--show-toplevel"], timeout=1)
+        if result[0] == 0:
+            return os.path.basename(result[1].strip())
     except Exception:
         pass
     return "Local Workspace"

@@ -4,7 +4,7 @@ from typing import Any, Optional, Type
 
 from tools.base import BaseTool, BaseModel
 from tools.models import ToolResult
-from core.todo import TodoManager, TodoStatus
+from core.todo import TodoManager, TodoStatus, _coerce_item_text
 
 
 class TodoWriteArgs(BaseModel):
@@ -57,6 +57,7 @@ class TodoWriteTool(BaseTool):
                         stderr="`items` (list[str]) is required for action=plan.",
                         returncode=-1,
                     )
+                items = [_coerce_item_text(it) for it in items]
                 todos = self._manager.set_plan(items)
                 return ToolResult(
                     success=True,
