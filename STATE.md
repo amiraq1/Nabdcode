@@ -1,6 +1,40 @@
 # Task State Log
 
 ## Completed
+- **Completed** | `write-a-function-that-returns-42-71840` | 2026-07-20 13:51:30 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-11830` | 2026-07-20 13:50:51 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-32571` | 2026-07-20 13:35:13 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-62016` | 2026-07-20 13:33:15 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-57636` | 2026-07-20 13:29:45 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-37664` | 2026-07-20 13:10:45 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-38410` | 2026-07-20 13:07:54 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-35892` | 2026-07-20 13:06:56 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-1968` | 2026-07-19 22:15:27 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-70933` | 2026-07-19 22:15:10 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-72925` | 2026-07-19 21:44:43 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-35904` | 2026-07-19 21:44:18 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-95094` | 2026-07-19 21:43:38 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-42340` | 2026-07-19 21:37:45 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-2389` | 2026-07-19 21:29:43 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-88906` | 2026-07-19 21:26:30 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-32308` | 2026-07-19 21:25:33 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-1860` | 2026-07-19 21:20:55 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-30058` | 2026-07-19 21:18:08 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-93187` | 2026-07-19 21:15:56 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-49143` | 2026-07-19 21:12:46 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-58412` | 2026-07-19 21:08:09 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-63415` | 2026-07-19 21:05:29 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-24660` | 2026-07-19 20:49:13 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-27490` | 2026-07-19 20:46:20 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-78586` | 2026-07-19 20:39:42 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-35738` | 2026-07-19 20:39:04 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-72321` | 2026-07-19 20:38:32 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-18565` | 2026-07-19 20:30:26 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-7952` | 2026-07-19 20:25:43 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-59352` | 2026-07-19 20:17:48 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-32200` | 2026-07-19 20:06:06 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-93030` | 2026-07-19 19:48:24 — attempts=1
+- **Completed** | `write-a-function-that-returns-42-17025` | 2026-07-19 19:47:38 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-1971` | 2026-07-19 06:47:27 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-18373` | 2026-07-19 06:32:14 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-60697` | 2026-07-19 06:31:18 — attempts=1
@@ -49,7 +83,6 @@
 - **Completed** | `write-a-function-that-returns-42-2156` | 2026-07-17 18:36:01 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-30891` | 2026-07-17 18:09:03 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-98700` | 2026-07-17 09:39:21 — attempts=1
-- **Completed** | `write-a-function-that-returns-42-93030` | 2026-07-17 08:50:38 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-10992` | 2026-07-17 08:49:40 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-40254` | 2026-07-17 08:25:27 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-98111` | 2026-07-17 08:18:34 — attempts=1
@@ -172,3 +205,48 @@ Live re-verification (this update):
 ## Escalated to Human
 
 ## In Progress
+
+## REPL verifier gap (logged 2026-07-20, Stage-6 recovery session)
+- **FINDING**: The Stage-6 independent verifier gate (`verifier_router` →
+  `_run_independent_checker`, `engine/_convergence.py`) is LIVE only on the
+  `main.py` CLI `ExecutionLoop` path (`main.py:499` / `:624`). The actual REPL
+  the user runs (`ui/repl_termux.py:1072`) calls `initialize_secure_agent()`,
+  which returns a smolagents `CodeAgent` Manager — NOT an `ExecutionLoop`. So
+  the REPL production path NEVER invokes `verifier_router`; its only "verifier"
+  is the separate `VerifierAgent` in `core/multi_agent_orchestrator.py`, which
+  is reachable only via `scripts/finalize.py` CLI + tests (NOT the REPL run()).
+- **CONSEQUENCE**: Phase 6 is proven wired + live on `main.py`, but NOT on the
+  REPL path. Declaring "Phase 6 closed" is only true for the CLI entry point.
+- **NOT FIXED** (out of scope, governor rule: one change per live gate; no new
+  feature/refactor this session). Two non-urgent options for a later phase:
+  (a) route the REPL through `ExecutionLoop` so it shares the verifier gate, or
+  (b) document this as a known constraint. No code changed.
+- **EVIDENCE**: grep shows `main.py` / `repl_termux.py` import nothing from
+  `core.multi_agent_orchestrator`; `repl_termux.py:1070-1072` imports only
+  `initialize_secure_agent` and passes its `CodeAgent` to `run_repl`. Live probe
+  (`scripts/probe_stage6_gate.py`) confirms the gate works on `ExecutionLoop`;
+  a REPL `agent.run()` with the same task produced `VERIFIER_CALLS=0` (gate
+  absent). Details in `docs/stage6_probe_results.md`.
+
+## Out of Scope — Logged for Later Phase (no fix applied)
+- **LOGGED 2026-07-20 (Task 4, Stage-6 recovery session)** — READS-GATE PENALIZES
+  LEGITIMATE SINGLE-FILE TASKS. The convergence `verify_fresh` gate in
+  `engine/_convergence.py` `_emit_final()` requires `real_reads >= 3`
+  (`_real_reads()`) for any investigation-style prompt before it will emit a
+  final_answer. A legitimate single-file task (e.g. "read pyproject.toml and give
+  me the project name", seen LIVE on a one-file prompt) is therefore BLOCKED and
+  eventually emitted as `[Convergence failed — inspected N file(s), minimum
+  required: 3]`. This is a false-negative: a well-grounded 1-read answer is
+  rejected by an absolute threshold that ignores task scope.
+  - **Why not fixed now**: changing the gate logic intersects the convergence
+    decision and would pollute the Stage-6 verifier gate (governor rule: one
+    change per live gate; do not mix verifier with refactor). Deferred.
+  - **Proposed later-phase direction (NOT implemented)**: either exempt small/
+    single-file tasks from the >=3 threshold, OR switch the failure mode from
+    hard "Convergence failed" to a `synthesize-from-evidence` fallback (the
+    existing `_synthesize_from_evidence` already exists and is used elsewhere) so
+    a legitimate answer is never silently killed.
+  - **Evidence**: `live_leak_check.py` / one-file `loop.run()` paths; the gate
+    logic at `engine/_convergence.py` lines ~ `_emit_final` (`real_reads = self._real_reads()`,
+    `if real_reads < 3 ... [Convergence failed ...]`). Confirmed by code read this
+    session; not reproduced via new test (out of scope).
