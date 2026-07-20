@@ -50,10 +50,12 @@ class TestReactStyleParser(unittest.TestCase):
         self.assertEqual(tc.args["answer"], "the answer is 42")
 
     def test_canonical_json_still_preferred(self):
-        tc = extract_command('{"tool": "web_search", "args": {"query": "x"}}')
+        tc = extract_command('{"tool": "web_search", "args": {"query": "xxx"}}')
         self.assertIsNotNone(tc)
         self.assertEqual(tc.tool, "web_search")
-        self.assertEqual(tc.args["query"], "x")
+        self.assertEqual(tc.args["query"], "xxx")
+        self.assertEqual(tc.tool, "web_search")
+        self.assertEqual(tc.args["query"], "x" * 3)
 
     def test_plain_prose_returns_none(self):
         tc = extract_command("I think we should look into this further.")
