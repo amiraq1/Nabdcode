@@ -1067,6 +1067,12 @@ class TerminalVisualizer:
 
 
 if __name__ == "__main__":
+    if "--raw-repl" not in sys.argv:
+        print("❌ [SECURITY REJECTION] Direct execution of this module is disabled.")
+        print("👉 Please run the system via 'nabdcode' or use '--raw-repl' for maintenance mode.")
+        sys.exit(1)
+
+    print("⚠️  [WARNING] Entering Raw Debug REPL. ExecutionLoop guards are BYPASSED.")
     from core.agent_manager import initialize_secure_agent
 
     asyncio.run(run_repl(agent=initialize_secure_agent()))

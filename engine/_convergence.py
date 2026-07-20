@@ -14,6 +14,7 @@ from core.kernel.events import bus
 from core.utils import safe_strip
 
 from engine._loop_types import _LoopSignal, _LoopCtx
+from engine._loop_helpers import _resolve_default_verifier
 from engine.goal_verifier import evaluate_goal_exit, MAX_GOAL_RETRIES
 
 if TYPE_CHECKING:
@@ -46,12 +47,6 @@ def _parse_verifier_verdict(raw: str) -> bool | None:
     if v == "fail":
         return False
     return None
-
-
-def _resolve_default_verifier() -> Callable[[str, str, str, Any], str]:
-    """Lazily resolve the independent verifier LLM (DI seam, avoids import cycle)."""
-    from llm_router import run_verifier_check
-    return run_verifier_check
 
 
 class _ConvergenceMixin:

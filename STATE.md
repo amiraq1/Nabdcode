@@ -206,27 +206,24 @@ Live re-verification (this update):
 
 ## In Progress
 
-## REPL verifier gap (logged 2026-07-20, Stage-6 recovery session)
-- **FINDING**: The Stage-6 independent verifier gate (`verifier_router` →
-  `_run_independent_checker`, `engine/_convergence.py`) is LIVE only on the
-  `main.py` CLI `ExecutionLoop` path (`main.py:499` / `:624`). The actual REPL
-  the user runs (`ui/repl_termux.py:1072`) calls `initialize_secure_agent()`,
-  which returns a smolagents `CodeAgent` Manager — NOT an `ExecutionLoop`. So
-  the REPL production path NEVER invokes `verifier_router`; its only "verifier"
-  is the separate `VerifierAgent` in `core/multi_agent_orchestrator.py`, which
-  is reachable only via `scripts/finalize.py` CLI + tests (NOT the REPL run()).
-- **CONSEQUENCE**: Phase 6 is proven wired + live on `main.py`, but NOT on the
-  REPL path. Declaring "Phase 6 closed" is only true for the CLI entry point.
-- **NOT FIXED** (out of scope, governor rule: one change per live gate; no new
-  feature/refactor this session). Two non-urgent options for a later phase:
-  (a) route the REPL through `ExecutionLoop` so it shares the verifier gate, or
-  (b) document this as a known constraint. No code changed.
-- **EVIDENCE**: grep shows `main.py` / `repl_termux.py` import nothing from
-  `core.multi_agent_orchestrator`; `repl_termux.py:1070-1072` imports only
-  `initialize_secure_agent` and passes its `CodeAgent` to `run_repl`. Live probe
-  (`scripts/probe_stage6_gate.py`) confirms the gate works on `ExecutionLoop`;
-  a REPL `agent.run()` with the same task produced `VERIFIER_CALLS=0` (gate
-  absent). Details in `docs/stage6_probe_results.md`.
+## REPL verifier gap (RESOLVED 2026-07-20 — Option B: Debug Fallback)
+- ~~FINDING: The Stage-6 verifier gate was only LIVE on the `main.py` CLI
+  `ExecutionLoop` path; `ui/repl_termux.py` standalone entry (`__main__`) called
+  `initialize_secure_agent()` (smolagents CodeAgent, no ExecutionLoop) bypassing
+  the gate.~~
+- **CORRECTION (verified from source)**: The production path `bin/nabdcode` →
+  `main.py` builds `ExecutionLoop` (main.py:499/624) and routes it through
+  `TerminalVisualizer` — so the verifier gate IS live in production. The gap was
+  ONLY the standalone `__main__` of `ui/repl_termux.py` (line ~1072), which
+  bypassed `main.py` and used `CodeAgent` directly.
+- **FIX (Option B applied)**: `ui/repl_termux.py` `__main__` now rejects direct
+  execution unless `--raw-repl` is passed (SECURITY REJECTION + maintenance-mode
+  warning). Daily use must go through `nabdcode`/`main.py` → `ExecutionLoop`.
+  The CodeAgent path is preserved as an isolated debug door only.
+- *(Fixed: Secured standalone entry point behind --raw-repl debug flag. Main
+  execution securely routed via ExecutionLoop.)*
+- Evidence: `python3 ui/repl_termux.py` → exit 1 (rejected); `--raw-repl` →
+  bypasses guard. See docs/stage6_probe_results.md.
 
 ## Out of Scope — Logged for Later Phase (no fix applied)
 - **LOGGED 2026-07-20 (Task 4, Stage-6 recovery session)** — READS-GATE PENALIZES
