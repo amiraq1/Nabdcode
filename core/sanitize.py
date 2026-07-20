@@ -83,6 +83,34 @@ def redact_secrets(text: str) -> str:
     )
 
 
+def _strip_illegal_control_chars(
+    text: str, *, preserve_newlines: bool, preserve_tabs: bool, keep_color: bool
+) -> str:
+    """Filter illegal Unicode control characters while preserving printable text.
+
+    A character is kept when it is a preserved newline/tab, a retained color
+    ESC (keep_color), or any non-Control-category Unicode point. Split out
+    from ``sanitize`` to keep that function's cyclomatic complexity low.
+    """
+    cleaned_chars: list[str] = []
+    for ch in text:
+        if ch == "\n":
+            if preserve_newlines:
+                cleaned_chars.append(ch)
+            continue
+        if ch == "\t":
+            if preserve_tabs:
+                cleaned_chars.append(ch)
+            continue
+        if ch == "\x1b" and keep_color:
+            cleaned_chars.append(ch)
+            continue
+        # C = Control/Format/Surrogate/Private/Unassigned categories.
+        if not unicodedata.category(ch).startswith("C"):
+            cleaned_chars.append(ch)
+    return "".join(cleaned_chars)
+
+
 def sanitize(
     text: str | bytes | None,
     *,
@@ -134,22 +162,12 @@ def sanitize(
 
     # 5. Strip illegal control characters while preserving printable Unicode
     if strip_control:
-        cleaned_chars: list[str] = []
-        for ch in text:
-            if ch == "\n":
-                if preserve_newlines:
-                    cleaned_chars.append(ch)
-            elif ch == "\t":
-                if preserve_tabs:
-                    cleaned_chars.append(ch)
-            elif ch == "\x1b" and keep_color:
-                cleaned_chars.append(ch)
-            else:
-                cat = unicodedata.category(ch)
-                # C = Other (Cc Control, Cf Format, Cs Surrogate, Co Private, Cn Unassigned)
-                if not cat.startswith("C"):
-                    cleaned_chars.append(ch)
-        text = "".join(cleaned_chars)
+        text = _strip_illegal_control_chars(
+            text,
+            preserve_newlines=preserve_newlines,
+            preserve_tabs=preserve_tabs,
+            keep_color=keep_color,
+        )
 
     if redact_secrets_flag:
         text = redact_secrets(text)

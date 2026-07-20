@@ -1,6 +1,7 @@
 # Task State Log
 
 ## Completed
+- **Completed** | `write-a-function-that-returns-42-99468` | 2026-07-20 16:21:15 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-24025` | 2026-07-20 15:30:50 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-91549` | 2026-07-20 15:22:59 — attempts=1
 - **Completed** | `write-a-function-that-returns-42-19810` | 2026-07-20 15:11:09 — attempts=1
@@ -216,6 +217,14 @@ Live re-verification (this update):
 
 
 
+
+
+
+
+
+
+
+
 ## REPL verifier gap (RESOLVED 2026-07-20 — Option B: Debug Fallback)
 - ~~FINDING: The Stage-6 verifier gate was only LIVE on the `main.py` CLI
   `ExecutionLoop` path; `ui/repl_termux.py` standalone entry (`__main__`) called
@@ -252,6 +261,36 @@ Live re-verification (this update):
   `test_git_push_tool_auto_records_diff` now PASSES.
 
 ## Out of Scope — Logged for Later Phase (no fix applied)
+
+## Architecture Repair Pass — 2026-07-20 (5 priorities)
+Executed a 5-priority repair pass. Several priority premises were VERIFIED
+FALSE against source and adjusted (no fabricated fixes):
+- **P1 (layer violation core/tui.py → ui.repl_termux): NOT EXECUTED.** `core/tui.py`
+  does not exist; grep confirms `core/` never imports `ui.repl_termux` (only a
+  docstring mention in `core/ui_bridge.py:268`). No layer violation to fix.
+- **P2 (CC hotspots): DONE for the 2 real ones.** `sanitize` 22→14,
+  `StructuralVerifier.verify` 23→8 (both ≤10). `validate_tool_call` was claimed
+  CC=28 but radon showed 4 (already decomposed) — left untouched. Added
+  `tests/test_sanitize_helpers.py` (8 tests, all pass).
+- **P3 (loop.py god module): PARTIAL + documented.** Extracted
+  `engine/_tool_runner.py` (`_ToolRunnerMixin` hosting `_parse_and_validate_tool`)
+  → `engine/loop.py` 1699→1597 lines. Deliberately did NOT extract
+  `_invoke_llm_and_normalize` / `_pre_dispatch_guard` / `_dispatch_and_record_evidence`
+  into mixins: they are tightly coupled to convergence guards + `self._force_final`
+  / `self.evidence_log` state; moving them risked breaking the 606-verified
+  convergence behavior for no safety margin. Target ≤1100 not reached by design.
+- **P4 (SCC mega-cycle): ALREADY DISSOLVED.** Module graph is acyclic by
+  construction; back-edges are function-local lazy imports; `tools/`+`engine/`
+  use PEP562 `__getattr__`. `from main import main` succeeds with
+  `recursionlimit=100` (no RecursionError). No cycle-breaking surgery needed.
+- **P5 (tool auto-discovery): DONE safely.** Added `discover_tools(ctx)` in
+  `core/tool_factory.py` (scans `tools/` for new `BaseTool` subclasses, injects
+  deps by kwarg name/type, fail-open). `core/app_context.py` calls it AFTER the
+  manual block, which stays the authoritative fallback. No tool `__init__`
+  signature changed.
+- **RESULT**: `pytest -q` → **614 passed, 0 failed** (was 606; +8 P2 helper
+  tests). Smoke test `NabdBootloader` phases 1-2 OK. Zero regressions.
+
 
 ## Audit closure — 2026-07-20 (full suite green)
 - **FULL SUITE**: `pytest -q` → **606 passed, 0 failed** (1 benign DB-corruption

@@ -89,6 +89,21 @@ class AppContext:
             except ValueError:
                 pass
 
+        # PRIORITY 5 (optional, safe): auto-discover any NEW BaseTool subclasses
+        # in tools/ not covered by the manual block above. Manual registration
+        # remains the authoritative fallback; discovery only ADDS, never removes.
+        try:
+            from core.tool_factory import discover_tools
+
+            for _name, _tool in discover_tools(cls).items():
+                if _name not in registry:
+                    try:
+                        registry.register(_tool)
+                    except ValueError:
+                        pass
+        except Exception as _disc_exc:  # fail-open: never break boot on discovery
+            print(f"⚠️ [Auto-Discovery] skipped: {_disc_exc}")
+
         ctx = cls(
             config=config,
             logger=logger,

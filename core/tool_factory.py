@@ -109,3 +109,83 @@ def build_skill_tools(memory: Any = None) -> List[Tool]:
     """
     mcp_context = build_mcp_context(memory=memory) if memory is not None else None
     return [SkillTool(skill, mcp_context) for skill in load_skills()]
+
+
+# Known hand-wired tool classes in core/app_context.py. Auto-discovery skips
+# these so it only picks up NEW tools dropped into tools/ without re-instantiating
+# the ones that need bespoke constructor args.
+_MANUAL_TOOL_CLASSES = {
+    "ShellTool", "FileSystemTool", "WebSearchTool", "SearchMemoryTool",
+    "TodoWriteTool", "TermuxMonitorTool", "RagSearchTool",
+    "CodeIntelligenceTool", "PythonREPLTool", "TasteManagerTool", "GraphifyTool",
+}
+
+
+def discover_tools(app_context: "Any") -> dict[str, Any]:
+    """Auto-discover executable tools in ``tools/`` and inject deps from AppContext.
+
+    Safe enhancement (PRIORITY 5, Low severity). Scans ``tools`` for ``BaseTool``
+    subclasses NOT already hand-wired, matches constructor kwargs by name/type
+    from the AppContext fields, and returns a name→instance dict. On ANY failure
+    (missing dep, build error) the tool is skipped with a warning — never raises.
+    The caller registers the result and keeps the manual block as fallback.
+    """
+    import importlib
+    import inspect
+    import pkgutil
+
+    import tools as _tools_pkg
+    from tools.base import BaseTool
+
+    discovered: dict[str, Any] = {}
+    for _, module_name, _ in pkgutil.iter_modules(_tools_pkg.__path__):
+        if module_name in ("base", "models", "protocols"):
+            continue
+        full = f"tools.{module_name}"
+        try:
+            module = importlib.import_module(full)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[Auto-Discovery] skip {module_name}: {exc}")
+            continue
+        for _name, obj in inspect.getmembers(module, inspect.isclass):
+            if not (issubclass(obj, BaseTool) and obj is not BaseTool):
+                continue
+            if obj.__name__ in _MANUAL_TOOL_CLASSES:
+                continue
+            tool = _build_tool_with_deps(obj, app_context)
+            if tool is not None:
+                discovered[getattr(tool, "name", _name)] = tool
+    return discovered
+
+
+def _build_tool_with_deps(tool_cls: "Any", app_context: "Any") -> "Any | None":
+    """Instantiate ``tool_cls`` by matching its __init__ kwargs to AppContext.
+
+    Returns None (skip) when a required, non-defaulted kwarg cannot be resolved.
+    """
+    try:
+        sig = inspect.signature(tool_cls.__init__)
+    except (ValueError, TypeError):
+        return None
+    ctx_fields = {
+        "workspace": getattr(app_context, "config", None) and getattr(app_context.config, "workspace_root", "."),
+        "workspace_root": getattr(app_context, "config", None) and getattr(app_context.config, "workspace_root", "."),
+        "memory_manager": getattr(app_context, "memory_manager", None),
+        "todo_manager": getattr(app_context, "todo_manager", None),
+        "security_engine": getattr(app_context, "_security_engine", None),
+        "memory": getattr(app_context, "memory_manager", None),
+    }
+    kwargs: dict[str, Any] = {}
+    for pname, param in sig.parameters.items():
+        if pname in ("self", "args", "kwargs"):
+            continue
+        if pname in ctx_fields and ctx_fields[pname] is not None:
+            kwargs[pname] = ctx_fields[pname]
+        elif param.default is inspect.Parameter.empty:
+            # Required kwarg with no injectable source → cannot build safely.
+            return None
+    try:
+        return tool_cls(**kwargs)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[Auto-Discovery] build failed for {tool_cls.__name__}: {exc}")
+        return None

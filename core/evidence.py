@@ -401,6 +401,20 @@ class StructuralVerifier:
                 scores={},
             )
 
+        return cls._assess_token_match(claim_tokens, evidence_low, findings)
+
+    @classmethod
+    def _assess_token_match(
+        cls,
+        claim_tokens: set[str],
+        evidence_low: str,
+        findings: list[str],
+    ) -> VerificationResult:
+        """Score claim tokens against evidence and return an L1 VerificationResult.
+
+        Split out from ``StructuralVerifier.verify`` to bound its cyclomatic
+        complexity. Pure scoring — mutates only by appending to ``findings``.
+        """
         def _token_in_evidence(t: str, ev: str) -> bool:
             pattern = rf"(?<![\w.-]){re.escape(t)}(?![\w.-])"
             return re.search(pattern, ev) is not None
@@ -409,23 +423,17 @@ class StructuralVerifier:
             t for t in claim_tokens
             if ("_" in t or "." in t or "/" in t) and _token_in_evidence(t, evidence_low)
         ]
-
-        # Match tokens
         matches = sum(1 for t in claim_tokens if _token_in_evidence(t, evidence_low))
         total = len(claim_tokens) or 1
         overlap = matches / total
-
         req_matches = 1 if total <= 2 else max(1, total // 2)
 
         if matches >= req_matches or overlap >= cls.OVERLAP_THRESHOLD or len(matched_technical_anchors) > 0:
             findings.append(
-                f"L1 pass: {matches}/{total} tokens matched "
-                f"(overlap={overlap:.2f})"
+                f"L1 pass: {matches}/{total} tokens matched (overlap={overlap:.2f})"
             )
             return VerificationResult(
-                ok=True,
-                findings=findings,
-                level="L1",
+                ok=True, findings=findings, level="L1",
                 scores={"matches": matches, "total": total, "overlap": overlap},
             )
 
@@ -434,13 +442,11 @@ class StructuralVerifier:
         })
         sample = unmatched[:10]
         findings.append(
-            f"Claim references {total} distinctive token(s) but only {matches}"
-            f" found in evidence output ({', '.join(sample)}{'...' if len(unmatched) > 10 else ''})"
+            f"Claim references {total} distinctive token(s) but only {matches} "
+            f"found in evidence output ({', '.join(sample)}{'...' if len(unmatched) > 10 else ''})"
         )
         return VerificationResult(
-            ok=False,
-            findings=findings,
-            level="L1",
+            ok=False, findings=findings, level="L1",
             scores={"matches": matches, "total": total, "overlap": overlap},
         )
 
