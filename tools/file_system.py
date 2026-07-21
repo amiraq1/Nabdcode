@@ -1,17 +1,71 @@
 from __future__ import annotations
 
 import difflib
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from tools.base import BaseTool
 from tools.models import ToolResult
 from core.sanitize import sanitize
 
 
+# ── Accept-edits queue (shared across turns) ───────────────────────────────
+@dataclass
+class PendingEdit:
+    """A file edit awaiting user approval before being written to disk."""
+    path: str            # original relative path (for display)
+    resolved_path: str   # absolute path resolved against workspace (for write)
+    old_content: str
+    new_content: str
+    diff: str
+    additions: int
+    removals: int
+
+
+# Module-level queue: populated by _handle_edit() when accept-edits mode is
+# active, drained by ui/repl_termux.py after each agent turn completes.
+_accept_edits_pending: list[PendingEdit] = []
+_accept_edits_enabled: bool = False
+
+
+def _highlight_word_changes(old_line: str, new_line: str) -> tuple[str, str]:
+    """Compare two lines at word level and return Rich-markup highlighted versions.
+
+    Uses ``difflib.SequenceMatcher`` to split lines into word tokens and
+    colourises changed portions:
+
+    * ``[bold red]...[/bold red]`` for deleted words
+    * ``[bold green]...[/bold green]`` for inserted words
+
+    Unchanged words are returned as-is (no markup). The result is safe to pass
+    through ``console.print()`` (Rich markup) or ``render_diff()`` (ANSI — the
+    tags are passed through as plain text in unchanged lines).
+    """
+    matcher = difflib.SequenceMatcher(None, old_line.split(), new_line.split())
+    old_parts: list[str] = []
+    new_parts: list[str] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        old_words = " ".join(old_line.split()[i1:i2])
+        new_words = " ".join(new_line.split()[j1:j2])
+        if tag == "equal":
+            old_parts.append(old_words)
+            new_parts.append(new_words)
+        elif tag in ("replace", "delete"):
+            old_parts.append(f"[bold red]{old_words}[/bold red]")
+            if tag == "replace":
+                new_parts.append(f"[bold green]{new_words}[/bold green]")
+        elif tag == "insert":
+            new_parts.append(f"[bold green]{new_words}[/bold green]")
+    return " ".join(old_parts), " ".join(new_parts)
+
+
 class FileAction(str, Enum):
     READ = "read"
+    READ_MANY = "read_many"
+    EDIT = "edit"
     WRITE = "write"
     APPEND = "append"
     REPLACE = "replace"
@@ -32,6 +86,8 @@ class FileSystemTool(BaseTool):
 
     Supported actions:
         - read
+        - read_many  (parallel batch read — pass 'paths' as list or comma-separated)
+        - edit  (write new content with visual diff display)
         - write
         - append
         - replace
@@ -42,17 +98,22 @@ class FileSystemTool(BaseTool):
     name: Final[str] = "file_system"
 
     description: Final[str] = (
-        "Safely read, list, write, append, and replace files inside the workspace. "
-        "Required args: 'action' ('read','list','write','append','replace'), 'path' (str). "
+        "Safely read, list, write, edit, append, and replace files inside the workspace. "
+        "Required args: 'action' ('read','read_many','edit','list','write','append','replace'), 'path' (str). "
         "Use action='list' to enumerate a directory (pass 'recursive': true to walk subfolders) — "
         "this is the ONLY way to discover files; do NOT use shell ls/find. "
-        "For write/append pass 'content'. For replace pass 'old_text','new_text', optional 'count'/'all'."
+        "For write/append pass 'content'. For replace pass 'old_text','new_text', optional 'count'/'all'. "
+        "For parallel batch reads, use action='read_many' with 'paths' (list or comma-separated string). "
+        "For visual diff editing, use action='edit' with 'path' and 'content' (the full new file content)."
     )
 
     MAX_READ_SIZE: Final[int] = 1_000_000  # 1 MB
 
-    def __init__(self, workspace: str | Path = ".") -> None:
+    def __init__(self, workspace: str | Path = ".", snapshot_engine: Any = None) -> None:
         self.workspace = Path(workspace).resolve()
+        # Optional SnapshotEngine for pre-write backups (enables /undo).
+        # When None, writes proceed without snapshotting (no behavior change).
+        self._snap = snapshot_engine
 
     def execute(self, **kwargs) -> ToolResult:
 
@@ -71,7 +132,7 @@ class FileSystemTool(BaseTool):
         if not isinstance(action, str):
             return ToolResult(
                 success=False,
-                stderr="Missing required argument 'action'. Allowed values: 'read', 'write', 'append', 'replace'.",
+                stderr="Missing required argument 'action'. Allowed values: 'read', 'edit', 'write', 'append', 'replace'.",
             )
 
         if not isinstance(path, str):
@@ -90,7 +151,7 @@ class FileSystemTool(BaseTool):
                 success=False,
                 stderr=(
                     "Unsupported action. "
-                    "Allowed values: read, write, append, replace."
+                    "Allowed values: read, read_many, edit, write, append, replace."
                 ),
             )
 
@@ -103,6 +164,25 @@ class FileSystemTool(BaseTool):
 
             if action is FileAction.READ:
                 return self._read(target)
+
+            if action is FileAction.READ_MANY:
+                return self._handle_read_many(kwargs)
+
+            if action is FileAction.EDIT:
+                return self._handle_edit(path, target, kwargs)
+
+            # ── Pre-write snapshot (enables /undo) ───────────────────────
+            # Fire-and-forget: a snapshot failure must NEVER block the write.
+            if self._snap is not None and action in (
+                FileAction.EDIT,
+                FileAction.WRITE,
+                FileAction.APPEND,
+                FileAction.REPLACE,
+            ):
+                try:
+                    self._snap.save(path)
+                except Exception:
+                    pass
 
             if action is FileAction.WRITE:
                 return self._write(target, content)
@@ -156,46 +236,210 @@ class FileSystemTool(BaseTool):
 
     # ------------------------------------------------------------------
 
-    def _read(self, path: Path) -> ToolResult:
+    def _read_raw(self, path: Path) -> str:
+        """Read file content as a raw string, raising on errors.
 
+        Validates existence, file type, and size. Clamps output to
+        MAX_READ_CHARS to protect context windows. Returns sanitized text.
+        """
         if not path.exists():
-
-            return ToolResult(
-                success=False,
-                stderr=f"File not found: {path.name}",
-            )
-
+            raise FileNotFoundError(f"File not found: {path.name}")
         if not path.is_file():
-
-            return ToolResult(
-                success=False,
-                stderr="Target is not a file.",
-            )
-
+            raise IsADirectoryError(f"Target is not a file: {path.name}")
         if path.stat().st_size > self.MAX_READ_SIZE:
+            raise ValueError(f"File is too large to read: {path.name}")
 
-            return ToolResult(
-                success=False,
-                stderr="File is too large to read.",
-            )
+        text = path.read_text(encoding="utf-8", errors="replace")
 
-        text = path.read_text(
-            encoding="utf-8",
-            errors="replace",
-        )
-
-        # Protect the local-model context window from OOM/overflow: clamp the
-        # returned text and warn the agent to use grep/head/tail for the rest.
         if len(text) > MAX_READ_CHARS:
             text = text[:MAX_READ_CHARS] + (
                 f"\n\n... [TRUNCATED] File exceeds {MAX_READ_CHARS} characters. "
                 "This is a partial read to protect AI memory. Use 'execute_shell' "
                 "with 'grep', 'head', or 'tail' to inspect specific parts."
             )
+        return sanitize(text, preserve_tabs=True, preserve_newlines=True)
+
+    def _read(self, path: Path) -> ToolResult:
+        """Single-file read, returning a ToolResult."""
+        try:
+            content = self._read_raw(path)
+            return ToolResult(success=True, stdout=content)
+        except (FileNotFoundError, IsADirectoryError, ValueError) as exc:
+            return ToolResult(success=False, stderr=str(exc))
+
+    # ------------------------------------------------------------------
+
+    def read_files_parallel(
+        self, file_paths: list[str], max_workers: int = 8
+    ) -> dict[str, str]:
+        """Read multiple files concurrently using a thread pool.
+
+        Args:
+            file_paths: List of relative workspace paths to read.
+            max_workers: Max parallel threads (capped to len(file_paths)).
+
+        Returns:
+            {path: content_or_error} dict. Each value is either the
+            sanitized file content or an error message string.
+        """
+        results: dict[str, str] = {}
+        if not file_paths:
+            return results
+
+        n_workers = min(max_workers, len(file_paths))
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            future_to_path: dict[Any, str] = {}
+            for fp in file_paths:
+                try:
+                    target = self._resolve(fp)
+                    future = executor.submit(self._read_raw, target)
+                    future_to_path[future] = fp
+                except Exception as exc:
+                    results[fp] = f"Error resolving path '{fp}': {exc}"
+
+            for future in as_completed(future_to_path):
+                path = future_to_path[future]
+                try:
+                    results[path] = future.result()
+                except Exception as exc:
+                    results[path] = f"Error reading {path}: {exc}"
+        return results
+
+    def _parse_paths(self, raw_paths: Any) -> list[str]:
+        """Normalise ``paths`` argument into a list of path strings."""
+        if isinstance(raw_paths, list):
+            return [str(p) for p in raw_paths]
+        if isinstance(raw_paths, str):
+            return [p.strip() for p in raw_paths.split(",") if p.strip()]
+        return []
+
+    def _handle_read_many(self, kwargs: dict[str, Any]) -> ToolResult:
+        """Handle the ``read_many`` action: parallel batch read of multiple files.
+
+        Accepts ``paths`` (list or comma-separated string) and reads all of
+        them concurrently via ``read_files_parallel()``. Returns a combined
+        ``ToolResult`` with per-file headers and content.
+        """
+        paths = self._parse_paths(kwargs.get("paths", []))
+        if not paths:
+            return ToolResult(
+                success=False,
+                stderr="Missing required argument 'paths' for action 'read_many'. "
+                       "Provide a list or comma-separated string of file paths.",
+            )
+
+        results = self.read_files_parallel(paths)
+        if not results:
+            return ToolResult(success=False, stderr="No files were read.")
+
+        lines: list[str] = []
+        header_lines: list[str] = []
+        for path_str, content in results.items():
+            # Calculate line count for the header
+            line_count = len(content.splitlines()) if not content.startswith("Error") else 0
+            if line_count:
+                header_lines.append(f"READ [{path_str}] {line_count} lines")
+            else:
+                header_lines.append(f"READ [{path_str}]")
+            lines.append(f"\n{'─' * 48}")
+            lines.append(f"📄 {path_str}")
+            lines.append(f"{'─' * 48}")
+            lines.append(content)
+
+        combined = "\n".join(header_lines) + "\n" + "\n".join(lines)
+        n_ok = sum(1 for v in results.values() if not v.startswith("Error"))
+        n_err = len(results) - n_ok
+        summary = f"Read {n_ok} file(s)"
+        if n_err:
+            summary += f" ({n_err} error(s))"
+
+        return ToolResult(
+            success=n_ok > 0,
+            stdout=combined,
+            summary=summary,
+        )
+
+    def _handle_edit(self, path_str: str, target: Path, kwargs: dict[str, Any]) -> ToolResult:
+        """Handle ``edit`` action: write new content with visual diff display.
+
+        Reads the old content (or empty if new file), computes a unified diff,
+        writes the new content, and returns a ``ToolResult`` with the diff
+        metadata so ``engine/renderer.py`` can display the colored diff.
+        """
+        new_content = kwargs.get("content", "")
+        if not isinstance(new_content, str) or not new_content:
+            return ToolResult(
+                success=False,
+                stderr="Argument 'content' is required for action 'edit' and cannot be empty.",
+            )
+
+        # Read old content (best-effort; new files have no old content).
+        try:
+            old_content = target.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            old_content = ""
+
+        # Compute unified diff with 2 lines of context.
+        diff_lines = list(difflib.unified_diff(
+            old_content.splitlines(keepends=True),
+            new_content.splitlines(keepends=True),
+            fromfile=f"a/{path_str}",
+            tofile=f"b/{path_str}",
+            n=2,
+        ))
+        additions = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+        removals = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+
+        # Build compact diff display (max 40 lines).
+        diff_display = "".join(diff_lines[:40])
+        if len(diff_lines) > 40:
+            remainder = len(diff_lines) - 40
+            diff_display += f"\n... (+{remainder} more diff lines, use 'read' to inspect full file)"
+
+        # ── Accept-edits gate ────────────────────────────────────────────
+        # When accept-edits mode is active, queue the edit for user approval
+        # instead of writing to disk immediately. The queue is drained by
+        # ui/repl_termux.py after the agent turn completes.
+        if _accept_edits_enabled:
+            _accept_edits_pending.append(PendingEdit(
+                path=path_str,
+                resolved_path=str(target),
+                old_content=old_content,
+                new_content=new_content,
+                diff=diff_display,
+                additions=additions,
+                removals=removals,
+            ))
+            summary = f"Pending edit: {path_str} (+{additions} -{removals}) — awaiting approval"
+            return ToolResult(
+                success=True,
+                stdout=summary,
+                diff=diff_display,
+                metadata={
+                    "diff": diff_display,
+                    "additions": additions,
+                    "deletions": removals,
+                    "path": path_str,
+                    "pending_approval": True,
+                },
+            )
+
+        # Normal path: write immediately.
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(new_content, encoding="utf-8")
+
+        summary = f"Updated {path_str} with {additions} additions and {removals} removals"
 
         return ToolResult(
             success=True,
-            stdout=sanitize(text, preserve_tabs=True, preserve_newlines=True),
+            stdout=summary,
+            diff=diff_display,
+            metadata={
+                "diff": diff_display,
+                "additions": additions,
+                "deletions": removals,
+                "path": path_str,
+            },
         )
 
     # ------------------------------------------------------------------
@@ -420,7 +664,4 @@ class FileSystemTool(BaseTool):
         header = f"Directory listing for '{root}'{' (recursive)' if recursive else ''} — {len(lines)} entries:"
         body = "\n".join(lines) if lines else "(empty directory)"
         return ToolResult(success=True, stdout=sanitize(f"{header}\n{body}", preserve_newlines=True))
-
-
-from tools.secure_tools import SecureWorkspaceReader
 

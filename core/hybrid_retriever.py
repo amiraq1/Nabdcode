@@ -1,8 +1,13 @@
 # core/hybrid_retriever.py
 from datetime import datetime, timezone
-from typing import List, Tuple, Optional
-from core.storage import MemoryStore, MemoryChunk
+from typing import List, Tuple, Optional, TYPE_CHECKING, Any
 from core.semantic_index import TfIdfIndex
+
+if TYPE_CHECKING:
+    from core.storage import MemoryStore, MemoryChunk
+else:
+    MemoryStore = Any
+    MemoryChunk = Any
 
 
 class HybridRetriever:

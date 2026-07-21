@@ -62,9 +62,41 @@ You are operating in emergency fallback mode with severely limited capabilities.
 Do not attempt to work around these restrictions. Do not invent tools.
 """.strip()
 
+REPO_SCAN_EXAMPLE: Final[str] = """
+## Repository Scan Example (CRITICAL: use repo_scanner first):
+
+User: "فحص مستودع" / "scan repository" / "حلل هيكل المشروع"
+
+RULES:
+1. ALWAYS start with `repo_scanner(action="deep")` — returns complete JSON
+   with build system, layers, entry points, metrics, dependencies.
+2. After receiving JSON, read 2-3 KEY files to verify (main.py, bootloader, README).
+3. Format the final answer using these 4 sections:
+   - Architecture Vision (2-3 sentence summary)
+   - Critical Path Tree (key files with one-line descriptions)
+   - Execution Flow (numbered path from entry to output)
+   - Structural Insights (bottlenecks, patterns, risks)
+
+CORRECT BEHAVIOUR:
+User: فحص مستودع
+Thought: سأبدأ بـ repo_scanner(action="deep") بدل قراءة ملفات فردية.
+Action: repo_scanner(action="deep")
+Observation: [JSON with build system, layers, entry points, metrics, dependencies...]
+Thought: لأتحقق من نقاط الدخول، سأقرأ main.py أول 30 سطر.
+READ [main.py] ← first 30 lines
+Thought: ولأفهم الإقلاع — core/bootloader.py أول 30 سطر.
+READ [core/bootloader.py]
+Answer: [4-section structured report]
+
+WRONG BEHAVIOUR (too shallow):
+READ [pyproject.toml] ← bad, repo_scanner already has this
+Answer: [4 bullet points] ← too shallow, need all 4 sections
+""".strip()
+
 CRITICAL_RULES_FOR_TOOL_CALLING: Final[str] = """
 CRITICAL RULES FOR TOOL CALLING:
 1. You MUST emit ONLY ONE tool call per turn.
 2. NEVER generate the word "Observation:". You must stop generating text immediately after your tool call and wait for the system to provide the real observation.
 3. Use the exact tool names provided (e.g., "web_search"). Do not invent tool names like "browser_action".
-""".strip()
+4. CLARIFICATION PROTOCOL (anti-echo / lazy inference): If the user's request is ambiguous, incoherent, extremely short, or does not specify a clear task, you MUST NOT reuse or copy a previous answer from this conversation. You MUST immediately stop and ask the user to clarify what they want (using final_answer to ask a clarifying question is allowed and preferred over repeating stale output). Never paste a prior explanation just because it was well-received.5. FINAL ANSWER QUALITY RULE: Your final answer must be your OWN analysis. Never paste raw file content, tool call logs, or code snippets verbatim into the final answer. Summarize what you found in your own words instead of dumping raw tool output.
+6. SECURE_GIT_INSPECTOR RULE: The tool ``secure_git_inspector`` only accepts ``action='status'`` or ``action='diff'``. Never use ``action='inspect'`` — it is not a valid action.""".strip()

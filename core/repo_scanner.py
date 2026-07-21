@@ -37,6 +37,7 @@ USAGE EXAMPLES (for the LLM):
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -123,6 +124,159 @@ def _search(root: Path, keyword: str) -> str:
     return f"Found {len(hits)} match(es) for '{keyword}':\n" + "\n".join(hits)
 
 
+def _safe_read(path: Path) -> str:
+    """Read a text file, returning '' on any failure (binary/unreadable)."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _parse_list(lines, start_idx: int) -> list[str]:
+    """Collect bracketed list items (lines like `  "x",`) from ``lines``.
+
+    Starts at ``start_idx`` (the line containing `[`) and consumes until the
+    closing `]`. Returns the stripped quoted/raw tokens found.
+    """
+    items: list[str] = []
+    for line in lines[start_idx + 1:]:
+        if "]" in line:
+            break
+        tok = line.strip().strip(",").strip().strip('"').strip("'")
+        if tok:
+            items.append(tok)
+    return items
+
+
+def _detect_build_system(root: Path, top_files: list[str]) -> dict:
+    info: dict = {
+        "build_system": {
+            "type": "unknown",
+            "name": "",
+            "packages": [],
+            "deps": [],
+            "entry": "",
+        }
+    }
+    build_map = {
+        "CMakeLists.txt": "cmake",
+        "Makefile": "make",
+        "Cargo.toml": "cargo",
+        "package.json": "npm",
+    }
+    for f in top_files:
+        if f == "pyproject.toml":
+            try:
+                content = (root / f).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                content = ""
+            lines = content.splitlines()
+            for i, line in enumerate(lines):
+                if "name =" in line and not info["build_system"]["name"]:
+                    info["build_system"]["name"] = line.split("=")[1].strip().strip('"')
+                if "packages =" in line:
+                    info["build_system"]["packages"] = _parse_list(lines, i)
+                if "dependencies" in line:
+                    info["build_system"]["deps"] = _parse_list(lines, i)
+                if "nabdcode =" in line or "[project.scripts]" in line and not info["build_system"]["entry"]:
+                    info["build_system"]["entry"] = line.split("=")[1].strip().strip('"') if "=" in line else ""
+            bs = info["build_system"]
+            if "setuptools" in content:
+                bs["type"] = "setuptools"
+            elif "poetry" in content:
+                bs["type"] = "poetry"
+            elif "flit" in content:
+                bs["type"] = "flit"
+            else:
+                bs["type"] = "python"
+        elif f in build_map:
+            info["build_system"]["type"] = build_map[f]
+    return info
+
+
+def _detect_layers(root: Path) -> list[dict]:
+    layers: list[dict] = []
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        entries = []
+    for entry in entries:
+        full = root / entry
+        if not full.is_dir() or entry.startswith(".") or entry in ("__pycache__", "node_modules", "tests"):
+            continue
+        try:
+            py_count = len(list(full.rglob("*.py")))
+        except OSError:
+            py_count = 0
+        layers.append({"name": entry, "path": str(full), "files": py_count})
+    return layers
+
+
+def _detect_entry_points(root: Path) -> list[str]:
+    entry_points: list[str] = []
+    if (root / "main.py").exists():
+        for line in (root / "main.py").read_text(encoding="utf-8", errors="replace").splitlines():
+            if "def main(" in line:
+                entry_points.append("main.py → main()")
+                break
+    if (root / "bin").is_dir():
+        try:
+            for f in os.listdir(root / "bin"):
+                entry_points.append(f"bin/{f} → shell script")
+        except OSError:
+            pass
+    return entry_points
+
+
+def _compute_repo_metrics(root: Path) -> tuple[list[Path], dict[str, int]]:
+    metrics = {"py_files": 0, "total_lines": 0, "classes": 0, "functions": 0}
+    py_files: list[Path] = []
+    for py in root.rglob("*.py"):
+        if ".git" in str(py) or "__pycache__" in str(py):
+            continue
+        py_files.append(py)
+        try:
+            lines = py.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        metrics["py_files"] += 1
+        metrics["total_lines"] += len(lines)
+        metrics["classes"] += sum(1 for l in lines if l.strip().startswith("class "))
+        metrics["functions"] += sum(1 for l in lines if l.strip().startswith("def "))
+    return py_files, metrics
+
+
+def _detect_security_patterns(py_files: list[Path]) -> dict[str, bool]:
+    return {
+        "consent_loop": any("ConsentManager" in _safe_read(p) for p in py_files),
+        "kernel_isolation": any("core/kernel" in str(p) for p in py_files),
+        "path_validation": any("_validate_path" in _safe_read(p) for p in py_files),
+        "evidence_gate": any("EvidenceLog" in _safe_read(p) for p in py_files),
+    }
+
+
+def deep_scan_repo(root_path: str | Path) -> dict:
+    """Comprehensive repository scan — returns structured JSON.
+
+    Does NOT rely on the LLM to choose files. Reads all structural files
+    deterministically and returns a complete architecture map. PURE PYTHON:
+    no LLM calls, no tool invocations, completes in <2s.
+    """
+    root = Path(root_path)
+    try:
+        top_files = os.listdir(root)
+    except OSError:
+        top_files = []
+
+    info = _detect_build_system(root, top_files)
+    info["layers"] = _detect_layers(root)
+    info["entry_points"] = _detect_entry_points(root)
+    py_files, metrics = _compute_repo_metrics(root)
+    info["metrics"] = metrics
+    info["security"] = _detect_security_patterns(py_files)
+    return info
+
+
 class SECURE_REPO_SCANNER(Tool):
     """Read-only workspace map + keyword search (excludes .git, __pycache__,
     node_modules, and *.gguf models).
@@ -144,7 +298,7 @@ class SECURE_REPO_SCANNER(Tool):
     inputs = {
         "action": {
             "type": "string",
-            "description": "Either 'map' (directory tree) or 'search' (keyword scan).",
+            "description": "Either 'map' (directory tree), 'search' (keyword scan), or 'deep' (full structured architecture scan as JSON).",
             "nullable": False,
         },
         "keyword": {
@@ -155,7 +309,7 @@ class SECURE_REPO_SCANNER(Tool):
     }
     output_type = "string"
 
-    def forward(self, action: str, keyword: Optional[str] = None) -> str:
+    def forward(self, action: str, keyword: Optional[str] = None, **kwargs: Any) -> str:
         try:
             root = get_workspace_root()
             mode = (action or "").strip().lower()
@@ -165,6 +319,21 @@ class SECURE_REPO_SCANNER(Tool):
                 if not keyword:
                     return "Error: action='search' requires a 'keyword' argument."
                 return _search(root, keyword)
-            return "Error: action must be 'map' or 'search'."
+            if mode == "deep":
+                import json
+
+                return json.dumps(
+                    self._deep_scan(root), indent=2, ensure_ascii=False
+                )
+            return "Error: action must be 'map', 'search', or 'deep'."
         except Exception as exc:  # containment: never break the agent loop
             return f"repo_scanner failed: {exc!r}"
+
+    def _deep_scan(self, root_path: str | Path) -> dict:
+        """Comprehensive repository scan — returns structured JSON.
+
+        Does NOT rely on the LLM to choose files. Reads all structural files
+        deterministically and returns a complete architecture map. PURE PYTHON:
+        no LLM calls, no tool invocations, completes in <2s.
+        """
+        return deep_scan_repo(root_path)

@@ -128,20 +128,23 @@ class NabdTerminal(App):
             controller.resolve_pending_edit(approved)
             return
 
-        # 1. 🔒 فحص قفل الحظر (Prevent Race Conditions)
-        if controller and controller.is_busy:
-            input_bar.value = ""
-            return
+        # 1. Reject-Only Policy and Slash Command handling via controller API
+        if controller:
+            if not controller.try_submit_prompt(user_input):
+                input_bar.value = ""
+                return
+            if controller.parse_slash_command(user_input):
+                input_bar.value = ""
+                return
+        else:
+            if user_input.strip().startswith("/"):
+                input_bar.value = ""
+                return
 
         input_bar.value = ""
 
-        # فحص الأوامر المائلة أولاً (Slash Commands)
-        if controller and controller.parse_command_input(user_input):
-            await controller.handle_command(user_input)
-            return
-
         chat_container = self.query_one("#chat-container", ScrollableContainer)
-        user_card = Static(f"[USER] {user_input}", classes="user-msg-block")
+        user_card = Static(f"[USER] {sanitize(user_input)}", classes="user-msg-block")
         await chat_container.mount(user_card)
         chat_container.scroll_end(animate=True)
 

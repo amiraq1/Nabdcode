@@ -93,7 +93,7 @@ class _BudgetMixin:
 
         Returns ``True`` if it forced termination (caller should stop).
         """
-        from engine.loop import (
+        from engine._loop_helpers import (
             _prompt_requires_investigation,
             _has_active_goal,
             _looks_like_tool_call,

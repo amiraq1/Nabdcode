@@ -28,6 +28,39 @@ def os_environ_get(key: str) -> str:
     return os.environ.get(key, "")
 
 
+# ── Creative thinking status labels ────────────────────────────────────────
+THINKING_STATES: list[tuple[str, str]] = [
+    ("★", "Conjuring"),
+    ("◇", "Drafting"),
+    ("○", "Examining"),
+    ("◈", "Synthesizing"),
+    ("✦", "Weaving"),
+    ("⟡", "Contemplating"),
+    ("◉", "Processing"),
+    ("⬡", "Reasoning"),
+]
+
+
+def _get_thinking_label(elapsed: int) -> tuple[str, str]:
+    """Return (icon, label) that grows more intense as elapsed time increases."""
+    if elapsed < 3:
+        return ("·", "Thinking")
+    if elapsed < 7:
+        return ("○", "Examining")
+    if elapsed < 15:
+        return ("◇", "Contemplating")
+    return ("★", "Conjuring")
+
+
+def _fmt_tokens(n: int) -> str:
+    """Format token count for display (e.g. '  ·  47.1k' or '' if zero)."""
+    if n == 0:
+        return ""
+    if n < 1000:
+        return f"  ·  {n}"
+    return f"  ·  {n/1000:.1f}k"
+
+
 class LiveThoughtCompressor:
     """Manages the live thinking line + raw thought store for one session."""
 
@@ -38,6 +71,7 @@ class LiveThoughtCompressor:
         self._last_render_ts: float = 0.0
         self.session_thoughts: Dict[str, str] = {}
         self._step_counter = 0
+        self._token_count: int = 0
         self._ansi = _supports_ansi()
 
     # ── Phase control ──────────────────────────────────────────────────
@@ -59,8 +93,13 @@ class LiveThoughtCompressor:
         self._active = True
         self._start_ts = time.time()
         self._raw = ""
+        self._token_count = 0
         self._last_render_ts = 0.0
         self._render_live(0)
+
+    def add_tokens(self, count: int) -> None:
+        """Increment the live token counter shown in the status line."""
+        self._token_count += count
 
     def feed(self, text: str) -> None:
         """Buffer raw reasoning into session_thoughts; NEVER print to stdout.
@@ -86,12 +125,14 @@ class LiveThoughtCompressor:
             return None
         self._active = False
         total_time = max(0, int(time.time() - self._start_ts))
-        # Erase the live spinner line entirely, then freeze the clean,
+        icon, label = _get_thinking_label(total_time)
+        token_info = _fmt_tokens(self._token_count)
+        # Erase the live line entirely, then freeze the clean,
         # immutable placeholder onto its own line (no thought leakage).
         if self._ansi:
-            sys.stdout.write(f"\r\033[K\033[2m* Thought for {total_time} seconds [ctrl+o to expand]\033[0m\n")
+            sys.stdout.write(f"\r\033[K\033[2m{icon} {label}...  {total_time}s{token_info} [ctrl+o to expand]\033[0m\n")
         else:
-            sys.stdout.write(f"* Thought for {total_time} seconds [ctrl+o to expand]\n")
+            sys.stdout.write(f"{icon} {label}...  {total_time}s{token_info} [ctrl+o to expand]\n")
         sys.stdout.flush()
         # Store raw reasoning keyed by a unique step id.
         self._step_counter += 1
@@ -112,10 +153,18 @@ class LiveThoughtCompressor:
         self._render_live(int(now - self._start_ts))
 
     def _render_live(self, elapsed: int) -> None:
-        """Update the single dynamic live line (no implicit newline)."""
-        # Strip any trailing newlines so the carriage-return rewrite stays on
-        # one line; use the exact primitive write form, never print().
-        line = f"* Thinking... [Elapsed: {elapsed}s]".rstrip("\n")
+        """Update the single dynamic live line (no implicit newline).
+
+        The icon and label shift as elapsed time increases, giving the user
+        a visceral sense of progressing depth:
+          0-2s  → · Thinking
+          3-6s  → ○ Examining
+          7-14s → ◇ Contemplating
+          15s+  → ★ Conjuring
+        """
+        icon, label = _get_thinking_label(elapsed)
+        token_info = _fmt_tokens(self._token_count)
+        line = f"{icon} {label}...  [{elapsed}s{token_info}]".rstrip("\n")
         if self._ansi:
             sys.stdout.write(f"\r\033[K{line}")
         else:
@@ -137,12 +186,13 @@ class LiveThoughtCompressor:
 # ── High-contrast bento badges ──────────────────────────────────────────
 # Color aliases resolved at render time; fall back to plain text if no ANSI.
 _BENTO_COLORS = {
-    "READ": ("\033[45;30m", "\033[0m"),   # magenta bg, black text
-    "SHELL": ("\033[46;30m", "\033[0m"),  # cyan bg, black text
-    "WRITE": ("\033[42;30m", "\033[0m"),  # green bg, black text
-    "SEARCH": ("\033[44;30m", "\033[0m"), # blue bg, black text
-    "AGENT": ("\033[43;30m", "\033[0m"),  # yellow bg, black text
-    "DEFAULT": ("\033[47;30m", "\033[0m"),# white bg, black text
+    "READ": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"),   # teal bg (#0891B2), white text
+    "SHELL": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"),  # teal bg (#0891B2), white text
+    "WRITE": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"),  # teal bg (#0891B2), white text
+    "SEARCH": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"), # teal bg (#0891B2), white text
+    "TODOS": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"),  # teal bg (#0891B2), white text
+    "AGENT": ("\033[48;2;105;67;255;38;2;255;255;255;1m", "\033[0m"), # violet bg (#6943FF), white text
+    "DEFAULT": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"),# teal bg (#0891B2), white text
 }
 
 

@@ -253,6 +253,12 @@ class SecureWorkspaceReader(SecureTool):
             return f"Error: Operating system error accessing file ({type(exc).__name__})."
 
 
+GIT_ERROR_PREFIXES: Final[tuple[str, ...]] = (
+    "Security Violation",
+    "Error:",
+    "Error executing",
+)
+
 ALLOWED_GIT_COMMANDS: Final[Dict[str, List[str]]] = {
     "status": ["git", "status", "--short"],
     "diff": ["git", "diff"],
@@ -285,7 +291,7 @@ class SecureGitInspector(SecureTool):
         self.repo_path = pathlib.Path(repo_path).resolve()
         self.timeout = timeout
 
-    def forward(self, action: str) -> str:
+    def forward(self, action: str, **kwargs: Any) -> str:
         start_time = time.time()
         # 1. Validate action against immutable allowlist
         if action not in ALLOWED_GIT_COMMANDS:
@@ -329,6 +335,13 @@ class SecureGitInspector(SecureTool):
         except (PermissionError, OSError) as exc:
             return f"Error: Operating system error during execution ({type(exc).__name__})."
 
+    def inspect_workspace(self) -> tuple[bool, str]:
+        """Verify repository status is safe and accessible before critical git operations."""
+        result = self.forward("status")
+        if any(result.startswith(p) for p in GIT_ERROR_PREFIXES):
+            return False, result
+        return True, result
+
 
 ALLOWED_TEST_TARGETS: Final[Dict[str, str]] = {
     "unit": "tests/unit",
@@ -362,7 +375,7 @@ class SecureTestRunner(SecureTool):
         self.repo_path = pathlib.Path(repo_path).resolve()
         self.timeout = timeout
 
-    def forward(self, test_target: str) -> str:
+    def forward(self, test_target: str, **kwargs: Any) -> str:
         start_time = time.time()
 
         # 1. Validate against immutable target allowlist
@@ -431,7 +444,7 @@ class SecureSemanticMemoryTool(SecureTool):
         from core.storage import SemanticMemoryPipeline
         self.memory = memory_pipeline or SemanticMemoryPipeline()
 
-    def forward(self, action: str, text: str) -> str:
+    def forward(self, action: str, text: str, **kwargs: Any) -> str:
         clean_action = _sanitize(action).strip().lower()
         clean_text = _sanitize(text).strip()
 

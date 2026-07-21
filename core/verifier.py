@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+from core.parser import get_workspace_root
 
 
 @dataclass
@@ -234,3 +238,78 @@ def gate_report(report_text: str, evidence_log: Any, retry_fn: Optional[Callable
     if retry_fn:
         return retry_fn(unsupported=result.unsupported_claims)
     return "⚠️ Verification failed:\n" + "\n".join(result.unsupported_claims)
+
+
+# Deterministic disk-existence backstop for code-path claims.
+# Path extensions considered "code artifacts" worth verifying on disk.
+_PATH_CLAIM_RE = re.compile(r"[\w\-/\\]+\.(?:py|toml|md|json|yaml|yml|sh|cfg|ini|txt|go|js|ts|rs|java|cpp|c|h|rb)")
+_VERSION_RE = re.compile(r"^\d+\.\d+")
+_URL_RE = re.compile(r"https?://", re.IGNORECASE)
+
+
+def check_path_existence_claim(
+    report_text: str,
+    workspace_root: Optional[Path] = None,
+    evidence_log: Any = None,
+) -> VerificationResult:
+    """Verify every claimed code path against disk existence + evidence.
+
+    The existing ``verify_report`` checks path claims against evidence
+    raw_outputs only — a hallucinated path that was never read by any tool is
+    absent from outputs so it IS correctly flagged. However, a clever
+    false-negative exists: a path appearing in a directory listing (e.g.
+    ``ls core/`` shows adapters.py) would pass the substring check even if the
+    agent never read the file's CONTENTS. This function adds a DISK CHECK
+    (os.path.exists) for every ``*.py/.md/.toml/...`` path claim — the
+    deterministic ground truth.
+
+    Combined with ``verify_report``, both existence AND content-checking are
+    sealed. NEVER uses an LLM — pure deterministic Python.
+
+    Rule: a path that is on disk is accepted even if never read (real but
+    unread → not a failure). A path NOT on disk AND not present in any evidence
+    raw_output is a HARD FAILURE (the file cannot exist in the project).
+    """
+    if workspace_root is None:
+        workspace_root = get_workspace_root()
+    root = Path(workspace_root).resolve()
+
+    # Collect evidence raw outputs once for the existing-check fallback.
+    raw_outputs = ""
+    if evidence_log is not None:
+        try:
+            records = evidence_log.get_records()
+            raw_outputs = " ".join(
+                getattr(r, "raw_output", getattr(r, "output_snippet", "")) for r in records
+            )
+        except Exception:
+            raw_outputs = ""
+
+    unsupported: List[str] = []
+
+    for token in _PATH_CLAIM_RE.findall(report_text or ""):
+        # Skip version strings (e.g. "1.2" from "python3 -c") and URLs.
+        if _VERSION_RE.match(token) or _URL_RE.search(token):
+            continue
+        # Existing evidence check: if it literally appears in a tool output,
+        # treat as supported (keeps the prior behavior intact).
+        if raw_outputs and token in raw_outputs:
+            continue
+        # Resolve relative to the workspace root and check disk ground truth.
+        candidate = Path(token)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            on_disk = candidate.exists()
+        except OSError:
+            on_disk = False
+        if not on_disk and token not in raw_outputs:
+            unsupported.append(f"Unsupported path (not on disk): {token}")
+
+    passed = len(unsupported) == 0
+    return VerificationResult(
+        passed=passed,
+        unsupported_claims=unsupported,
+        details="All path claims exist on disk or in evidence." if passed
+        else f"{len(unsupported)} path claim(s) not found on disk or in evidence.",
+    )

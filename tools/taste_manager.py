@@ -8,7 +8,7 @@ corrections or instructions from the user.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Final, Optional
+from typing import Any, Final, Optional
 
 try:
     from pydantic import BaseModel, Field
@@ -51,7 +51,7 @@ class TasteManagerTool(BaseTool):
         super().__init__()
         self.taste_engine = taste_engine or TasteEngine(workspace_dir=workspace)
 
-    def forward(self, action: str, category: Optional[str] = None, rule: Optional[str] = None) -> str:
+    def forward(self, action: str, category: Optional[str] = None, rule: Optional[str] = None, **kwargs: Any) -> str:
         """Smolagents and direct execution entry point."""
         profile = self.taste_engine.load_profile()
 

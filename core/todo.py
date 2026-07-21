@@ -149,7 +149,12 @@ class TodoManager:
         for item in self._items:
             if item.id == item_id:
                 return item
-        raise KeyError(f"TODO item #{item_id} not found")
+        raise KeyError(
+            f"TODO item #{item_id} not found. "
+            f"You must call todo_write(action='plan', items=[...]) "
+            f"before using action='update'. "
+            f"Current items: {len(self._items)}"
+        )
 
     def all(self) -> List[TodoItem]:
         return list(self._items)

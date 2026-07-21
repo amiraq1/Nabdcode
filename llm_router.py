@@ -186,6 +186,83 @@ class ProviderRouter:
                     continue
                 continue
         raise RuntimeError(f"All failed: {str(last) if last is not None else 'no providers attempted'}")
+    def generate_token_stream(self, messages, logger=None, **kwargs):
+        """Yield individual token deltas from the best available provider.
+
+        Uses ``client.stream()`` when available (token-level SSE). Falls back to
+        yielding the full response as a single delta. Follows the same
+        provider-priority / cooldown / failover pattern as ``generate_stream()``.
+        """
+        available = self._sorted()
+        if not available:
+            # Mirror the actionable "all unavailable" messaging from
+            # generate_stream() so operators get a clear reason instead of a
+            # bare RuntimeError.
+            disabled = [p.name for p in self.providers if not p.enabled]
+            cooled = [
+                p.name for p in self.providers
+                if p.enabled and time.time() < p.cooldown_until
+            ]
+            if disabled:
+                detail = (
+                    f"all providers disabled (model-not-found or config error): "
+                    f"{', '.join(disabled)}"
+                )
+            elif cooled:
+                detail = (
+                    f"all providers on cooldown (retry after "
+                    f"{max(int(p.cooldown_until - time.time()) for p in self.providers if p.enabled)}s): "
+                    f"{', '.join(cooled)}"
+                )
+            else:
+                detail = "no providers configured"
+            raise RuntimeError(f"All failed: {detail}")
+        for p in available:
+            try:
+                if hasattr(p.client, "stream"):
+                    gen = p.client.stream(messages, **kwargs)
+                    for delta in gen:
+                        yield delta
+                    p.record_success()
+                    return  # streaming succeeded
+                else:
+                    # Client doesn't support streaming — yield full response as one chunk
+                    res = p.client.generate_response(messages, **kwargs)
+                    yield {"content": res}
+                    p.record_success()
+                    return
+            except Exception as e:
+                rate = is_rate_limit(e)
+                nf = is_not_found(e)
+                p.record_failure(rate=rate, notfound=nf)
+                log_msg = f"[Stream] Provider '{p.name}' failed: {e}"
+                if logger is not None:
+                    logger.warning(log_msg)
+                    flush = getattr(logger, "flush", None)
+                    if callable(flush):
+                        try:
+                            flush()
+                        except Exception:
+                            pass
+                else:
+                    import logging as _logging
+                    _logging.warning(log_msg)
+                continue
+        # All providers failed — raise the last error
+        raise RuntimeError("All providers failed for streaming")
+
+    def cheapest_model(self) -> str:
+        """Return the lowest-priority (cheapest) model name.
+
+        Used by the subagent ``task`` tool to delegate work to a cheaper
+        model. Prefers the lowest-priority configured provider; falls back to
+        the last ``FALLBACK_MODELS`` entry when no providers are registered.
+        """
+        if not self.providers:
+            return FALLBACK_MODELS[-1]
+        last = sorted(self.providers, key=lambda p: p.priority)[-1]
+        return getattr(last.client, "model", None) or FALLBACK_MODELS[-1]
+
     def generate_response(self, m, logger=None, **kwargs):
         return "".join(self.generate_stream(m, logger=logger, **kwargs))
 
@@ -332,3 +409,73 @@ def run_verifier_check(
     # Force deterministic, strict judgment regardless of caller kwargs.
     kwargs["temperature"] = 0
     return verifier_router.generate_response(messages, logger=logger, **kwargs)
+
+
+class LiteLLMModel:
+    """LiteLLM model wrapper compatible with Nabd Agent OS."""
+    def __init__(self, model_id: str = "gemini/gemini-1.5-pro", **kwargs: Any) -> None:
+        self.model_id = model_id
+        self.kwargs = kwargs
+        self._nvidia_client = None
+        self._openrouter_client = None
+
+    def _get_nvidia(self):
+        if self._nvidia_client is None:
+            if NvidiaClient is not None:
+                self._nvidia_client = NvidiaClient()
+            else:
+                from core.llm import NvidiaClient as NV
+                self._nvidia_client = NV()
+        return self._nvidia_client
+
+    def generate(self, task: str, **kwargs: Any) -> str:
+        """Generate a response using the real LLM router."""
+        if not task or not task.strip():
+            return ""
+        messages = [
+            {"role": "system", "content": "You are a precise code and system analysis assistant. Read the user's request carefully and respond with a thorough analysis, using evidence from the available tools."},
+            {"role": "user", "content": task},
+        ]
+        return self.chat(messages)
+
+    def chat(self, messages: list[dict[str, Any]]) -> str:
+        """Send a structured chat conversation to the LLM and return the response.
+
+        Tries NVIDIA first (confirmed working), falls back to ProviderRouter chain.
+        """
+        if not messages:
+            return ""
+        errors = []
+
+        # Convert tool messages to user messages for NVIDIA compatibility
+        adapted = []
+        for m in messages:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            if role == "tool":
+                adapted.append({"role": "user", "content": f"[Tool Result]\n{str(content)[:4000]}"})
+            elif role == "assistant":
+                adapted.append({"role": "assistant", "content": str(content)[:2000]})
+            elif role in ("system", "user"):
+                adapted.append({"role": role, "content": str(content)[:4000]})
+
+        # Try NVIDIA first
+        try:
+            nv = self._get_nvidia()
+            return nv.generate_response(adapted)
+        except Exception as exc:
+            errors.append(f"NVIDIA: {exc}")
+            if logger is not None:
+                logger.warning(f"NVIDIA failed, falling back to router: {exc}")
+
+        # Fallback: ProviderRouter (OpenRouter chain)
+        try:
+            return execute_agent_with_memory(messages)
+        except Exception as exc:
+            errors.append(f"Router: {exc}")
+            raise RuntimeError(f"All LLM backends failed: {'; '.join(errors)}")
+
+
+def get_secure_model(model_id: str = "gemini/gemini-1.5-pro") -> Any:
+    """Return a secure model instance for agent initialization."""
+    return LiteLLMModel(model_id=model_id)

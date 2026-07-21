@@ -89,13 +89,20 @@ class SSEStreamConsumer:
         self.reasoning_buffer = ""
         self.text_buffer = ""
 
-    def _finalize_reasoning(self):
-        """State Lock Guard: Flushes and seals reasoning before transitioning state."""
+    def finalize_reasoning(self) -> None:
+        """Flushes and surfaces buffered reasoning when triggered or transitioning state."""
         if self.state == StreamState.REASONING:
             if self.reasoning_buffer.strip():
                 clean_thought = sanitize(self.reasoning_buffer.strip())
-                get_bridge().on_agent_thought(clean_thought)
+                if self._custom_on_reasoning:
+                    self._custom_on_reasoning(clean_thought)
+                else:
+                    get_bridge().on_agent_thought(clean_thought)
             self.state = StreamState.IDLE
+
+    def _finalize_reasoning(self) -> None:
+        """State Lock Guard: internal alias for finalize_reasoning."""
+        self.finalize_reasoning()
 
     def process_line(self, line: str) -> bool:
         """
@@ -110,7 +117,7 @@ class SSEStreamConsumer:
             payload_str = line[len("data: "):].strip()
 
         if payload_str == "[DONE]":
-            self._finalize_reasoning()
+            self.finalize_reasoning()
             self.state = StreamState.COMPLETED
             return True
 
@@ -146,29 +153,26 @@ class SSEStreamConsumer:
                 self.state = StreamState.REASONING
             self.reasoning_buffer += reasoning_delta
 
-            if self.interleaved_thinking:
-                if self._custom_on_reasoning:
-                    self._custom_on_reasoning(reasoning_delta)
-                else:
-                    get_bridge().on_status_changed(f"✽ Thinking: {reasoning_delta[:50]}...")
+            if self.interleaved_thinking and not self._custom_on_reasoning:
+                get_bridge().on_status_changed(sanitize(f"✽ Thinking: {reasoning_delta[:50]}..."))
 
         # Extract normal text delta
         text_delta = delta.get("content")
         if text_delta:
             # Transition out of reasoning if needed
-            self._finalize_reasoning()
+            self.finalize_reasoning()
             self.state = StreamState.TEXT
             self.text_buffer += text_delta
 
             if self._custom_on_text:
-                self._custom_on_text(text_delta)
+                self._custom_on_text(sanitize(text_delta))
             else:
-                get_bridge().on_status_changed("🟢 Streaming Response...")
+                get_bridge().on_status_changed(sanitize("🟢 Streaming Response..."))
 
         # Check finish reason
         finish_reason = choice.get("finish_reason")
         if finish_reason:
-            self._finalize_reasoning()
+            self.finalize_reasoning()
             self.state = StreamState.COMPLETED
             return True
 
@@ -182,10 +186,10 @@ class SSEStreamConsumer:
                 return True
         return False
 
-    def finish_stream(self):
+    def finish_stream(self) -> None:
         """Flush remaining reassembly buffer at end of connection."""
         remaining_line = self.reassembler.flush()
         if remaining_line:
             self.process_line(remaining_line)
-        self._finalize_reasoning()
+        self.finalize_reasoning()
         self.state = StreamState.COMPLETED

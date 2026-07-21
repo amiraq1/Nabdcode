@@ -31,7 +31,7 @@ def bg(*rgb: int) -> str:
 
 # ── Palette ─────────────────────────────────────────────────────────────────
 P: dict[str, tuple[int, int, int]] = {
-    "badge_bg":     (124, 58, 237),    # violet
+    "badge_bg":     (8, 145, 178),     # ice blue / teal (#0891B2)
     "badge_fg":     (255, 255, 255),
     "path":         (180, 180, 190),
     "meta":         (120, 120, 130),
@@ -147,7 +147,7 @@ def map_tool_to_badge(tool_name: str, args: Optional[dict[str, Any]] = None) -> 
     t = (tool_name or "").lower()
     if t in ("file_system", "file") and args:
         action = str(args.get("action", "")).lower()
-        if action in ("write", "append", "replace", "patch"):
+        if action in ("edit", "write", "append", "replace", "patch"):
             return "EDIT"
         if action in ("read",):
             return "READ"

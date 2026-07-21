@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import select
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 # Phase2.1: sentinel returned by request_user_input when the non-blocking
 # stdin select() times out. It is not "y"/"yes", so every caller that
@@ -29,7 +29,27 @@ _TIMEOUT_REPLY = "__TIMEOUT__"
 from core.agent_observer import AgentObserver
 
 
-class UIBridge:
+@runtime_checkable
+class UIBridgeProtocol(Protocol):
+    """Protocol contract for the process-wide UI bridge."""
+    def on_agent_thought(self, text: str, **kwargs: Any) -> None: ...
+    def tool_started(self, tool_name: str, **kwargs: Any) -> None: ...
+    def tool_completed(self, tool_name: str, ok: bool = True, **kwargs: Any) -> None: ...
+    def edit_proposed(self, file: str, diff: str = "", additions: int = 0, removals: int = 0, **kwargs: Any) -> None: ...
+    def status_update(self, **kwargs: Any) -> None: ...
+    def on_action_triggered(self, action_type: str, target: str, meta: str = "") -> None: ...
+    def on_status_changed(self, status_text: str) -> None: ...
+    def on_file_modified(self, diff_content: str) -> None: ...
+    def on_plan_updated(self, todos: List[Dict[str, Any]]) -> None: ...
+    def request_user_input(self, prompt: str, timeout: float | None = None) -> str: ...
+    def request_user_confirmation(self, prompt: str, timeout: float | None = None) -> bool: ...
+    def emit(self, event_name: str, **kwargs: Any) -> None: ...
+    def add_observer(self, observer: AgentObserver) -> None: ...
+    def remove_observer(self, observer: AgentObserver) -> None: ...
+
+
+@runtime_checkable
+class UIBridge(Protocol):
     """Abstract & Async UI bridge (Event Bus + Observer Adapter).
 
     Two responsibilities, cleanly separated:
@@ -38,6 +58,11 @@ class UIBridge:
       2. Sync Observer Adapter (on_*) that fans out to registered
          AgentObserver subscribers behind a fail-safe wrapper.
     """
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> Any:
+        if cls is UIBridge or cls is UIBridgeProtocol:
+            return object.__new__(NoOpUIBridge)
+        return super().__new__(cls)
 
     def __init__(self) -> None:
         # Queue and observer list are typed lazily to avoid nested
@@ -317,6 +342,11 @@ class UIBridge:
         return reply in ("y", "yes")
 
 
+class NoOpUIBridge(UIBridge):
+    """Concrete no-op UI bridge implementation that satisfies UIBridge protocol."""
+    pass
+
+
 _TIMEOUT_REPLY = "__TIMEOUT__"
 
 # Process-wide default bridge (no-op). Replaced by the wiring layer.
@@ -324,10 +354,14 @@ _DEFAULT_BRIDGE: UIBridge = UIBridge()
 
 
 def get_bridge() -> UIBridge:
+    """Return the process-wide UI bridge. Guaranteed never to return None."""
+    global _DEFAULT_BRIDGE
+    if _DEFAULT_BRIDGE is None:
+        _DEFAULT_BRIDGE = UIBridge()
     return _DEFAULT_BRIDGE
 
 
-def set_bridge(bridge: Optional[UIBridge]) -> None:
+def set_bridge(bridge: Optional[UIBridge | UIBridgeProtocol]) -> None:
     """Inject the concrete UI bridge. Pass None to reset to the no-op default."""
     global _DEFAULT_BRIDGE
     _DEFAULT_BRIDGE = bridge if bridge is not None else UIBridge()

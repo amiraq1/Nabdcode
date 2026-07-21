@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Final, Optional
+from typing import Any, Final, Optional
 
 from core.kernel.subprocess_guard import default_guard
 
@@ -54,7 +54,7 @@ class GraphifyTool(BaseTool):
         path_arg = workspace or workspace_dir or kwargs.get("workspace") or kwargs.get("workspace_dir") or "."
         self.workspace_dir = str(Path(path_arg).resolve())
 
-    def forward(self, action: str, target: Optional[str] = None, target_b: Optional[str] = None) -> str:
+    def forward(self, action: str, target: Optional[str] = None, target_b: Optional[str] = None, **kwargs: Any) -> str:
         """Smolagents and direct execution entry point."""
         graph_dir = os.path.join(self.workspace_dir, "graphify-out")
         if action != "update" and not os.path.exists(graph_dir):

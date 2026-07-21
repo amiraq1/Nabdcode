@@ -4,6 +4,7 @@ Extracted from engine/loop.py (refactor step5-b).
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Final, Optional
 
@@ -16,6 +17,7 @@ from core.prompts import (
     BROWSER_FEWSHOT_EXAMPLES,
     FALLBACK_RESTRICTED_PROMPT,
     CRITICAL_RULES_FOR_TOOL_CALLING,
+    REPO_SCAN_EXAMPLE,
 )
 from core.investigation import build_investigation_protocol_prompt
 from engine._loop_types import (
@@ -227,7 +229,7 @@ class _ContextMixin:
         # run() (see _build_static_context), instead of re-read from disk here.
         # Lazily build it if absent (e.g. when _inject_runtime_context is called
         # standalone, outside run()) so behavior matches the original per-call
-        from engine.loop import _prompt_requires_investigation, _has_active_goal
+        from engine._loop_helpers import _prompt_requires_investigation, _has_active_goal
         # path; in run() the cache is populated once and reused here.
         if self._static_context_cache is None:
             self._static_context_cache = self._build_static_context()
@@ -342,6 +344,15 @@ class _ContextMixin:
             system_content += f"\n\n{TOOL_FEWSHOT_FALLBACK}"
         else:
             system_content += f"\n\n{CRITICAL_RULES_FOR_TOOL_CALLING}"
+
+        # Phase 9 (Repo Scan Recovery): when the user asks to scan / inspect the
+        # repository architecture, inject a few-shot that forces ≥3 reads and an
+        # explicit "File not found" recovery path. This is query-conditional so
+        # it never bloats non-scan prompts. Does NOT relax the convergence gate.
+        _repo_scan_keywords = ["فحص", "مستودع", "scan", "repository", "هيكل", "architecture", "معمارية"]
+        _query_for_scan = user_msg or (getattr(self._ctx, "user_prompt", "") if getattr(self, "_ctx", None) else "")
+        if _query_for_scan and any(kw in _query_for_scan.lower() for kw in _repo_scan_keywords):
+            system_content += f"\n\n{REPO_SCAN_EXAMPLE}"
 
         # Phase 7 (Tool Visibility): explicitly list all available tools with
         # their parameters so the model knows what it CAN call. Without this,

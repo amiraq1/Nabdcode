@@ -2,8 +2,12 @@
 import math
 import re
 from collections import Counter
-from typing import List, Tuple
-from core.storage import MemoryChunk
+from typing import List, Tuple, TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.storage import MemoryChunk
+else:
+    MemoryChunk = Any
 
 
 class TfIdfIndex:

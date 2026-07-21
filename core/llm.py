@@ -273,6 +273,99 @@ class OpenRouterClient:
                 raise OpenRouterError(str(e.reason))
         raise OpenRouterError("Maximum retries exceeded.")
 
+    @staticmethod
+    def _extract_content_delta(event: dict[str, Any]) -> dict[str, Any] | None:
+        """Extract ``{"content": str}`` from an OpenAI-format streaming event.
+
+        Returns the delta dict for content (or tool_calls) tokens, or ``None``
+        when the event carries no renderable delta (e.g. role/empty deltas).
+        Never raises — malformed events are treated as "no delta".
+        """
+        try:
+            delta = event["choices"][0]["delta"]
+            if "content" in delta and delta["content"]:
+                return {"content": delta["content"]}
+            if "tool_calls" in delta:
+                return {"tool_calls": delta["tool_calls"]}
+        except (KeyError, IndexError, TypeError):
+            pass
+        return None
+
+    def stream(
+        self,
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> Generator[dict[str, Any], None, str]:
+        """Stream response from OpenRouter using SSE (token-level).
+
+        Yields parsed delta dicts as they arrive::
+
+            {"content": "Hel"}, {"content": "lo"}, ...
+
+        After the SSE stream ends (``data: [DONE]``), RETURNS the fully assembled
+        response text (matching ``generate_response()``'s return shape). On a
+        transport/HTTP error, raises ``OpenRouterError`` (parent of the typed
+        HTTPError subclasses) so the caller's failover path applies unchanged.
+
+        Uses ``urllib.request`` with the raw response body iterated in chunks —
+        ``SSELineReader`` assembles lines; we never call ``.read()`` wholesale.
+        """
+        from core.sse import SSELineReader
+
+        payload = self._payload(messages, **kwargs)
+        payload["stream"] = True
+        body = json.dumps(payload).encode()
+        request = urllib.request.Request(
+            self.base_url,
+            headers=self.headers,
+            data=body,
+            method="POST",
+        )
+        assembled: list[str] = []
+        for attempt in range(self.config.max_retries):
+            try:
+                with urllib.request.urlopen(request, timeout=self.config.timeout) as response:
+                    # Cancellation: the worker thread checks the shared token
+                    # before each 4KB chunk so a Ctrl+C / /cancel is honored
+                    # mid-stream instead of blocking until the response ends.
+                    from core.cancellation import CancelToken
+
+                    def _read_chunk(size: int = 4096) -> bytes:
+                        if CancelToken().is_cancelled():
+                            response.close()
+                            raise StopIteration
+                        return response.read(size)
+
+                    reader = SSELineReader(iter(_read_chunk, b""))
+                    for event in reader:
+                        delta = self._extract_content_delta(event)
+                        if delta is not None and "content" in delta:
+                            assembled.append(delta["content"])
+                    if CancelToken().is_cancelled():
+                        return "".join(assembled)
+                return "".join(assembled)
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8", "ignore")
+                if e.code == 401:
+                    raise AuthenticationError(err_body)
+                if e.code == 429:
+                    if attempt + 1 < self.config.max_retries:
+                        time.sleep(1)
+                        continue
+                    raise RateLimitError(err_body)
+                if e.code >= 500:
+                    if attempt + 1 < self.config.max_retries:
+                        time.sleep(1)
+                        continue
+                    raise ServerError(err_body)
+                raise OpenRouterError(err_body)
+            except urllib.error.URLError as e:
+                if attempt + 1 < self.config.max_retries:
+                    time.sleep(1)
+                    continue
+                raise OpenRouterError(str(e.reason))
+        raise OpenRouterError("Maximum retries exceeded.")
+
 
 # ── Local (in-process) client ──────────────────────────────────────────────
 
@@ -514,11 +607,4 @@ def get_llm_client(provider: str = "openrouter", **kwargs: Any) -> OpenRouterCli
     elif provider == "orcarouter":
         logger.debug("Constructing lazy OrcaRouterClient.")
         return OrcaRouterClient(**kwargs)
-    logger.debug("Constructing lazy OpenRouterClient.")
     return OpenRouterClient(**kwargs)
-
-
-def get_secure_model(model_id: str = "gemini/gemini-1.5-pro") -> Any:
-    """Return a secure model instance for agent initialization."""
-    from smolagents import LiteLLMModel
-    return LiteLLMModel(model_id=model_id)

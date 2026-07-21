@@ -157,6 +157,19 @@ class ASTForensicVisitor(ast.NodeVisitor):
             self.imported_symbols[asname] = full_name
         self.generic_visit(node)
 
+    def visit_If(self, node: ast.If) -> None:
+        is_type_checking = False
+        if isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
+            is_type_checking = True
+        elif isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING":
+            is_type_checking = True
+
+        if is_type_checking:
+            for item in node.orelse:
+                self.visit(item)
+            return
+        self.generic_visit(node)
+
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         old_class = self.current_class
         self.current_class = node.name
@@ -401,12 +414,14 @@ class DependencyAnalyzer:
         mod_names = {dna.module_name: path for path, dna in self.modules.items()}
         for path, dna in self.modules.items():
             for imp in dna.imports:
-                target_mod = imp.split(".")[0]
-                # Match internal project modules
-                for known_mod in mod_names:
-                    if imp == known_mod or imp.startswith(f"{known_mod}."):
-                        self.import_graph[path].add(mod_names[known_mod])
-                        self.reverse_graph[mod_names[known_mod]].add(path)
+                if imp in mod_names:
+                    self.import_graph[path].add(mod_names[imp])
+                    self.reverse_graph[mod_names[imp]].add(path)
+                else:
+                    for known_mod in mod_names:
+                        if imp.startswith(f"{known_mod}."):
+                            self.import_graph[path].add(mod_names[known_mod])
+                            self.reverse_graph[mod_names[known_mod]].add(path)
 
     def find_circular_dependencies(self) -> List[List[str]]:
         # Tarjan's Strongly Connected Components (SCC)
@@ -623,7 +638,11 @@ class QualityScoreEngine:
 # =============================================================================
 
 class PrincipalDNAForensicEngine:
-    EXCLUDED_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "build", "dist"}
+    EXCLUDED_DIRS = {
+        ".git", "node_modules", "__pycache__", ".venv", "venv", "build", "dist",
+        ".test_scratch", ".cache", ".commandcode", ".nabd", ".pytest_cache",
+        "graphify-out", "nabd_os.egg-info", "nabdcode.egg-info",
+    }
 
     def __init__(self, root_dir: Path) -> None:
         self.root_dir = root_dir.resolve()
@@ -636,8 +655,12 @@ class PrincipalDNAForensicEngine:
 
     def scan_repository(self) -> None:
         for py_path in sorted(self.root_dir.rglob("*.py")):
-            rel_parts = set(py_path.relative_to(self.root_dir).parts)
-            if self.EXCLUDED_DIRS.intersection(rel_parts):
+            rel_parts = py_path.relative_to(self.root_dir).parts
+            if (
+                any(part.startswith(".") and part != "." for part in rel_parts[:-1])
+                or any(part.endswith(".egg-info") for part in rel_parts[:-1])
+                or self.EXCLUDED_DIRS.intersection(rel_parts)
+            ):
                 self.skipped_count += 1
                 continue
 

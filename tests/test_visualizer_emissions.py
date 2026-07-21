@@ -86,6 +86,14 @@ class TestAgentHandoffEmission(unittest.TestCase):
 
 
 class TestToolAuthViolationEmission(unittest.TestCase):
+    def setUp(self):
+        try:
+            from engine.tool_registry import registry
+            from tools.shell import ShellTool
+            registry.register(ShellTool())
+        except ValueError:
+            pass
+
     def test_unsafe_shell_command_emits_auth_violation(self):
         """When is_safe_command rejects an execute_shell command, the loop must
         emit tool_auth_violation with role/tool/error."""

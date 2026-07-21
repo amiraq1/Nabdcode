@@ -128,10 +128,13 @@ class GitPushTool(BaseTool):
                     returncode=1,
                     status="error",
                 )
-        except Exception:
-            # inspector.inspect_workspace() may not exist as a method;
-            # fall through to the normal push path silently.
-            pass
+        except Exception as exc:
+            return ToolResult(
+                success=False,
+                stderr=f"Git push blocked: secure workspace inspection encountered an error ({exc}).",
+                returncode=1,
+                status="error",
+            )
 
         # 2. Validate git arguments format
         if not GIT_ARG_VALIDATOR.match(remote) or not GIT_ARG_VALIDATOR.match(branch):

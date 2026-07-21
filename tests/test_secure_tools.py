@@ -116,6 +116,20 @@ class TestSecureGitInspector(unittest.TestCase):
         result = self.inspector.forward("status")
         self.assertIn("timed out", result)
 
+    def test_inspect_workspace_safe(self):
+        is_safe, reason = self.inspector.inspect_workspace()
+        self.assertTrue(is_safe)
+        self.assertFalse(reason.startswith("Security Violation"))
+        self.assertFalse(reason.startswith("Error:"))
+
+    def test_inspect_workspace_unsafe_non_git(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            inspector = SecureGitInspector(repo_path=tmp_dir)
+            is_safe, reason = inspector.inspect_workspace()
+            self.assertFalse(is_safe)
+            self.assertIn("not a Git repository", reason)
+
+
 
 class TestSecureTestRunner(unittest.TestCase):
     def setUp(self):

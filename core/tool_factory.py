@@ -11,6 +11,8 @@ each skill before invocation, so skills can self-adapt without importing core.
 
 from typing import Any, Dict, List, Optional
 
+import inspect
+
 from smolagents import Tool
 
 from skills import load_skills
@@ -131,7 +133,6 @@ def discover_tools(app_context: "Any") -> dict[str, Any]:
     The caller registers the result and keeps the manual block as fallback.
     """
     import importlib
-    import inspect
     import pkgutil
 
     import tools as _tools_pkg

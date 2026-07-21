@@ -6,6 +6,7 @@ CRITICAL: _emit_final is the single choke point for ALL terminations.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from typing import TYPE_CHECKING
@@ -350,7 +351,7 @@ class _ConvergenceMixin:
 
         Returns True if emitted, False if rejected (caller should continue loop).
         """
-        from engine.loop import (
+        from engine._loop_helpers import (
             _looks_like_tool_call,
             _prompt_requires_investigation,
             _has_active_goal,
@@ -447,6 +448,60 @@ class _ConvergenceMixin:
             else:
                 # No investigation needed (chitchat): reset force_tool.
                 self._force_tool = False
+
+        # ── Path-Claim Disk Backstop (P0 fix: close the hallucinated-path bypass) ──
+        # Deterministic, non-LLM. Catches fabricated file/symbol claims like
+        # "engine/personas.py" or "tools/handoff.py" that pass the read-count
+        # gate because the agent read >=3 unrelated files. Runs for EVERY final
+        # answer that reached this choke point (investigation OR chitchat).
+        # Note: chitchat usually has no path claims → passes vacuously.
+        from core.verifier import check_path_existence_claim
+
+        _disk_result = check_path_existence_claim(
+            output or "", None, self.evidence_log
+        )
+        if not _disk_result.passed:
+            self._path_rejection_count = getattr(self, "_path_rejection_count", 0) + 1
+            _unsupported = _disk_result.unsupported_claims
+            if self._path_rejection_count <= 3:
+                control_msg = (
+                    "[CONTROL] Your final answer contains claims that cannot be "
+                    "verified against the filesystem:\n"
+                    + "\n".join(f"  • {u}" for u in _unsupported)
+                    + "\nRemove these claims or read the actual files and retry."
+                )
+                self._force_tool = True
+                self.state.append_message({"role": "user", "content": control_msg})
+                self.state.increment_step()
+                return False
+            # Max retries — emit with visible [UNVERIFIED] markers, never silently.
+            output = output or ""
+            for u in _unsupported:
+                _tok = u.replace("Unsupported path (not on disk): ", "")
+                if _tok in output:
+                    output = output.replace(_tok, f"[UNVERIFIED] {_tok}")
+
+        # ── Graphify telemetry (P4, optional) ─────────────────────────────
+        # AGENT.md policy: when graphify-out/graph.json exists, architecture-class
+        # final answers MUST be grounded via graphify_tool first. Emit a WARNING
+        # (never blocks) if an architecture answer ships with zero graphify calls
+        # in evidence while the graph is present. No-op when the graph is absent.
+        try:
+            from pathlib import Path as _Path
+            _graph = _Path.cwd() / "graphify-out" / "graph.json"
+            if _graph.exists():
+                _used_graphify = any(
+                    getattr(r, "tool", "") in ("graphify", "graphify_tool")
+                    for r in (self.evidence_log.get_records() if self.evidence_log else [])
+                )
+                if not _used_graphify:
+                    logging.warning(
+                        "ARCHITECTURE FINAL emitted with 0 graphify_tool calls "
+                        "while graphify-out/graph.json exists — AGENT.md graphify "
+                        "policy was bypassed for this answer."
+                    )
+        except Exception:
+            pass
 
         # ── Normal emit path ──────────────────────────────────────────────
         self.state.update_status("COMPLETED")

@@ -21,6 +21,7 @@ from core.storage import MemoryManager, SessionManager, UnifiedStorage
 from core.adapters import _KernelSecurityEngine
 from core.parser import pin_workspace_root
 from core.todo import TodoManager
+from core.snapshot import SnapshotEngine
 from engine.renderer import Renderer
 from engine.tool_registry import registry
 from tools import ShellTool, FileSystemTool, WebSearchTool, SearchMemoryTool, RagSearchTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool, GraphifyTool, GraphIntelTool
@@ -40,11 +41,18 @@ class AppContext:
     memory_manager: MemoryManager
     todo_manager: TodoManager
     evidence_log: EvidenceLog
+    snapshot_engine: SnapshotEngine
     storage: Optional[UnifiedStorage] = None
 
     @classmethod
-    def build(cls) -> AppContext:
-        """Create and wire every singleton. Register cleanup handlers."""
+    def build(cls, auto_discover: bool = True) -> AppContext:
+        """Create and wire every singleton. Register cleanup handlers.
+
+        Args:
+            auto_discover: When True (default), auto-discover new BaseTool
+                subclasses in tools/ after the manual registration block.
+                Pass False to disable discovery (manual block only).
+        """
         config = AgentConfig()
         pin_workspace_root(config.workspace_root)
         storage = UnifiedStorage(root_dir=Path(config.root_dir))
@@ -56,6 +64,9 @@ class AppContext:
         logger = Logger(log_dir=config.log_dir)
         metrics = MetricsEngine()
         renderer = Renderer()
+
+        # ── Snapshot engine (pre-write backups, enables /undo) ───────────
+        snapshot_engine = SnapshotEngine(workspace_root=config.workspace_root)
 
         # Register all tools
         _security_engine = _KernelSecurityEngine()
@@ -72,8 +83,10 @@ class AppContext:
             _tool_classes.append(GraphifyTool)
         for tool_cls in _tool_classes:
             tool = (
-                tool_cls(workspace=config.root_dir)
-                if tool_cls in (FileSystemTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool, GraphifyTool)
+                tool_cls(workspace=config.root_dir, snapshot_engine=snapshot_engine)
+                if tool_cls is FileSystemTool
+                else tool_cls(workspace=config.root_dir)
+                if tool_cls in (CodeIntelligenceTool, PythonREPLTool, TasteManagerTool, GraphifyTool)
                 else SearchMemoryTool(memory_manager=memory_mgr)
                 if tool_cls is SearchMemoryTool
                 else TodoWriteTool(todo_manager=todo_manager)
@@ -113,12 +126,26 @@ class AppContext:
             memory_manager=memory_mgr,
             todo_manager=todo_manager,
             evidence_log=evidence_log,
+            snapshot_engine=snapshot_engine,
             storage=storage,
         )
 
         atexit.register(renderer.shutdown)
         atexit.register(logger.shutdown)
         atexit.register(storage.close)
+
+        # ── Subagent delegation tool (task) ──────────────────────────────
+        # Registers as "task". It lazily resolves the live router at call time
+        # (avoids an import-order cycle with llm_router at build()). The bare
+        # name "task" is what the dispatcher short-circuits on. Fail-open so a
+        # broken import never breaks agent boot.
+        try:
+            from tools.task_tool import TaskTool
+
+            if "task" not in registry:
+                registry.register("task", TaskTool(app_context=ctx))
+        except Exception as _task_exc:  # fail-open
+            print(f"⚠️ [task tool] registration skipped: {_task_exc}")
 
         return ctx
 

@@ -18,7 +18,7 @@ from tools.secure_tools import (
     SecureTasteManagerTool,
     SecureGraphifyTool,
 )
-from core.llm import get_secure_model
+from llm_router import get_secure_model
 from core.parser import pin_workspace_root
 from core.repo_scanner import SECURE_REPO_SCANNER
 from core.adapters import _KernelSecurityEngine

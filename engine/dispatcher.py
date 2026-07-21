@@ -51,6 +51,40 @@ class Dispatcher:
             bus.emit("tool_failed", {"tool": tool_name, "error": error_msg})
             return ToolResult(success=False, stderr=error_msg, returncode=-1, status="error")
 
+        # ── Subagent delegation short-circuit ────────────────────────────
+        # The "task" tool spawns its OWN daemon thread (SubagentRunner) with a
+        # timeout, so it must NOT consume a slot in the dispatcher's bounded
+        # worker pool. Handle it directly and bypass admission control entirely.
+        # The sub-loop runs in quiet mode (_no_stream=True), so it never
+        # pollutes the parent's display. Any exception is caught and returned
+        # as a ToolResult rather than escaping into the parent loop.
+        if tool_name == "task":
+            try:
+                result = tool(**kwargs)
+            except Exception as exc:
+                result = ToolResult(
+                    success=False,
+                    stderr=f"task sub-agent failed: {exc}",
+                    returncode=-1,
+                    status="error",
+                )
+            if not isinstance(result, ToolResult):
+                result = ToolResult(
+                    success=True, stdout=str(result), returncode=0, status="success"
+                )
+            bus.emit(
+                "tool_completed",
+                {
+                    "tool": tool_name,
+                    "result": result,
+                    "success": result.success,
+                    "returncode": result.returncode,
+                    "diff": result.diff,
+                    "step": self.state.step_count,
+                },
+            )
+            return result
+
         # 2. Admission control: acquire semaphore before submitting.
         # If all workers are busy, we block here rather than letting the
         # executor's internal queue grow unbounded.

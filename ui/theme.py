@@ -33,15 +33,18 @@ COLORS: Dict[str, str] = {
 }
 
 ACTION_COLORS: Dict[str, str] = {
-    "READ": "#5945B1",        # --purple
-    "EDIT": "#5945B1",        # --purple
-    "SHELL": "#5945B1",       # --purple
-    "SEARCH": "#5945B1",      # --purple
-    "TODOS": "#5945B1",       # --purple
-    "EXPLORE": "#5945B1",     # --purple
+    "READ": "#0891B2",        # ice blue / teal (cyan-600)
+    "EDIT": "#0891B2",        # ice blue / teal
+    "SHELL": "#0891B2",       # ice blue / teal
+    "SEARCH": "#0891B2",      # ice blue / teal
+    "TODOS": "#0891B2",       # ice blue / teal
+    "EXPLORE": "#0891B2",     # ice blue / teal
+    "GIT": "#059669", # dark green / emerald
+    "FINAL ANSWER": "#7C3AED", # violet / purple
+    "WARNING": "#D97706",     # orange
     "THINKING": "#6943FF",    # --agent-violet
     "KILL(shell)": "#5C0112", # --diff-del-bg
-    "USER": "#3ecf8e",        # --success
+    "USER": "#0891B2",        # ice blue / teal
     "SYSTEM": "#9d8cff",      # --accent-violet
 }
 

@@ -17,84 +17,8 @@ logger = logging.getLogger("smolagents")
 _MAX_RESPONSE_CHARS = 4000
 
 
-class Tool:
-    """Base class for smolagents Tool wrapper."""
-    name: str = ""
-    description: str = ""
-    inputs: Dict[str, Any] = {}
-    output_type: str = "string"
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        pass
-
-    def forward(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError
-
-
-from smolagents.tools import FinalAnswerTool
-
-
-class LiteLLMModel:
-    """LiteLLM model wrapper compatible with Nabd Agent OS."""
-    def __init__(self, model_id: str = "gemini/gemini-1.5-pro", **kwargs: Any) -> None:
-        self.model_id = model_id
-        self.kwargs = kwargs
-        self._nvidia_client = None
-        self._openrouter_client = None
-
-    def _get_nvidia(self):
-        if self._nvidia_client is None:
-            from core.llm import NvidiaClient
-            self._nvidia_client = NvidiaClient()
-        return self._nvidia_client
-
-    def generate(self, task: str, **kwargs: Any) -> str:
-        """Generate a response using the real LLM router."""
-        if not task or not task.strip():
-            return ""
-        messages = [
-            {"role": "system", "content": "You are a precise code and system analysis assistant. Read the user's request carefully and respond with a thorough analysis, using evidence from the available tools."},
-            {"role": "user", "content": task},
-        ]
-        return self.chat(messages)
-
-    def chat(self, messages: list[dict[str, Any]]) -> str:
-        """Send a structured chat conversation to the LLM and return the response.
-
-        Tries NVIDIA first (confirmed working), falls back to ProviderRouter chain.
-        """
-        if not messages:
-            return ""
-        errors = []
-
-        # Convert tool messages to user messages for NVIDIA compatibility
-        adapted = []
-        for m in messages:
-            role = m.get("role", "user")
-            content = m.get("content", "")
-            if role == "tool":
-                adapted.append({"role": "user", "content": f"[Tool Result]\n{str(content)[:4000]}"})
-            elif role == "assistant":
-                adapted.append({"role": "assistant", "content": str(content)[:2000]})
-            elif role in ("system", "user"):
-                adapted.append({"role": role, "content": str(content)[:4000]})
-
-        # Try NVIDIA first
-        try:
-            nv = self._get_nvidia()
-            return nv.generate_response(adapted)
-        except Exception as exc:
-            errors.append(f"NVIDIA: {exc}")
-            logger.warning(f"NVIDIA failed, falling back to router: {exc}")
-
-        # Fallback: ProviderRouter (OpenRouter chain)
-        try:
-            from llm_router import execute_agent_with_memory
-            return execute_agent_with_memory(messages)
-        except Exception as exc:
-            errors.append(f"Router: {exc}")
-
-        raise RuntimeError(f"All LLM providers failed: {'; '.join(errors)}")
+from smolagents.tools import Tool, FinalAnswerTool
+from llm_router import LiteLLMModel
 
 
 class ManagedAgent:

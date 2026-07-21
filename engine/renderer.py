@@ -433,7 +433,10 @@ def _format_args(kind: str, tool: str, args: dict) -> tuple[str, str]:
         )
         return f"[{path}]", ""
     if kind == "TODOS":
-        return "[plan]", ""
+        action = args.get("action", "plan")
+        item_id = args.get("item_id", "")
+        label = f"update #{item_id}" if action == "update" and item_id else action
+        return f"[{label}]", ""
     if kind in ("SEARCH", "MEMORY", "RAG"):
         query = args.get("query", "")
         return f'["{query[:40]}"]', ""

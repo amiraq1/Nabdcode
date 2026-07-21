@@ -5,6 +5,7 @@ import time
 import socket
 import signal
 from typing import Dict, Any, Optional
+from core.kernel.subprocess_guard import default_guard
 
 
 class LightpandaAdapter:

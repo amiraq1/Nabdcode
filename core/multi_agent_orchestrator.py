@@ -32,7 +32,7 @@ from core.agent_manager import (
     _parse_verdict,
     initialize_secure_agent,
 )
-from core.llm import get_secure_model
+from llm_router import get_secure_model
 from core.parser import pin_workspace_root
 from core.self_refinement import SafeExecutionSandbox
 from core.tool_factory import build_skill_tools

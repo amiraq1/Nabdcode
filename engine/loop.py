@@ -108,26 +108,6 @@ class ToolRequiredError(RuntimeError):
     pass
 
 
-def _derive_read_hint(user_prompt: str) -> str:
-    """Extract a path-like term from the user prompt for the rejection directive.
-
-    Scans the user prompt for path-like patterns (directory names, file paths,
-    keywords like 'core', 'engine', 'src', etc.) and returns a suggestion like
-    ' (e.g. file_system.read path=core/__init__.py)'. Returns empty string when
-    no hint can be derived so the rejection message stays clean for chitchat.
-    """
-    if not user_prompt:
-        return ""
-    # Known workspace directories (project-specific, not hardcoded as mandatory)
-    _known = ("core", "engine", "tools", "ui", "tests", "scripts", "src", "lib")
-    _lower = user_prompt.lower()
-    for kw in _known:
-        if kw in _lower:
-            m = re.search(re.escape(kw), user_prompt, re.IGNORECASE)
-            if m:
-                return f" (e.g. {m.group()}/__init__.py)"
-    return ""
-
 
 def _type_name(t: Any) -> str:
     """Map a Python type annotation to a short human-readable name."""
@@ -165,6 +145,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         evidence_log: EvidenceLog | None = None,
         logger: Any = None,
         model_identifier: str | None = None,
+        no_stream: bool = False,
     ) -> None:
 
         self.state = state
@@ -199,6 +180,12 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # so existing callers that omit it still get a meaningful identifier.
         self.model_identifier = model_identifier or os.getenv(
             "OPENROUTER_MODEL", "deepseek/deepseek-v4-flash-free"
+        )
+        # Phase P4: opt out of live token streaming. When True, _invoke_llm_and_normalize
+        # skips the SSE path and always uses the full-response (non-streaming) call.
+        # Sources (in precedence order): explicit arg > NABD_NO_STREAM env > stream on.
+        self._no_stream = no_stream or (
+            os.getenv("NABD_NO_STREAM", "").lower() in ("1", "true", "yes")
         )
         # Phase5 (GoalSpec): an explicit, verifiable session objective. It may
         # be injected here, or set earlier on state.active_goal via ``/goal``.
@@ -390,6 +377,27 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 self.state.is_fallback_mode_active = False
                 bus.emit("fallback_mode_deactivated")
 
+    # SAFETY: _invoke_llm_and_normalize is intentionally NOT extracted to a
+    # separate _llm_mixin.py / _llm.py (attempted + rejected in v2, re-verified
+    # in v3). CONCRETE COUPLING EVIDENCE (grep-verified against live source):
+    #   * SOLE WRITER of self._force_tool          -> set at L417/L424, cleared L530
+    #   * SOLE WRITER of self._synthesis_directive_injected -> L456 (set), L476 (set)
+    #   * SOLE WRITER of self._synthesis_directive_text     -> L457
+    #   * SOLE WRITER of self._force_read_directive_text     -> L432/L444, cleared L486
+    #   * READER of self._force_final (set by Fixation Breaker in run/_run_once at
+    #     L747/L1047/L1070/L1119/L1138/L1161/L1490) -> read at L515 to pin tool_choice.
+    # These 5 flags form the live >=3-reads convergence handshake: the method both
+    # raises (_force_tool / synthesis directives) AND consumes (_force_final) the
+    # control signals that gate the loop. It additionally depends on >=8 private
+    # instance members (_ctx, _real_reads(), _compact_messages(), _inject_runtime_context(),
+    # _logger, llm_provider, state, POLL_DELAY) plus 6 module-level helpers
+    # (_prompt_requires_investigation, _has_active_goal, _resolve_default_provider,
+    # _normalize_response, _extract_listing_files, bus). Extracting to a mixin would
+    # either (a) force moving the 5 flags + their remote writers into the mixin
+    # (shattering the convergence protocol across two files), or (b) leave 10+ fragile
+    # cross-file self._ reads that break the >=3-reads gate. Per the tighten-coupling
+    # rule, keep it co-located with the protocol it drives. Loop stays 1608 lines
+    # (realistic lower bound; forcing <1400 would require the unsafe split above).
     def _invoke_llm_and_normalize(self) -> tuple[str, str]:
         """Invoke the LLM provider and strip formatting / forbidden thought prefixes.
 
@@ -397,6 +405,18 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         raw stripped response and ``normalized_resp`` has the leading "Thought for
         Ns" prefix removed (used by the repetition fingerprint guard).
         """
+        # ── Streaming path (NEW, P0 of token-level SSE) ────────────────────
+        # Attempt live token streaming via the router's generate_token_stream ONLY
+        # when using the default provider. If the caller provided a custom or mock
+        # llm_provider (e.g. in unit tests), skip directly to the non-streaming path.
+        # On ANY failure, fall through SILENTLY to the existing non-streaming
+        # path below — zero UX regression. The non-streaming code is unchanged.
+        if not getattr(self, "_no_stream", False) and self.llm_provider is _resolve_default_provider():
+            try:
+                return self._invoke_with_token_stream()
+            except Exception:
+                pass  # silent fallback to non-streaming
+
         # ── Phase D: set _force_tool based on unified read counter ───────────
         # Check at every LLM call start: if investigation is needed and reads < 3,
         # force the model to call a tool via tool_choice="required".
@@ -579,6 +599,70 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         bus.emit(
             "llm_request_completed",
             {"duration": elapsed, "length": len(response)},
+        )
+        return response_text, normalized_resp
+
+    def _invoke_with_token_stream(self) -> tuple[str, str]:
+        """Stream tokens live, return assembled response tuple.
+
+        Mirrors the non-streaming ``_invoke_llm_and_normalize`` message assembly
+        (compaction + runtime-context injection) but feeds deltas to the renderer
+        and EventBus as they arrive. Returns the same ``(response_text,
+        normalized_resp)`` shape. Raises on failure so the caller can fall back
+        to the non-streaming path.
+        """
+        from core.sanitize import sanitize
+        from engine.loop import _normalize_response
+        from llm_router import router as _router
+
+        bus.emit("llm_request_started", {"step": self.state.step_count})
+
+        compacted = self._compact_messages(self.state.get_messages())
+        if compacted and compacted[0].get("role") == "system":
+            compacted = self._inject_runtime_context(compacted)
+
+        collected: list[str] = []
+
+        def display(token_text: str) -> None:
+            """Fire-and-forget: render token, never raise."""
+            collected.append(token_text)
+            try:
+                # Reuse the existing llm_token subscriber in main.py's wire_events,
+                # which renders via renderer.stream_chunk under lock.
+                bus.emit("llm_token", {"token": token_text})
+            except Exception:
+                pass
+
+        # Cancellation: a Ctrl+C / /cancel raises the shared token. Clear it
+        # before every generation so a stale flag from a previous turn can't
+        # abort a fresh request. The check below honors it mid-stream.
+        from core.cancellation import CancelToken
+
+        cancel = CancelToken()
+        cancel.clear()
+
+        for delta in _router.generate_token_stream(compacted, logger=self._logger):
+            if cancel.is_cancelled():
+                break
+            if "content" in delta and delta["content"]:
+                display(delta["content"])
+
+        response_text = "".join(collected)
+        # Never raise to the user — return the partial response (per hard rule).
+        if cancel.is_cancelled():
+            response_text += "\n\n[⏹️ Generation cancelled]"
+            cancel.clear()
+        response_text = response_text.strip()
+        normalized_resp = _normalize_response(response_text)
+
+        if not response_text:
+            raise RuntimeError("Streaming returned an empty response.")
+
+        self._note_provider_success()
+        self.state.append_message({"role": "assistant", "content": response_text})
+        bus.emit(
+            "llm_request_completed",
+            {"duration": 0.0, "length": len(response_text)},
         )
         return response_text, normalized_resp
 
@@ -1300,7 +1384,23 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
 
             _bridge.emit("status_update", message="✅ Edit approved. Applying to disk...")
 
-        result = self.dispatcher.dispatch(tool_name, tool_args)
+        if tool_name == "todo_write" and isinstance(tool_args, dict) and tool_args.get("action") == "update":
+            from engine.tool_registry import registry
+            _todo_tool = registry.get_tool("todo_write")
+            _mgr = getattr(_todo_tool, "_manager", None) or getattr(_todo_tool, "todo_manager", None)
+            if _mgr is None and hasattr(self, "context") and hasattr(self.context, "todo_manager"):
+                _mgr = self.context.todo_manager
+            if _mgr is None or len(_mgr.all()) == 0:
+                result = ToolResult(
+                    success=False,
+                    stdout="",
+                    stderr="Protocol error: call todo_write(action='plan', items=[...]) first.",
+                    returncode=-1,
+                )
+            else:
+                result = self.dispatcher.dispatch(tool_name, tool_args)
+        else:
+            result = self.dispatcher.dispatch(tool_name, tool_args)
 
         cmd_summary = _extract_cmd_or_path(tool_args)
         rec = self.evidence_log.record(
@@ -1448,13 +1548,12 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             self._static_context_cache = None
         return self._last_response
 
-    def _run_once(self) -> None:
-        """Execute a single loop iteration, delegating to the extracted helpers."""
+    def _prepare_iteration_and_check_guards(self) -> _LoopSignal:
         if self._check_budget_and_guards() is _LoopSignal.TERMINATE:
-            return
+            return _LoopSignal.TERMINATE
 
         if self._maybe_force_partial_answer():
-            return
+            return _LoopSignal.TERMINATE
 
         if hasattr(self, "_compactor") and self._compactor.should_compact(self.state.messages):
             self.state.messages = self._compactor.compact(
@@ -1467,16 +1566,65 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 "tokens_saved_estimate": self._estimate_tokens_saved()
             })
 
-        # Phase 8 (RAG Auto-Trigger): if the user asks about a known codebase
-        # symbol and the model hasn't called search_knowledge_base yet this
-        # turn, force a RAG retrieval so the model sees real code instead of
-        # hallucinating. Small/fallback models (ORCA-FLASH) often skip tools;
-        # this guard keeps them honest. Placed AFTER the repetition guard so
-        # final_answer / thought-only terminations short-circuit first.
         self._maybe_auto_trigger_rag()
 
         if self._is_answer_in_hand_or_goal_met():
             self._force_final = True
+
+        return _LoopSignal.CONTINUE
+
+    def _handle_tool_signal(self, tool_call: Any, signal: _LoopSignal) -> bool:
+        if signal is _LoopSignal.CONTINUE or tool_call is None:
+            ctx = self._ctx
+            if ctx is not None:
+                ctx.consecutive_no_tool_rounds += 1
+                ctx.total_no_tool_rounds += 1
+            if signal is not _LoopSignal.CONTINUE and self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
+                return True
+            if self._maybe_force_partial_answer():
+                return True
+            return True
+
+        if signal in (_LoopSignal.TERMINATE, _LoopSignal.FINAL_ANSWER):
+            if self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
+                return True
+            if self._maybe_force_partial_answer():
+                return True
+            return True
+
+        return False
+
+    def _execute_tool_iteration(self, tool_call: Any, bridge: Any) -> None:
+        sig = self._handle_cycle_and_security(tool_call)
+        if sig is _LoopSignal.CONTINUE:
+            ctx = self._ctx
+            if ctx is not None:
+                ctx.consecutive_no_tool_rounds += 1
+                ctx.total_no_tool_rounds += 1
+                if self._maybe_force_partial_answer():
+                    return
+            return
+        if sig is _LoopSignal.TERMINATE:
+            return
+
+        pre = self._pre_dispatch_guard(tool_call)
+        if pre is not None:
+            self._inject_guard_directive(pre)
+            self.state.increment_step()
+            self.state.prune_history()
+            time.sleep(self.POLL_DELAY)
+            return
+
+        self._active_tool = tool_call
+        if tool_call.tool in ("file_system", "edit_file", "replace_file_content"):
+            bridge.emit("edit_proposed", file=tool_call.args.get("path") or tool_call.args.get("file", ""), diff=tool_call.args.get("content") or tool_call.args.get("diff", ""))
+        self._dispatch_and_record_evidence(tool_call)
+        bridge.emit("status_update", message=f"Cycle completed. Step: {self.state.step_count}")
+
+    def _run_once(self) -> None:
+        """Execute a single loop iteration, delegating to the extracted helpers."""
+        if self._prepare_iteration_and_check_guards() is _LoopSignal.TERMINATE:
+            return
 
         response_text, normalized_resp = self._invoke_llm_and_normalize()
         if not response_text:
@@ -1490,84 +1638,10 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         bridge.emit("on_agent_thought", content=response_text)
 
         tool_call, signal = self._parse_and_validate_tool(response_text)
-        if signal is _LoopSignal.CONTINUE:
-            ctx = self._ctx
-            if ctx is not None:
-                ctx.consecutive_no_tool_rounds += 1
-                ctx.total_no_tool_rounds += 1
-                if self._maybe_force_partial_answer():
-                    return
-            return
-        if signal is _LoopSignal.TERMINATE:
-            if self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
-                return
-            if self._maybe_force_partial_answer():
-                return
-            return
-        if signal is _LoopSignal.FINAL_ANSWER:
-            # Centralized final_answer termination (smolagents convention). The
-            # answer was stored in self._last_response by the detecting site
-            # (_parse_and_validate_tool or _handle_cycle_and_security). Route
-            # through _verify_claim_or_self_correct so the goal-exit gate stays
-            # authoritative and emission happens exactly once, via _emit_final.
-            if self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
-                return
-            if self._maybe_force_partial_answer():
-                return
+        if self._handle_tool_signal(tool_call, signal):
             return
 
-        if tool_call is None:
-            ctx = self._ctx
-            if ctx is not None:
-                ctx.consecutive_no_tool_rounds += 1
-                ctx.total_no_tool_rounds += 1
-            if self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
-                return
-            if self._maybe_force_partial_answer():
-                return
-            return
-
-        if tool_call is not None:
-            sig = self._handle_cycle_and_security(tool_call)
-            if sig is _LoopSignal.CONTINUE:
-                ctx = self._ctx
-                if ctx is not None:
-                    ctx.consecutive_no_tool_rounds += 1
-                    ctx.total_no_tool_rounds += 1
-                    if self._maybe_force_partial_answer():
-                        return
-                return
-            if sig is _LoopSignal.TERMINATE:
-                return
-            # ── Pre-dispatch guard (answer-in-hand / redundant-read / path-jail) ──
-            # This is the LIVE choke-point: Guard 3 lives here, so the loop can
-            # actually block a re-read or shell call after evidence is in hand —
-            # without it the guard is dead code and the Orchestrator loops.
-            pre = self._pre_dispatch_guard(tool_call)
-            if pre is not None:
-                ctx = self._ctx
-                # ── Phase 0 root fix: channel separation ────────────────────
-                # Inject the guard directive as a CONTROL message for the model
-                # (see _inject_guard_directive for the contract). It is NEVER
-                # written to evidence_log / output_snippet — evidence = real
-                # tool outputs only. The guard keeps steering behavior
-                # (convergence intact) while the leak is removed at its source.
-                self._inject_guard_directive(pre)
-                self.state.increment_step()
-                self.state.prune_history()
-                time.sleep(self.POLL_DELAY)
-                # When the guard blocked a redundant/answer-in-hand call, the
-                # injected directive already tells the model to emit final_answer.
-                # Return and let the NEXT iteration parse that final_answer
-                # normally. Forcing a Partial answer here would maim the output
-                # exactly as forbidden by the convergence criterion — so we must
-                # NOT synthesize a Partial banner from a guard block.
-                return
-            self._active_tool = tool_call
-            if tool_call.tool in ("file_system", "edit_file", "replace_file_content"):
-                bridge.emit("edit_proposed", file=tool_call.args.get("path") or tool_call.args.get("file", ""), diff=tool_call.args.get("content") or tool_call.args.get("diff", ""))
-            self._dispatch_and_record_evidence(tool_call)
-            bridge.emit("status_update", message=f"Cycle completed. Step: {self.state.step_count}")
+        self._execute_tool_iteration(tool_call, bridge)
 
 
     def _finalize_loop(self, interrupted: bool) -> None:

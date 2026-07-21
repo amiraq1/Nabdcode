@@ -14,6 +14,20 @@ from pathlib import Path
 from core.utils import safe_strip
 from core.kernel.security import get_workspace_root
 from engine.deep_agent import CHECKPOINT_FILENAME
+from core.output_renderer import (
+    render_thinking,
+    render_final_answer,
+    render_tool_output,
+    render_error,
+)
+from core.text_utils import safe_display
+
+_last_echoed_input: str = ""
+
+
+def echo_user_input(text: str) -> None:
+    # No-op: PromptSession already displays prompt and user input cleanly.
+    pass
 
 
 # ── Tool output summariser ─────────────────────────────────────────────────
@@ -309,10 +323,7 @@ def wire_events(ctx: AppContext) -> dict:
 
 # ── Main Loop ──────────────────────────────────────────────────────────────
 
-def main() -> None:
-    sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-
-    # Fast check for basic flags before loading heavy modules or initializing agents
+def _check_cli_flags() -> bool:
     if any(flag in sys.argv[1:] for flag in ("--version", "-v")):
         sys.stdout.write("Nabd OS (nabdcode) v1.0.0\n")
         sys.exit(0)
@@ -323,13 +334,221 @@ def main() -> None:
             "  nabdcode [options] [query...]\n"
             "  python3 main.py [options] [query...]\n\n"
             "Options:\n"
-            "  -h, --help       Show this help message and exit\n"
-            "  -v, --version    Show program version and exit\n"
+            "  -h, --help              Show this help message and exit\n"
+            "  -v, --version           Show program version and exit\n"
+            "  --auto-discover         Auto-discover new tools in tools/ (default)\n"
+            "  --no-auto-discover      Disable tool auto-discovery\n"
         )
         sys.exit(0)
+    return False
+
+
+def _cleanup_after_streamed_failure(state: Any, ctx: Any, exc: Any) -> None:
+    """After streaming output, the verifier rejected the answer.
+    Strip the fabricated response, add a newline separator so the
+    rejection message isn't glued to the last token, and render
+    the verifier's message to the user.
+    """
+    msgs = state.get_messages()
+    if msgs and msgs[-1].get("role") == "assistant":
+        state.set_messages(msgs[:-1])
+    ctx.logger.error(f"ToolRequiredError: {exc}")
+    ctx.renderer.think_end()
+    ctx.renderer.verifier_reject(str(exc))
+    ctx.renderer.flush()
+
+
+def _handle_one_shot_query(positional_queries: list[str], state: Any, ctx: Any, visualizer: Any, ExecutionLoop: Any, ToolRequiredError: Any) -> None:
+    one_shot_query = " ".join(positional_queries)
+    state.reset_step_count()
+    engine = ExecutionLoop(
+        state=state,
+        max_output_len=ctx.config.max_output,
+        evidence_log=ctx.evidence_log,
+        logger=ctx.logger,
+        no_stream=os.getenv("NABD_NO_STREAM", "").lower() in ("1", "true", "yes"),
+    )
+    try:
+        result = engine.run(one_shot_query)
+        # Single renderer (plan 1.1): in one-shot mode the direct Renderer
+        # owns stdout. The visualizer is constructed WITHOUT registering
+        # event listeners, so it never competes with wire_events for output.
+        if result:
+            ctx.renderer.stream_chunk(result)
+        else:
+            ctx.renderer.stream_chunk("(Session completed - no text returned)")
+        ctx.renderer.flush()
+    except ToolRequiredError as exc:
+        _cleanup_after_streamed_failure(state, ctx, exc)
+    except KeyboardInterrupt:
+        ctx.renderer.think_end()
+        sys.stdout.write("\n[bold yellow]⚠ Execution interrupted by user.[/bold yellow]\n")
+        sys.stdout.flush()
+    except Exception as exc:
+        ctx.renderer.stream_chunk(str(exc))
+        ctx.renderer.flush()
+        ctx.logger.error(f"Execution failed: {exc}")
+    finally:
+        ctx.session_manager.messages = state.get_messages()
+        ctx.session_manager.todos = ctx.todo_manager.to_serializable()
+        ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
+        ctx.session_manager.save()
+        visualizer.stop()
+    sys.exit(0)
+
+
+def _process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
+    if user_input.lower() in ("clear", "/clear", "/reset", "/c"):
+        state.clear_context()
+        state.set_messages([{"role": "system", "content": base_inst}])
+        if hasattr(ctx.evidence_log, "clear"):
+            ctx.evidence_log.clear()
+        elif isinstance(ctx.evidence_log, list):
+            ctx.evidence_log.clear()
+        if hasattr(ctx.todo_manager, "clear"):
+            ctx.todo_manager.clear()
+        try:
+            workspace_dir = get_workspace_root() if 'get_workspace_root' in globals() else Path.cwd()
+            checkpoint_file = workspace_dir / CHECKPOINT_FILENAME
+            if checkpoint_file.exists():
+                checkpoint_file.unlink()
+                ctx.logger.info("Workspace checkpoint cleared.")
+        except Exception as e:
+            ctx.logger.warning(f"Failed to unlink checkpoint: {e}")
+        sys.stdout.write("\n\033[92m✨ [System] Context and history have been cleared. Ready for a new task!\033[0m\n\n")
+        sys.stdout.flush()
+        return True
+
+    if user_input.lower().startswith("/undo"):
+        parts = user_input.split(maxsplit=1)
+        undo_path = parts[1].strip() if len(parts) > 1 else ""
+        if not undo_path:
+            sys.stdout.write("\n\033[91m⚠ Usage: /undo <filepath>\033[0m\n\n")
+        else:
+            sys.stdout.write(f"\n{ctx.snapshot_engine.undo(undo_path)}\n\n")
+        sys.stdout.flush()
+        return True
+
+    if user_input.strip() in ("فحص", "فحص مستودع", "scan", "scan repo", "/deep-scan"):
+        from core.repo_scanner import SECURE_REPO_SCANNER
+        try:
+            import json as _json
+            sys.stdout.write(
+                "\n"
+                + _json.dumps(
+                    SECURE_REPO_SCANNER()._deep_scan(get_workspace_root()),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+        except Exception as _scan_exc:
+            sys.stdout.write(f"\n\033[91m⚠ deep scan failed: {_scan_exc}\033[0m\n\n")
+        sys.stdout.flush()
+        return True
+
+    if user_input.lower().startswith(("/refactor", "nabd refactor", "/dag", "/resume", "nabd resume")):
+        parts = user_input.split()
+        is_resume = user_input.lower().startswith(("/resume", "nabd resume"))
+        target_files_list = parts[1:] if len(parts) > 1 and not is_resume else ["target_dummy.py"]
+        try:
+            from llm_router import get_secure_model
+            from tools.secure_tools import SecureGraphifyTool
+            from core.dag.launcher import launch_nabdos_core
+            llm = get_secure_model()
+            ws = str(get_workspace_root() if 'get_workspace_root' in globals() else Path.cwd())
+            graphify = SecureGraphifyTool(workspace_dir=ws)
+            taste_rules = ["All functions MUST have strict Type Hints.", "Use clear docstrings and comments."]
+            launch_nabdos_core(
+                llm_engine=llm,
+                graphify_tool=graphify,
+                workspace_dir=ws,
+                target_files=target_files_list,
+                taste_rules=taste_rules,
+                resume=is_resume
+            )
+        except Exception as dag_err:
+            sys.stdout.write(f"\n\033[91m❌ [DAG Launcher Error] {dag_err}\033[0m\n\n")
+            sys.stdout.flush()
+        return True
+
+    return False
+
+
+def _run_interactive_turn(user_input: str, state: Any, ctx: Any, visualizer: Any, ExecutionLoop: Any, ToolRequiredError: Any) -> None:
+    from core.sanitize import sanitize
+    from core.parser import normalize
+    import termios
+
+    safe_display = sanitize(user_input)
+    clean_prompt = normalize(user_input)[:10000]
+
+    if hasattr(visualizer, "_final_answer_rendered"):
+        visualizer._final_answer_rendered = False
+
+    state.reset_step_count()
+    engine = ExecutionLoop(
+        state=state,
+        max_output_len=ctx.config.max_output,
+        evidence_log=ctx.evidence_log,
+        logger=ctx.logger,
+        no_stream=os.getenv("NABD_NO_STREAM", "").lower() in ("1", "true", "yes"),
+    )
+
+    fd = sys.stdin.fileno()
+    old_termios = None
+    try:
+        old_termios = termios.tcgetattr(fd)
+        new = list(old_termios)
+        new[3] = new[3] & ~termios.ECHO
+        termios.tcsetattr(fd, termios.TCSANOW, new)
+
+        result = engine.run(clean_prompt)
+        if result:
+            visualizer._on_loop_completed({"response": result})
+        else:
+            visualizer._on_loop_completed({"response": "(Session completed - no text returned)"})
+
+    except KeyboardInterrupt:
+        ctx.renderer.think_end()
+        visualizer.console.print("\n[bold yellow]⚠ Execution interrupted by user.[/bold yellow]")
+    except ToolRequiredError as exc:
+        _cleanup_after_streamed_failure(state, ctx, exc)
+    except Exception as exc:
+        visualizer._on_loop_completed({"response": exc})
+        ctx.logger.error(f"Execution failed: {exc}")
+    finally:
+        if old_termios is not None:
+            termios.tcsetattr(fd, termios.TCSANOW, old_termios)
+        try:
+            termios.tcflush(fd, termios.TCIFLUSH)
+        except Exception:
+            pass
+
+    ctx.session_manager.messages = state.get_messages()
+    ctx.session_manager.todos = ctx.todo_manager.to_serializable()
+    ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
+    ctx.session_manager.save()
+
+
+def main() -> None:
+    sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+
+    if _check_cli_flags():
+        return
 
     import signal
     import termios
+
+    from core.cancellation import CancelToken
+
+    def _handle_sigint(sig, frame):
+        # Honor Ctrl+C mid-generation: raise the shared cancel flag so the
+        # streaming read loop (OpenRouterClient.stream) breaks on its next
+        # 4KB chunk and returns the partial response with a [⏹️] marker.
+        CancelToken().cancel("user (Ctrl+C)")
+
+    signal.signal(signal.SIGINT, _handle_sigint)
 
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import InMemoryHistory
@@ -341,8 +560,6 @@ def main() -> None:
     from ui.repl_termux import TerminalVisualizer
     from core.app_context import AppContext
     from core.constants import TODO_DISCIPLINE
-    from core.sanitize import sanitize
-    from core.parser import normalize
 
     # One-time splash
     try:
@@ -399,24 +616,6 @@ def main() -> None:
     signal.signal(signal.SIGHUP, _shutdown_handler)
 
     state = RuntimeState(session_id=ctx.session_manager.session_id, max_steps=50)
-
-    # ── Helpers for ToolRequiredError path ────────────────────────────────
-
-    def _cleanup_after_streamed_failure(state: RuntimeState,
-                                        ctx: AppContext,
-                                        exc: ToolRequiredError) -> None:
-        """After streaming output, the verifier rejected the answer.
-        Strip the fabricated response, add a newline separator so the
-        rejection message isn't glued to the last token, and render
-        the verifier's message to the user.
-        """
-        msgs = state.get_messages()
-        if msgs and msgs[-1].get("role") == "assistant":
-            state.set_messages(msgs[:-1])
-        ctx.logger.error(f"ToolRequiredError: {exc}")
-        ctx.renderer.think_end()
-        ctx.renderer.verifier_reject(str(exc))
-        ctx.renderer.flush()
 
     base_inst = (
         "You are an advanced Autonomous Agent running on a Linux environment.\n"
@@ -494,41 +693,8 @@ def main() -> None:
     # Check for CLI one-shot query execution (e.g. `nabdcode "check my files"`)
     positional_queries = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
     if positional_queries:
-        one_shot_query = " ".join(positional_queries)
-        state.reset_step_count()
-        engine = ExecutionLoop(
-            state=state,
-            max_output_len=ctx.config.max_output,
-            evidence_log=ctx.evidence_log,
-            logger=ctx.logger,
-        )
-        try:
-            result = engine.run(one_shot_query)
-            # Single renderer (plan 1.1): in one-shot mode the direct Renderer
-            # owns stdout. The visualizer is constructed WITHOUT registering
-            # event listeners, so it never competes with wire_events for output.
-            if result:
-                ctx.renderer.stream_chunk(result)
-            else:
-                ctx.renderer.stream_chunk("(Session completed - no text returned)")
-            ctx.renderer.flush()
-        except ToolRequiredError as exc:
-            _cleanup_after_streamed_failure(state, ctx, exc)
-        except KeyboardInterrupt:
-            ctx.renderer.think_end()
-            sys.stdout.write("\n[bold yellow]⚠ Execution interrupted by user.[/bold yellow]\n")
-            sys.stdout.flush()
-        except Exception as exc:
-            ctx.renderer.stream_chunk(str(exc))
-            ctx.renderer.flush()
-            ctx.logger.error(f"Execution failed: {exc}")
-        finally:
-            ctx.session_manager.messages = state.get_messages()
-            ctx.session_manager.todos = ctx.todo_manager.to_serializable()
-            ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
-            ctx.session_manager.save()
-            visualizer.stop()
-        sys.exit(0)
+        _handle_one_shot_query(positional_queries, state, ctx, visualizer, ExecutionLoop, ToolRequiredError)
+        return
 
     try:
         while True:
@@ -547,136 +713,10 @@ def main() -> None:
             if user_input.lower() in ("exit", "quit"):
                 break
 
-            if user_input.lower() in ("clear", "/clear", "/reset", "/c"):
-                # Replace the prompt line with a background-highlighted version
-                sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {user_input}\033[0m\n")
-                sys.stdout.flush()
-                state.clear_context()
-                state.set_messages([{"role": "system", "content": base_inst}])
-                if hasattr(ctx.evidence_log, "clear"):
-                    ctx.evidence_log.clear()
-                elif isinstance(ctx.evidence_log, list):
-                    ctx.evidence_log.clear()
-                if hasattr(ctx.todo_manager, "clear"):
-                    ctx.todo_manager.clear()
-                # ✅ الكود الجديد والآمن لتنظيف نقطة الحفظ (Checkpoint)
-                try:
-                    # استخدام Path.cwd() كبديل آمن إذا لم تكن دالة get_workspace_root متوفرة
-                    workspace_dir = get_workspace_root() if 'get_workspace_root' in globals() else Path.cwd()
-                    checkpoint_file = workspace_dir / CHECKPOINT_FILENAME
-                    
-                    if checkpoint_file.exists():
-                        checkpoint_file.unlink()
-                        ctx.logger.info("Workspace checkpoint cleared.")
-                        
-                except Exception as e:
-                    # طباعة الخطأ في السجلات بدلاً من تجاهله بصمت
-                    ctx.logger.warning(f"Failed to unlink checkpoint: {e}")
-                sys.stdout.write("\n\033[92m✨ [System] Context and history have been cleared. Ready for a new task!\033[0m\n\n")
-                sys.stdout.flush()
+            if _process_slash_command(user_input, state, ctx, base_inst):
                 continue
 
-            if user_input.lower().startswith(("/refactor", "nabd refactor", "/dag", "/resume", "nabd resume")):
-                parts = user_input.split()
-                is_resume = user_input.lower().startswith(("/resume", "nabd resume"))
-                target_files_list = parts[1:] if len(parts) > 1 and not is_resume else ["target_dummy.py"]
-                sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {user_input}\033[0m\n")
-                sys.stdout.flush()
-                try:
-                    from core.llm import get_secure_model
-                    from tools.secure_tools import SecureGraphifyTool
-                    from core.dag.launcher import launch_nabdos_core
-                    
-                    llm = get_secure_model()
-                    ws = str(get_workspace_root() if 'get_workspace_root' in globals() else Path.cwd())
-                    graphify = SecureGraphifyTool(workspace_dir=ws)
-                    taste_rules = ["All functions MUST have strict Type Hints.", "Use clear docstrings and comments."]
-                    
-                    launch_nabdos_core(
-                        llm_engine=llm,
-                        graphify_tool=graphify,
-                        workspace_dir=ws,
-                        target_files=target_files_list,
-                        taste_rules=taste_rules,
-                        resume=is_resume
-                    )
-                except Exception as dag_err:
-                    sys.stdout.write(f"\n\033[91m❌ [DAG Launcher Error] {dag_err}\033[0m\n\n")
-                    sys.stdout.flush()
-                continue
-
-            # Replace the prompt_toolkit line with a background-highlighted version
-            # so the user's input is visually distinct from the agent response.
-            safe_display = sanitize(user_input)
-            sys.stdout.write(f"\r\033[48;5;236m\033[36m❯ {safe_display}\033[0m\n")
-            sys.stdout.flush()
-
-            clean_prompt = normalize(user_input)[:10000]
-
-            # 🚀 --------------------------------------------------
-            # [ترقيع العمى البصري]: تصفير ذاكرة الواجهة قبل كل استعلام
-            # --------------------------------------------------
-            if hasattr(visualizer, "_final_answer_rendered"):
-                visualizer._final_answer_rendered = False
-            # --------------------------------------------------
-
-            state.reset_step_count()
-            engine = ExecutionLoop(
-                state=state,
-                max_output_len=ctx.config.max_output,
-                evidence_log=ctx.evidence_log,
-                logger=ctx.logger,
-            )
-
-            fd = sys.stdin.fileno()
-            old_termios = None
-            try:
-                old_termios = termios.tcgetattr(fd)
-                new = list(old_termios)
-                new[3] = new[3] & ~termios.ECHO
-                termios.tcsetattr(fd, termios.TCSANOW, new)
-
-                # 1. تشغيل المحرك
-                result = engine.run(clean_prompt)
-
-                # 2. المايسترو: تسليم النتيجة للواجهة بشكل مباشر ومضمون
-                if result:
-                    visualizer._on_loop_completed({"response": result})
-                else:
-                    visualizer._on_loop_completed({"response": "(Session completed - no text returned)"})
-
-            except KeyboardInterrupt:
-                ctx.renderer.think_end()
-                visualizer.console.print("\n[bold yellow]⚠ Execution interrupted by user.[/bold yellow]")
-            except ToolRequiredError as exc:
-                # ToolRequiredError: The LLM answered without using required tools.
-                # Strip the fabricated response, add newline separator after any
-                # partial streaming output, and show the verifier's rejection.
-                _cleanup_after_streamed_failure(state, ctx, exc)
-            except Exception as exc:
-                # تمرير الخطأ للواجهة ليتم رسمه في الصندوق الأحمر
-                visualizer._on_loop_completed({"response": exc})
-                ctx.logger.error(f"Execution failed: {exc}")
-            finally:
-                if old_termios is not None:
-                    termios.tcsetattr(fd, termios.TCSANOW, old_termios)
-                try:
-                    termios.tcflush(fd, termios.TCIFLUSH)
-                except Exception:
-                    pass
-
-            # Save session — messages, todos, evidence audit trail
-            ctx.session_manager.messages = state.get_messages()
-            ctx.session_manager.todos = ctx.todo_manager.to_serializable()
-            ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
-            ctx.session_manager.save()
-
-            # NOTE: The assistant response is already rendered inside its
-            # green panel by the `show_final_answer` event (on_final_answer in
-            # ui/repl_termux.py) for every exit path — streaming, static, and
-            # fallback. Re-printing it here would duplicate the text as raw
-            # output outside the panel, so the manual fallback print is
-            # intentionally removed.
+            _run_interactive_turn(user_input, state, ctx, visualizer, ExecutionLoop, ToolRequiredError)
 
     finally:
         visualizer.stop()
