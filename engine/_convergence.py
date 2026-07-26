@@ -9,7 +9,7 @@ import json
 import logging
 import re
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from core.kernel.events import bus
 from core.utils import safe_strip
@@ -337,6 +337,27 @@ class _ConvergenceMixin:
             f"(Agent stopped before a clean final_answer; summary built from collected evidence.)"
         )
 
+    def _get_todo_manager(self) -> Any:
+        """Resolve the TodoManager from the injected attribute or the registry.
+
+        Falls back to scanning the tool registry for the todo_write tool's
+        manager reference, so the convergence gate can check TODO status
+        without a hard dependency on AppContext wiring.
+        """
+        mgr = getattr(self, "todo_manager", None)
+        if mgr is not None:
+            return mgr
+        try:
+            from engine.tool_registry import registry
+            todo_tool = registry.get_tool("todo_write")
+            if todo_tool is not None:
+                mgr = getattr(todo_tool, "todo_manager", None) or getattr(todo_tool, "_manager", None)
+                if mgr is not None:
+                    return mgr
+        except Exception:
+            pass
+        return None
+
     def _emit_final(self, output: str, reason: str) -> bool:
         """Single choke point for every final answer — never emits raw tool JSON.
 
@@ -358,17 +379,70 @@ class _ConvergenceMixin:
             _derive_read_hint,
         )
 
+        # Resolve context early so both the convergence gate and the verify_fresh
+        # gate below can use the same ctx.user_prompt / has_active_goal signal.
+        ctx = self._ctx
+        has_active_goal = _has_active_goal(self)
+
+        # ── Convergence gate: block FINAL ANSWER if TODOs are incomplete ──
+        # This is the single choke point — every termination path (natural,
+        # partial, forced, shutdown) flows through here. The engine cannot
+        # cheat by deleting TODOs: can_finalize treats absent TODOs as unknown.
+        from core.convergence_gate import (
+            can_finalize,
+            TodoManagerCompletionTracker,
+        )
+
+        todo_mgr = self._get_todo_manager()
+        # Build a CompletionTracker adapter so can_finalize() operates on the
+        # unified interface rather than a raw TodoManager. When an active goal
+        # or investigation prompt is present AND a tracker is available,
+        # requires_plan=True enforces fail-closed: incomplete tracker → no
+        # finalization. When no tracker is available (e.g. answer-in-hand
+        # gate), requires_plan=False so the gate does not block.
+        tracker = TodoManagerCompletionTracker(todo_mgr) if todo_mgr is not None else None
+        requires_plan = False
+        if ctx is not None and tracker is not None:
+            requires_plan = _prompt_requires_investigation(
+                ctx.user_prompt, has_active_goal=has_active_goal
+            )
+        decision = can_finalize(
+            completion_tracker=tracker,
+            evidence_log=self.evidence_log,
+            budget_exhausted=(reason == "budget_exhausted"),
+            deadline_exceeded=(reason == "deadline_exceeded"),
+            requires_plan=requires_plan,
+        )
+        if not decision.allowed:
+            # Inject a CONTROL message telling the model what's missing.
+            # Channel-separated: never disguised as a tool result artifact.
+            blocking_ids = [b.todo_id for b in decision.blocking_todos]
+            control_msg = (
+                f"[CONTROL] FINAL ANSWER blocked — {len(decision.blocking_todos)} "
+                f"TODO(s) incomplete or unverified: {blocking_ids}. "
+                f"Details: {decision.blocked_reason}. "
+                f"Evidence summary:\n{decision.evidence_summary}\n"
+                f"Complete all TODOs with matching evidence before emitting final_answer."
+            )
+            self.state.append_message({"role": "user", "content": control_msg})
+            self.state.increment_step()
+            bus.emit("final_answer_blocked", {
+                "blocking_todos": blocking_ids,
+                "reason": decision.blocked_reason,
+                "step": self.state.step_count,
+            })
+            return False
+
         if _looks_like_tool_call(output) or not safe_strip(output or ""):
             output = self._synthesize_from_evidence(reason)
             self._last_response = output
 
         # ── Phase 0 verify_fresh gate (single choke point) ────────────────
-        ctx = self._ctx
         if ctx is not None:
             # Gate discriminator: casual chat ("hi") → pass immediately.
             # Investigation / active-goal prompts → require real reads.
             needs_verify = _prompt_requires_investigation(
-                ctx.user_prompt, has_active_goal=_has_active_goal(self)
+                ctx.user_prompt, has_active_goal=has_active_goal
             )
             if needs_verify:
                 # Phase D: unified read counter from _real_reads().

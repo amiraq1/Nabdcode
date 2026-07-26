@@ -23,13 +23,16 @@ from core.kernel.events import bus
 from engine.interfaces import DispatcherProtocol
 from engine.state import RuntimeState, GoalSpec, parse_goal_command, build_goal_block
 from engine.goal_verifier import evaluate_goal_exit, MAX_GOAL_RETRIES
-from engine._loop_types import _LoopSignal, _ToolInteraction, _LoopCtx
+from engine._loop_types import _LoopSignal, _ToolInteraction, _LoopCtx, _LEAK_MARKERS
 from engine._loop_types import TOOL_FEWSHOT_FALLBACK
 from engine._context import _ContextMixin
 from engine._budget import _BudgetMixin
 from engine._convergence import _ConvergenceMixin
 from engine._tool_runner import _ToolRunnerMixin
+from engine._dispatch import _ToolDispatchMixin
 from core.permissions import PermissionEngine, PermissionDecision
+from core.turn_outcome import TurnStatus, TurnOutcome, LLMInvocationStatus, LLMInvocationResult
+from core.turn_finalizer import TurnFinalizer
 
 from core.parser import extract_command, extract_json_from_response, validate_tool_call, ToolCall
 from tools.models import ToolResult
@@ -109,25 +112,8 @@ class ToolRequiredError(RuntimeError):
 
 
 
-def _type_name(t: Any) -> str:
-    """Map a Python type annotation to a short human-readable name."""
-    if t is str:
-        return "str"
-    if t is int:
-        return "int"
-    if t is float:
-        return "float"
-    if t is bool:
-        return "bool"
-    if t is list:
-        return "list"
-    if t is dict:
-        return "dict"
-    return str(t).split("'")[1] if "'" in str(t) else str(t)
 
-
-
-class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerMixin):
+class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerMixin, _ToolDispatchMixin):
     """
     Autonomous execution engine with Self-Correction Loop.
     """
@@ -143,6 +129,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         verifier_provider: Callable[[str, str, str, Any], str] | None = None,
         dispatcher: DispatcherProtocol | None = None,
         evidence_log: EvidenceLog | None = None,
+        todo_manager: Any = None,
         logger: Any = None,
         model_identifier: str | None = None,
         no_stream: bool = False,
@@ -158,6 +145,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         self.max_output_len = max_output_len
         self._recent_calls: deque[ToolCall] = deque(maxlen=16)
         self.evidence_log = evidence_log or EvidenceLog()
+        # Convergence gate: optional TodoManager for can_finalize checks.
+        self.todo_manager = todo_manager
         # Optional logger for routing provider fallback messages into the
         # session log file instead of stdout (keeps the REPL clean).
         self._logger = logger
@@ -206,6 +195,13 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # so it is built ONCE in run() and cached here instead of re-read from
         # disk on every LLM call. Consumed by _inject_runtime_context().
         self._static_context_cache: Optional[str] = None
+        # Phase 3: turn-finalization scratch holders — initialized early for
+        # testability (tests may call _finalize_loop directly without run()).
+        self._last_response: str = ""
+        # Phase 3: turn-finalization authority — exactly one terminal outcome
+        # per started turn. Created ONCE per ExecutionLoop instance (one session).
+        # Reset between turns via _turn_finalizer.reset().
+        self._turn_finalizer = TurnFinalizer()
 
 
     @staticmethod
@@ -398,12 +394,21 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
     # cross-file self._ reads that break the >=3-reads gate. Per the tighten-coupling
     # rule, keep it co-located with the protocol it drives. Loop stays 1608 lines
     # (realistic lower bound; forcing <1400 would require the unsafe split above).
-    def _invoke_llm_and_normalize(self) -> tuple[str, str]:
-        """Invoke the LLM provider and strip formatting / forbidden thought prefixes.
+    def _invoke_llm_and_normalize(self) -> LLMInvocationResult:
+        """Invoke the LLM provider and return a typed ``LLMInvocationResult``.
 
-        Returns ``(response_text, normalized_resp)`` where ``response_text`` is the
-        raw stripped response and ``normalized_resp`` has the leading "Thought for
-        Ns" prefix removed (used by the repetition fingerprint guard).
+        Every exit path returns an explicit, non-ambiguous result so the
+        orchestration layer can classify it as SUCCESS / EMPTY_RESPONSE /
+        RETRYABLE_ERROR / FATAL_ERROR / CANCELLED without inspecting raw
+        strings.  The outer _finalize_loop fallback remains only as a
+        last-resort invariant guard.
+
+        Mapping:
+          SUCCESS          → normal orchestration
+          EMPTY_RESPONSE   → documented retry/failure policy
+          RETRYABLE_ERROR  → bounded retry via _note_provider_failure
+          FATAL_ERROR      → FAILED terminal outcome
+          CANCELLED        → CANCELLED terminal outcome
         """
         # ── Streaming path (NEW, P0 of token-level SSE) ────────────────────
         # Attempt live token streaming via the router's generate_token_stream ONLY
@@ -546,10 +551,21 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # message via loop_completed once the streak is exhausted — instead of
         # leaking as an unhandled exception that the REPL swallows silently.
         except (TimeoutError, ConnectionError, OSError, RuntimeError, ValueError) as exc:
-            if self._note_provider_failure(f"{type(exc).__name__}: {exc}") is _LoopSignal.TERMINATE:
-                return "", ""
+            exc_type = type(exc).__name__
+            if self._note_provider_failure(f"{exc_type}: {exc}") is _LoopSignal.TERMINATE:
+                return LLMInvocationResult(
+                    status=LLMInvocationStatus.FATAL_ERROR,
+                    error_type=exc_type,
+                    safe_message=str(exc)[:200],
+                    retryable=False,
+                )
             time.sleep(self.POLL_DELAY)
-            return "", ""
+            return LLMInvocationResult(
+                status=LLMInvocationStatus.RETRYABLE_ERROR,
+                error_type=exc_type,
+                safe_message=str(exc)[:200],
+                retryable=True,
+            )
 
         response_text = response.strip()
         try:
@@ -561,21 +577,22 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             pass
 
         # Prompt Leak Detector: check if raw model response leaked structural system markers
-        _LEAK_MARKERS = (
-            "## TODO Discipline",
-            "<hard_rules>",
-            "<system_instructions>",
-            "<system_identity>",
-            "CRITICAL RULE:",
-            "TASK CLASSIFICATION",
-            "SMALL-TALK & CHIT-CHAT PROTOCOL",
-        )
         if any(marker in response_text for marker in _LEAK_MARKERS):
             leak_preview = response_text[:200]
             if self._note_provider_failure(f"Prompt Leak detected: {leak_preview}") is _LoopSignal.TERMINATE:
-                return "", ""
+                return LLMInvocationResult(
+                    status=LLMInvocationStatus.FATAL_ERROR,
+                    error_type="PromptLeak",
+                    safe_message="Model response leaked system markers",
+                    retryable=False,
+                )
             time.sleep(self.POLL_DELAY)
-            return "", ""
+            return LLMInvocationResult(
+                status=LLMInvocationStatus.RETRYABLE_ERROR,
+                error_type="PromptLeak",
+                safe_message="Model response leaked system markers",
+                retryable=True,
+            )
 
         normalized_resp = _normalize_response(response_text)
 
@@ -592,7 +609,10 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             )
             self.state.increment_step()
             time.sleep(self.POLL_DELAY)
-            return response_text, normalized_resp
+            return LLMInvocationResult(
+                status=LLMInvocationStatus.EMPTY_RESPONSE,
+                retryable=True,
+            )
 
         self._note_provider_success()
         self.state.append_message({"role": "assistant", "content": response})
@@ -600,9 +620,12 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             "llm_request_completed",
             {"duration": elapsed, "length": len(response)},
         )
-        return response_text, normalized_resp
+        return LLMInvocationResult(
+            status=LLMInvocationStatus.SUCCESS,
+            content=response_text,
+        )
 
-    def _invoke_with_token_stream(self) -> tuple[str, str]:
+    def _invoke_with_token_stream(self) -> LLMInvocationResult:
         """Stream tokens live, return assembled response tuple.
 
         Mirrors the non-streaming ``_invoke_llm_and_normalize`` message assembly
@@ -641,11 +664,28 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         cancel = CancelToken()
         cancel.clear()
 
-        for delta in _router.generate_token_stream(compacted, logger=self._logger):
-            if cancel.is_cancelled():
-                break
-            if "content" in delta and delta["content"]:
-                display(delta["content"])
+        try:
+            for delta in _router.generate_token_stream(compacted, logger=self._logger):
+                if cancel.is_cancelled():
+                    break
+                if "content" in delta and delta["content"]:
+                    display(delta["content"])
+        except (TimeoutError, ConnectionError, OSError, RuntimeError, ValueError) as exc:
+            exc_type = type(exc).__name__
+            if self._note_provider_failure(f"{exc_type}: {exc}") is _LoopSignal.TERMINATE:
+                return LLMInvocationResult(
+                    status=LLMInvocationStatus.FATAL_ERROR,
+                    error_type=exc_type,
+                    safe_message=str(exc)[:200],
+                    retryable=False,
+                )
+            time.sleep(self.POLL_DELAY)
+            return LLMInvocationResult(
+                status=LLMInvocationStatus.RETRYABLE_ERROR,
+                error_type=exc_type,
+                safe_message=str(exc)[:200],
+                retryable=True,
+            )
 
         response_text = "".join(collected)
         # Never raise to the user — return the partial response (per hard rule).
@@ -653,10 +693,30 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             response_text += "\n\n[⏹️ Generation cancelled]"
             cancel.clear()
         response_text = response_text.strip()
-        normalized_resp = _normalize_response(response_text)
+
+        # ── Streaming Leak Detector (mirrors _invoke_llm_and_normalize) ──
+        if any(marker in response_text for marker in _LEAK_MARKERS):
+            leak_preview = response_text[:200]
+            if self._note_provider_failure(f"Prompt Leak detected: {leak_preview}") is _LoopSignal.TERMINATE:
+                return LLMInvocationResult(
+                    status=LLMInvocationStatus.FATAL_ERROR,
+                    error_type="PromptLeak",
+                    retryable=False,
+                )
+            time.sleep(self.POLL_DELAY)
+            return LLMInvocationResult(
+                status=LLMInvocationStatus.RETRYABLE_ERROR,
+                error_type="PromptLeak",
+                retryable=True,
+            )
 
         if not response_text:
-            raise RuntimeError("Streaming returned an empty response.")
+            return LLMInvocationResult(
+                status=LLMInvocationStatus.EMPTY_RESPONSE,
+                error_type="EmptyResponse",
+                safe_message="Streaming returned an empty response.",
+                retryable=True,
+            )
 
         self._note_provider_success()
         self.state.append_message({"role": "assistant", "content": response_text})
@@ -664,7 +724,10 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             "llm_request_completed",
             {"duration": 0.0, "length": len(response_text)},
         )
-        return response_text, normalized_resp
+        return LLMInvocationResult(
+            status=LLMInvocationStatus.SUCCESS,
+            content=response_text,
+        )
 
 
     def _check_repetition_guard(self, response_text: str, normalized_resp: str) -> _LoopSignal:
@@ -743,44 +806,22 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 return False
         return True
 
-    def _handle_cycle_and_security(self, tool_call: ToolCall) -> _LoopSignal:
-        """Detect repeated/oscillating tool calls and enforce the shell security gate.
+    # ------------------------------------------------------------------
+    # _handle_cycle_and_security — decomposed into 3 focused stages
+    # ------------------------------------------------------------------
+    def _check_fixation_breaker(self, tool_call: ToolCall) -> _LoopSignal:
+        """Stage 1: Fixation Breaker — detect redundant signatures, force final.
 
-        Returns ``CONTINUE`` when a cycle is detected or a shell command is
-        rejected (the offending call is skipped). On pass, updates the recent-call
-        tracker and returns ``PROCEED`` with ``self._active_tool`` set.
+        Tracks the SET of all executed tool-call signatures and counts
+        redundant (already-seen) calls. When the agent has repeatedly
+        visited the same call without reaching 3 distinct reads, it is
+        redirected to a DIFFERENT file. Once redundant >= 2 OR reads >= 5,
+        ``_force_final`` is raised so the next LLM turn is pinned to
+        ``final_answer`` via ``tool_choice``.
         """
-        ctx = self._ctx
-        assert ctx is not None
         tool_name = tool_call.tool
         tool_args = tool_call.args
 
-        # final_answer is a termination convention, not an executable tool. When
-        # a small/fallback model emits it in loose ReAct prose ("FINAL_ANSWER
-        # ...") the forgiving parser surfaces it as a ToolCall here; short-circuit
-        # to a clean termination instead of dispatching a non-registered tool
-        # (which would be rejected and loop forever). Run the verifier inline so
-        # the evidence-rejection side effects (increment count + inject [CONTROL])
-        # stay synchronous — unit tests (test_evidence_feedback_loop_soft_interception)
-        # depend on this; _run_once centralizes only the raw-JSON final_answer path
-        # (signal FINAL_ANSWER from _parse_and_validate_tool).
-        if tool_name == "final_answer":
-            answer = ""
-            if isinstance(tool_args, dict):
-                answer = tool_args.get("answer") or tool_args.get("text") or ""
-            if answer:
-                self._last_response = answer
-            return self._verify_claim_or_self_correct()
-
-        # ── Fixation Breaker (Hard Stop -> force final_answer) ──────────────
-        # The small Orchestrator model cycles through a ROTATION of distinct
-        # calls (list ., read pyproject, list ., read main.py, list core, ...)
-        # that never repeat CONSECUTIVELY — so a "last == current" comparison
-        # never fires. Instead we track the SET of all executed signatures and
-        # count redundant (already-seen) calls, plus a sufficiency threshold on
-        # successful reads. Either condition forces final_answer on the next
-        # turn (tool_choice is pinned in _invoke_llm_and_normalize), breaking
-        # the non-converging loop without waiting for the step budget.
         import json as _json
         current_sig = f"{tool_name}:{_json.dumps(tool_args, sort_keys=True, ensure_ascii=False)}"
         if not hasattr(self, "_executed_sigs"):
@@ -790,10 +831,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         else:
             self._executed_sigs.add(current_sig)
 
-        # Phase G+: do NOT let the investigation terminate before the agent has
-        # collected enough evidence. Only force final_answer once >=3 distinct
-        # source files have actually been read. Below that threshold, redirect to
-        # a DIFFERENT file instead of ending the loop.
+        # Phase G+: below 3 reads, redirect to a DIFFERENT file; never end.
         if self._redundant_count >= 2 and self._real_reads() < 3:
             suggestions = self._extract_listing_files()
             bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count})
@@ -821,6 +859,21 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count})
             return _LoopSignal.CONTINUE
 
+        return _LoopSignal.PROCEED
+
+    def _check_oscillation(self, tool_call: ToolCall) -> _LoopSignal:
+        """Stage 2: Oscillation Detection — spot repeatedly-called commands.
+
+        Compares the current call against the 4 most-recent calls and
+        ``ctx.last_command``. On repeat, emits a ``[SYSTEM CRITIQUE]`` and
+        returns ``CONTINUE`` (the loop re-invokes the LLM). On pass, updates
+        ``ctx.last_command`` and appends the call to ``self._recent_calls``,
+        returning ``PROCEED`` (fall through to shell security).
+        """
+        ctx = self._ctx
+        assert ctx is not None
+        tool_name = tool_call.tool
+
         recent_slice = list(self._recent_calls)[-4:]
         if tool_call == ctx.last_command or tool_call in recent_slice:
             ctx.repeated += 1
@@ -847,6 +900,20 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
 
         self._recent_calls.append(tool_call)
         ctx.last_command = tool_call
+        return _LoopSignal.PROCEED
+
+    def _check_shell_security(self, tool_call: ToolCall) -> _LoopSignal:
+        """Stage 3: Shell Security Gate.
+
+        When the tool is ``execute_shell``, validates the command against
+        ``is_safe_command`` and requests interactive shell approval. On
+        pass, sets ``self._active_tool`` and returns ``PROCEED``. On
+        block/deny, emits telemetry and returns ``CONTINUE``.
+        """
+        ctx = self._ctx
+        assert ctx is not None
+        tool_name = tool_call.tool
+        tool_args = tool_call.args
 
         if tool_name == "execute_shell":
             command = tool_args.get("command", "")
@@ -858,7 +925,6 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                     "tool": tool_name,
                     "error": "shell command violated security policy",
                 })
-                # Phase4.1 Auto-Critical (b): a security denial/block is frozen.
                 self._flag_latest_evidence_critical()
                 self.state.append_message(
                     {
@@ -870,17 +936,11 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 time.sleep(self.POLL_DELAY)
                 return _LoopSignal.CONTINUE
 
-            # Interactive permission gate (human-in-the-loop). The agent executes
-            # on a worker thread (asyncio.to_thread), so a blocking bridge prompt
-            # here never freezes the async REPL event loop. Approved commands are
-            # cached in the per-run session allowlist to avoid prompt exhaustion.
-            # Phase2.1: a 60s non-blocking timeout (select on stdin) fails
-            # closed — auto-denying instead of hanging a Termux session.
+            # Interactive permission gate (human-in-the-loop).
             approved = self._request_shell_approval(command, timeout=60.0)
             if approved is False:
                 bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count})
                 bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count})
-                # Phase4.1 Auto-Critical (b): explicit user denial is frozen.
                 self._flag_latest_evidence_critical()
                 warned = self._approval_timed_out
                 self.state.append_message(
@@ -899,6 +959,39 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 return _LoopSignal.CONTINUE
 
         self._active_tool = tool_call
+        return _LoopSignal.PROCEED
+
+    def _handle_cycle_and_security(self, tool_call: ToolCall) -> _LoopSignal:
+        """Detect repeated/oscillating tool calls and enforce the shell security gate.
+
+        Dispatches to 3 focused stages in sequence. Returns ``CONTINUE`` when
+        a cycle is detected or a shell command is rejected (the offending call
+        is skipped). On pass, returns ``PROCEED`` with ``self._active_tool`` set.
+        """
+        ctx = self._ctx
+        assert ctx is not None
+        tool_name = tool_call.tool
+        tool_args = tool_call.args
+
+        # final_answer is a termination convention, not an executable tool.
+        # Short-circuit to the verifier instead of dispatching.
+        if tool_name == "final_answer":
+            answer = ""
+            if isinstance(tool_args, dict):
+                answer = tool_args.get("answer") or tool_args.get("text") or ""
+            if answer:
+                self._last_response = answer
+            return self._verify_claim_or_self_correct()
+
+        # Chain 3 stages — first non-PROCEED result wins.
+        for stage in (
+            self._check_fixation_breaker,
+            self._check_oscillation,
+            self._check_shell_security,
+        ):
+            result = stage(tool_call)
+            if result is not _LoopSignal.PROCEED:
+                return result
         return _LoopSignal.PROCEED
 
     def _request_shell_approval(self, command: str, timeout: float | None = None) -> bool:
@@ -1052,26 +1145,13 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
 
         return False
 
-    def _pre_dispatch_guard(self, tool_call: ToolCall) -> "ToolResult | None":
-        """Phase 4.5 cheap pre-checks that short-circuit a real tool dispatch.
-
-        Returns a ``ToolResult`` when the call should be answered WITHOUT
-        consuming a real tool execution (and therefore without spending budget
-        on a redundant/external call). Returns ``None`` when the call should
-        proceed to the normal dispatcher path.
-
-        Guards:
-          1. file_system path jail — reject reads/writes outside the pinned
-             workspace root before the tool ever runs (no wasted tool call).
-          2. web_search dedup — if the normalized query was already executed
-             this run, return the cached result instead of re-calling the net.
-        """
-        ctx = self._ctx
-        assert ctx is not None
-        tool_name = tool_call.tool
-        tool_args = tool_call.args
-
-        # ── Guard 1: file_system workspace jail (pre-dispatch) ───────────────
+    # ------------------------------------------------------------------
+    # Pre-dispatch guards — 4 independent checks, each returns ToolResult | None
+    # ------------------------------------------------------------------
+    def _guard_path_jail(
+        self, tool_name: str, tool_args: object
+    ) -> "ToolResult | None":
+        """Guard 1: block file_system operations outside the workspace root."""
         if tool_name == "file_system" and isinstance(tool_args, dict):
             path = tool_args.get("path")
             action = (tool_args.get("action") or "").lower()
@@ -1092,13 +1172,18 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                         returncode=-1,
                         status="error",
                     )
+        return None
 
-        # ── Guard 2: web_search dedup (return cached result) ────────────────
+    def _guard_web_dedup(
+        self, tool_name: str, tool_args: object
+    ) -> "ToolResult | None":
+        """Guard 2: return cached web_search result for duplicate queries."""
         if tool_name == "web_search" and isinstance(tool_args, dict):
             raw_query = tool_args.get("query")
             if raw_query:
                 norm = str(raw_query).strip().lower()
-                if norm in ctx.executed_search_queries and norm in ctx.last_search_cache:
+                ctx = self._ctx
+                if ctx is not None and norm in ctx.executed_search_queries and norm in ctx.last_search_cache:
                     bus.emit("tool_dedup_hit", {
                         "tool": "web_search",
                         "query": raw_query,
@@ -1111,11 +1196,18 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                         status="success",
                         metadata={"deduped": True},
                     )
+        return None
 
-        # ── Guard 3: Answer-in-hand / redundant exploration guard ────────────
-        # If the target file requested by the user has already been read into
-        # evidence, or if the model attempts to re-read/list the directory tree (path='.')
-        # after gathering successful reads, block the call and force final_answer.
+    def _guard_answer_in_hand(
+        self, tool_name: str, tool_args: object
+    ) -> "ToolResult | None":
+        """Guard 3: stop exploration when sufficient evidence is gathered.
+
+        Checks two conditions:
+          (a) ``_is_answer_in_hand_or_goal_met()`` — blocks any exploration tool.
+          (b) Redundant root list or re-read after at least one successful read.
+        """
+        # (a) Answer-in-hand / goal-met gate
         if self._is_answer_in_hand_or_goal_met():
             self._force_final = True
             if tool_name in ("file_system", "execute_shell", "web_search", "search_knowledge_base"):
@@ -1126,38 +1218,74 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 return ToolResult(
                     success=True,
                     stdout=(
-                        "[SYSTEM DIRECTIVE] Sufficient evidence has already been gathered to answer the user's prompt. "
-                        f"Do NOT execute more commands or scan directories. Immediately output your answer using: "
-                        '{"tool": "final_answer", "args": {"answer": "<your concise report from the evidence>"}}'
+                        "[SYSTEM DIRECTIVE] Sufficient evidence has already been gathered "
+                        "to answer the user's prompt. "
+                        "Do NOT execute more commands or scan directories. Immediately "
+                        'output your answer using: '
+                        '{"tool": "final_answer", "args": {"answer": '
+                        '"<your concise report from the evidence>"}}'
                     ),
                     returncode=0,
                     status="success",
                     metadata={"answer_in_hand_blocked": True},
                 )
 
+        # (b) Redundant root list / re-read after reads exist
         if tool_name == "file_system" and isinstance(tool_args, dict):
             path = str(tool_args.get("path") or "").strip().lower()
             action = str(tool_args.get("action") or "").strip().lower()
-            has_reads = any(r.success and getattr(r, "tool", "") == "file_system" and str(getattr(r, "command_or_path", "")).strip().lower() not in (".", "/", "") for r in self.evidence_log.get_records())
-            if has_reads and (path in (".", "/", "") or action == "list" or any(str(r.command_or_path).strip().lower() == path for r in self.evidence_log.get_records() if r.success)):
+            has_reads = any(
+                r.success and getattr(r, "tool", "") == "file_system"
+                and str(getattr(r, "command_or_path", "")).strip().lower()
+                    not in (".", "/", "")
+                for r in self.evidence_log.get_records()
+            )
+            if has_reads and (
+                path in (".", "/", "")
+                or action == "list"
+                or any(
+                    str(r.command_or_path).strip().lower() == path
+                    for r in self.evidence_log.get_records() if r.success
+                )
+            ):
                 self._force_final = True
                 return ToolResult(
                     success=True,
                     stdout=(
-                        f"[SYSTEM DIRECTIVE] You already read the target files ({path or '.'}). Do NOT list directories or re-read files. "
-                        'Immediately output {"tool": "final_answer", "args": {"answer": "<your concise report from the evidence>"}}'
+                        "[SYSTEM DIRECTIVE] You already read the target files "
+                        f"({path or '.'}). Do NOT list directories or re-read files. "
+                        'Immediately output {"tool": "final_answer", '
+                        '"args": {"answer": '
+                        '"<your concise report from the evidence>"}}'
                     ),
                     returncode=0,
                     status="success",
                     metadata={"redundant_read_blocked": True},
                 )
+        return None
 
-        # ── Guard 4: Re-read / wider-scope barrier (no new justification) ────
-        # Point 3 of the convergence fix: a successful read of a source must not
-        # be repeated, nor may a wider-scope listing (path='.' or '/') be issued
-        # after a targeted read, unless a NEW explicit justification exists. This
-        # is the hard backstop that independent of is_answer_in_hand keeps the
-        # loop from re-touching already-read evidence.
+    def _guard_reread_barrier(
+        self, tool_name: str, tool_args: object
+    ) -> "ToolResult | None":
+        """Guard 4: block whole-tree scans, repeated root lists, and re-reads.
+
+        Phase 0 root fix — UNIFIED EXPLORATION CONTRACT.
+        Guard 4 and the Structural Verifier (check_investigation_gates)
+        must agree on what counts as "real exploration progress". The
+        verifier requires: directories>=1, configuration>=1,
+        (entrypoints>=1 OR modules>=1), files>=3. Guard 4 therefore
+        PERMITS directed exploration that can satisfy those gates and
+        ONLY blocks the pathological pattern:
+          (a) recursive whole-tree scan of '.'/'/'  → the exact "801-entry
+              tree wipe" loop;
+          (b) a SECOND non-recursive root listing (one discovery pass is
+              enough — directories>=1 is met by the first);
+          (c) re-reading an already-read exact file path.
+        A single non-recursive `list .` is ALLOWED exactly once so the
+        model can produce directories>=1; targeted `list <dir>` and every
+        fresh file read are always allowed. This removes the deadlock
+        where the guard blocked the very listing the verifier demanded.
+        """
         if tool_name == "file_system" and isinstance(tool_args, dict):
             action = str(tool_args.get("action") or "").lower()
             path = str(tool_args.get("path") or "").strip()
@@ -1172,78 +1300,93 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             recursive = str(tool_args.get("recursive", "")).lower() in ("true", "1", "yes")
             is_root_list = path_l in (".", "/", "") and action == "list"
             is_whole_tree_scan = is_root_list and recursive
-            # Phase 0 root fix — UNIFIED EXPLORATION CONTRACT.
-            # Guard 4 and the Structural Verifier (check_investigation_gates)
-            # must agree on what counts as "real exploration progress". The
-            # verifier requires: directories>=1, configuration>=1,
-            # (entrypoints>=1 OR modules>=1), files>=3. Guard 4 therefore
-            # PERMITS directed exploration that can satisfy those gates and
-            # ONLY blocks the pathological pattern:
-            #   (a) recursive whole-tree scan of '.'/'/'  → the exact "801-entry
-            #       tree wipe" loop;
-            #   (b) a SECOND non-recursive root listing (one discovery pass is
-            #       enough — directories>=1 is met by the first);
-            #   (c) re-reading an already-read exact file path.
-            # A single non-recursive `list .` is ALLOWED exactly once so the
-            # model can produce directories>=1; targeted `list <dir>` and every
-            # fresh file read are always allowed. This removes the deadlock
-            # where the guard blocked the very listing the verifier demanded.
+
+            # (a) Recursive whole-tree scan → block
             if is_whole_tree_scan:
                 self._force_final = True
                 return ToolResult(
                     success=True,
                     stdout=(
-                        "[SYSTEM DIRECTIVE] A recursive whole-tree listing is not needed to answer this prompt. "
-                        "Use a single non-recursive directory listing plus targeted file_system reads of specific files. "
-                        'Immediately output {"tool": "final_answer", "args": {"answer": "<your concise report from the evidence>"}}'
+                        "[SYSTEM DIRECTIVE] A recursive whole-tree listing is not "
+                        "needed to answer this prompt. "
+                        "Use a single non-recursive directory listing plus targeted "
+                        "file_system reads of specific files. "
+                        'Immediately output {"tool": "final_answer", '
+                        '"args": {"answer": '
+                        '"<your concise report from the evidence>"}}'
                     ),
                     returncode=0,
                     status="success",
                     metadata={"whole_tree_scan_blocked": True},
                 )
+
+            # (b) Second non-recursive root listing → block
             if is_root_list:
-                # Permit exactly ONE non-recursive root listing, and only as a
-                # discovery pass BEFORE any file has been read. Once the model
-                # has read evidence, re-listing the root is redundant (it cannot
-                # produce new files) and must be blocked — this is what keeps
-                # the verifier's "files >= 3 reads" gate authoritative.
-                if ctx.root_list_count >= 1 or read_paths:
+                if self._ctx and (self._ctx.root_list_count >= 1 or read_paths):
                     self._force_final = True
                     return ToolResult(
                         success=True,
                         stdout=(
-                            "[SYSTEM DIRECTIVE] The repository root was already listed (or you already have reads). "
-                            "Do NOT re-list directories. Use targeted file_system reads of specific files. "
-                            'Immediately output {"tool": "final_answer", "args": {"answer": "<your concise report from the evidence>"}}'
+                            "[SYSTEM DIRECTIVE] The repository root was already listed "
+                            "(or you already have reads). "
+                            "Do NOT re-list directories. Use targeted file_system reads "
+                            "of specific files. "
+                            'Immediately output {"tool": "final_answer", '
+                            '"args": {"answer": '
+                            '"<your concise report from the evidence>"}}'
                         ),
                         returncode=0,
                         status="success",
                         metadata={"root_list_repeat_blocked": True},
                     )
-                ctx.root_list_count += 1
-                # Allowed: first non-recursive root listing (satisfies the
-                # verifier's directories>=1 gate). Fall through to dispatch.
+                if self._ctx:
+                    self._ctx.root_list_count += 1
+                # First non-recursive root listing: allowed.
                 return None
-            # Targeted listing of a specific subdirectory is always allowed
-            # (produces directories / modules for the verifier).
+
+            # (c) Targeted subdirectory listing: always allowed
             if action == "list":
                 return None
-            # Re-read of an already-read exact path (action read/replace/append
-            # on the same file) → block and force final.
+
+            # (d) Re-read of an already-read exact path → block
             if action in ("read", "replace", "append", "delete", "") and path_l in read_paths:
                 self._force_final = True
                 return ToolResult(
                     success=True,
                     stdout=(
-                        f"[SYSTEM DIRECTIVE] The file '{path}' was already read into evidence this run. "
+                        f"[SYSTEM DIRECTIVE] The file '{path}' was already read into "
+                        "evidence this run. "
                         "Do NOT re-read it. Immediately output your answer using: "
-                        '{"tool": "final_answer", "args": {"answer": "<your concise report from the evidence>"}}'
+                        '{"tool": "final_answer", '
+                        '"args": {"answer": '
+                        '"<your concise report from the evidence>"}}'
                     ),
                     returncode=0,
                     status="success",
                     metadata={"reread_blocked": True},
                 )
+        return None
 
+    def _pre_dispatch_guard(self, tool_call: ToolCall) -> "ToolResult | None":
+        """Phase 4.5 cheap pre-checks that short-circuit a real tool dispatch.
+
+        Chains 4 independent guards; the first non-None result wins.
+        Returns ``None`` when the call should proceed to the normal dispatcher.
+        """
+        ctx = self._ctx
+        assert ctx is not None
+        tool_name = tool_call.tool
+        tool_args = tool_call.args
+
+        for guard in (
+            self._guard_path_jail,
+            self._guard_web_dedup,
+            self._guard_answer_in_hand,
+            self._guard_reread_barrier,
+        ):
+            result = guard(tool_name, tool_args)
+            if result is not None:
+                return result
         return None
 
     def _inject_guard_directive(self, pre: "ToolResult") -> None:
@@ -1269,228 +1412,28 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
     def _dispatch_and_record_evidence(self, tool_call: ToolCall) -> None:
         """Dispatch the validated tool and log the outcome to the EvidenceLog.
 
-        Records the evidence trace, builds the user-facing feedback message,
-        appends it to state, increments the step, prunes history, and sleeps for
-        ``POLL_DELAY``. No return value: this is the terminal action of a
-        successful iteration.
+        Delegates to 3 focused stages in ``_ToolDispatchMixin``:
+          1. Consent + Edit Gate  → may return early
+          2. Execute + Record     → dispatch + evidence + telemetry
+          3. Finalize             → feedback + state + sleep
         """
         tool_name = tool_call.tool
         tool_args = tool_call.args
 
-        # ── Consent Loop (Phase 2 Public Release Protocol) ────────────────────
-        # Intercept BEFORE the dispatcher invokes the tool. The consent policy is
-        # centralized in ConsentManager and is the ONLY place that decides whether
-        # a tool needs approval. A declined call returns a normal successful
-        # ToolResult (success=True, stdout="Execution blocked by user.") — this is
-        # a valid outcome, NOT an engine error: no exception, no loop abort,
-        # no loop_error emit. The LLM receives the observation and adapts.
-        if ConsentManager().requires_confirmation(tool_name, tool_args):
-            blocked = ConsentManager().confirm(tool_name, tool_args)
-            if blocked is not None:
-                result = blocked
-                blocked_rec = self.evidence_log.record(
-                    tool=tool_name,
-                    command_or_path=_extract_cmd_or_path(tool_args),
-                    success=blocked.success,
-                    output_snippet=blocked.stdout or blocked.stderr,
-                )
-                # --- Safe Telemetry Injection (Blocked Tool) ---
-                _sys_logger = getattr(self, "logger", None) or getattr(self, "_logger", None)
-                if _sys_logger is None and hasattr(self, "context"):
-                    _sys_logger = getattr(self.context, "logger", None)
-                elif _sys_logger is None and hasattr(self, "ctx"):
-                    _sys_logger = getattr(self.ctx, "logger", None)
-                elif _sys_logger is None and hasattr(self, "_ctx") and self._ctx is not None:
-                    _sys_logger = getattr(self._ctx, "logger", None)
+        if self._handle_consent_and_edit_gate(tool_name, tool_args):
+            return
 
-                if _sys_logger and hasattr(_sys_logger, "log_execution"):
-                    _sys_logger.log_execution({
-                        "session_id": getattr(self.state, "session_id", "unknown"),
-                        "step": getattr(self.state, "step_count", 0),
-                        "type": "TOOL_EXECUTION_BLOCKED",
-                        "evidence_id": getattr(blocked_rec, "evidence_id", ""),
-                        "tool": tool_name,
-                        "command_or_path": str(tool_args)[:100],
-                        "success": blocked.success,
-                        "output_snippet": truncate(blocked.stdout or blocked.stderr or "", 200),
-                    })
-                # -------------------------------------------------
-                output = truncate(blocked.output or "", self.max_output_len)
-                feedback = self._build_tool_feedback(result, tool_name, tool_args, output)
-                self.state.append_message({
-                    "role": "system",
-                    "content": f"[TOOL RESULT: {tool_name}]\n{feedback}",
-                })
-                self.state.increment_step()
-                time.sleep(self.POLL_DELAY)
-                return
+        result, output, rec = self._execute_and_record(tool_name, tool_args)
+        self._finalize_tool_dispatch(tool_name, tool_args, result, output, rec)
 
-        # ── Edit Gateway (Phase 2.4) Human-in-the-Loop ────────────────────────
-        # Block the engine thread and wait for human approval before applying
-        # any file write/edit operation to disk. The UI receives a
-        # threading.Event and a decision_box dict; it sets decision_box["approved"]
-        # and calls event.set() when the operator responds to the approval prompt.
-        _is_write = False
-        if tool_name in ("edit_file", "replace_file_content"):
-            _is_write = True
-        elif tool_name == "file_system":
-            _action = (tool_args or {}).get("action", "") if isinstance(tool_args, dict) else ""
-            # All actions except read/list/empty are potentially destructive.
-            if _action not in ("", "read", "list", "view"):
-                _is_write = True
-
-        if _is_write:
-            _bridge = get_bridge()
-            _approval_event = threading.Event()
-            _decision_box: dict[str, bool] = {"approved": False}
-            _file_path = str(tool_args.get("path") or tool_args.get("file", ""))
-            _diff = str(tool_args.get("content") or tool_args.get("diff", ""))
-
-            _bridge.emit("edit_proposed",
-                file=_file_path,
-                diff=_diff,
-                event=_approval_event,
-                decision_box=_decision_box,
-            )
-            _bridge.emit("status_update", message="⏳ Waiting for human approval to apply edits...")
-
-            # FREEZE the engine thread until the operator responds (120s timeout).
-            _approval_event.wait(timeout=120)
-
-            if not _decision_box.get("approved", False):
-                _bridge.emit("status_update", message="✋ Edit rejected by user.")
-                _result = ToolResult(
-                    success=True,
-                    stdout="USER REJECTED THE EDIT. Manual override. Please revise your approach.",
-                    stderr="",
-                    output="USER REJECTED THE EDIT. Manual override. Please revise your approach.",
-                )
-                _rec = self.evidence_log.record(
-                    tool=tool_name,
-                    command_or_path=_extract_cmd_or_path(tool_args),
-                    success=True,
-                    output_snippet="Edit rejected by user",
-                    action=str(tool_args.get("action", "")) if isinstance(tool_args, dict) else "",
-                )
-                _output = truncate(_result.output or "", self.max_output_len)
-                _feedback = self._build_tool_feedback(_result, tool_name, tool_args, _output)
-                self.state.append_message({
-                    "role": "system",
-                    "content": f"[TOOL RESULT: {tool_name}]\n{_feedback}",
-                })
-                self.state.increment_step()
-                time.sleep(self.POLL_DELAY)
-                return
-
-            _bridge.emit("status_update", message="✅ Edit approved. Applying to disk...")
-
-        if tool_name == "todo_write" and isinstance(tool_args, dict) and tool_args.get("action") == "update":
-            from engine.tool_registry import registry
-            _todo_tool = registry.get_tool("todo_write")
-            _mgr = getattr(_todo_tool, "_manager", None) or getattr(_todo_tool, "todo_manager", None)
-            if _mgr is None and hasattr(self, "context") and hasattr(self.context, "todo_manager"):
-                _mgr = self.context.todo_manager
-            if _mgr is None or len(_mgr.all()) == 0:
-                result = ToolResult(
-                    success=False,
-                    stdout="",
-                    stderr="Protocol error: call todo_write(action='plan', items=[...]) first.",
-                    returncode=-1,
-                )
-            else:
-                result = self.dispatcher.dispatch(tool_name, tool_args)
-        else:
-            result = self.dispatcher.dispatch(tool_name, tool_args)
-
-        cmd_summary = _extract_cmd_or_path(tool_args)
-        rec = self.evidence_log.record(
-            tool=tool_name,
-            command_or_path=cmd_summary,
-            success=getattr(result, "success", False),
-            output_snippet=getattr(result, "output", "") or getattr(result, "stderr", ""),
-            action=str(tool_args.get("action", "")) if isinstance(tool_args, dict) else "",
-        )
-        # ── Phase F: (diagnostic tokens removed) ────────────────────────
-        # ── Phase F: (PHASE_E diagnostic tokens removed) ─────────────────
-        # --- Safe Telemetry Injection ---
-        _sys_logger = getattr(self, "logger", None) or getattr(self, "_logger", None)
-        if _sys_logger is None and hasattr(self, "context"):
-            _sys_logger = getattr(self.context, "logger", None)
-        elif _sys_logger is None and hasattr(self, "ctx"):
-            _sys_logger = getattr(self.ctx, "logger", None)
-        elif _sys_logger is None and hasattr(self, "_ctx") and self._ctx is not None:
-            _sys_logger = getattr(self._ctx, "logger", None)
-
-        if _sys_logger and hasattr(_sys_logger, "log_execution"):
-            _sys_logger.log_execution({
-                "session_id": getattr(self.state, "session_id", "unknown"),
-                "step": getattr(self.state, "step_count", 0),
-                "type": "TOOL_EXECUTION",
-                "evidence_id": getattr(rec, "evidence_id", ""),
-                "tool": tool_name,
-                "command_or_path": cmd_summary,
-                "success": getattr(result, "success", False),
-                "output_snippet": truncate(getattr(result, "output", "") or getattr(result, "stderr", "") or "", 200),
-            })
-        # ---------------------------------
-
-        output_val = getattr(result, "output", "") or getattr(result, "stderr", "") or str(result)
-        output = truncate(output_val, self.max_output_len)
-
-        # Phase4: append a compact interaction record driving the sliding window.
-        # The latest evidence record carries the critical flag for freezing.
-        ctx = self._ctx
-        if ctx is not None:
-            rec = self.evidence_log.get_records()[-1] if self.evidence_log.get_records() else None
-            ok = bool(getattr(result, "success", False))
-            exit_code = int(getattr(result, "returncode", 0) or 0)
-            ctx.tool_interactions.append(_ToolInteraction(
-                step=self.state.step_count,
-                tool=tool_name,
-                ok=ok,
-                exit_code=exit_code,
-                path_hint=(cmd_summary or "")[:80],
-                summary=(
-                    f"{'SUCCESS' if ok else 'FAILURE'}: "
-                    f"{cmd_summary}".strip()
-                ),
-                output=output,
-                evidence_id=rec.evidence_id if rec else "",
-                critical=bool(rec.critical) if rec else False,
-            ))
-
-        feedback = self._build_tool_feedback(result, tool_name, tool_args, output)
-        self.state.append_message({
-            "role": "system",
-            "content": f"[TOOL RESULT: {tool_name}]\n{feedback}",
-        })
-        # Phase 4.5 — web_search dedup bookkeeping: cache the executed query so
-        # an identical re-issue later in the run returns the cached result.
-        if tool_name == "web_search" and isinstance(tool_args, dict):
-            raw_query = tool_args.get("query")
-            if raw_query:
-                norm = str(raw_query).strip().lower()
-                if norm not in ctx.executed_search_queries:
-                    ctx.executed_search_queries.append(norm)
-                if getattr(result, "success", False):
-                    ctx.last_search_cache[norm] = output
-        # Phase 4.5 — a real dispatch occurred → reset the no-tool counter.
-        if ctx is not None:
-            ctx.consecutive_no_tool_rounds = 0
-        self.state.increment_step()
-        self.state.prune_history()
-        time.sleep(self.POLL_DELAY)
-
-    # ------------------------------------------------------------------
-    # Orchestrator
-    # ------------------------------------------------------------------
-
-    def run(self, user_prompt: str) -> str:
+    def run(self, user_prompt: str) -> TurnOutcome:
         """Start the autonomous execution loop (thin orchestrator).
 
         Per-iteration responsibilities are delegated to the private helpers above.
         All external event names, state mutations, and the two-call
         update_state lifecycle are preserved byte-for-byte.
+
+        Returns a TurnOutcome with the terminal result of this turn.
         """
         self.state.append_message({"role": "user", "content": user_prompt})
         self.state.update_status("RUNNING")
@@ -1546,7 +1489,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             self._finalize_loop(interrupted)
             # Drop the per-run static context so it cannot leak across runs.
             self._static_context_cache = None
-        return self._last_response
+        return self._turn_finalizer.outcome
 
     def _prepare_iteration_and_check_guards(self) -> _LoopSignal:
         if self._check_budget_and_guards() is _LoopSignal.TERMINATE:
@@ -1626,9 +1569,13 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         if self._prepare_iteration_and_check_guards() is _LoopSignal.TERMINATE:
             return
 
-        response_text, normalized_resp = self._invoke_llm_and_normalize()
-        if not response_text:
+        result = self._invoke_llm_and_normalize()
+        if result.status is not LLMInvocationStatus.SUCCESS:
+            # Non-success status is handled by the outer _finalize_loop fallback.
             return
+
+        response_text = result.content
+        normalized_resp = _normalize_response(response_text)
 
         if self._check_repetition_guard(response_text, normalized_resp) is _LoopSignal.TERMINATE:
             return
@@ -1645,7 +1592,42 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
 
 
     def _finalize_loop(self, interrupted: bool) -> None:
-        """Emit the terminal loop events once the iteration cycle has ended."""
+        """Emit the terminal loop events once the iteration cycle has ended.
+
+        Phase 3: guarantees exactly one terminal TurnOutcome per started turn.
+        If no outcome was finalized during the run, creates a FAILED fallback.
+        The TurnFinalizer prevents overwriting an existing outcome.
+        """
+        # Phase 3: create terminal outcome if none was finalized during the run.
+        # Uses state.status as the authoritative discriminator (not _last_response,
+        # which can be a tool-call JSON from intermediate iterations).
+        if not self._turn_finalizer.is_finalized:
+            if self.state.status == "COMPLETED" and self._last_response:
+                # Normal completion via final_answer or repetition guard
+                self._turn_finalizer.finalize(TurnOutcome(
+                    status=TurnStatus.COMPLETED,
+                    safe_message=self._last_response,
+                    final_answer=self._last_response,
+                ))
+            elif interrupted:
+                self._turn_finalizer.finalize(TurnOutcome(
+                    status=TurnStatus.FAILED,
+                    safe_message="Interrupted by user",
+                    failure_stage="interrupted",
+                ))
+            elif self.state.status == "FAILED":
+                self._turn_finalizer.finalize(TurnOutcome(
+                    status=TurnStatus.FAILED,
+                    safe_message=self._last_response or "Loop ended with FAILED status",
+                    failure_stage="terminal_failure",
+                ))
+            else:
+                self._turn_finalizer.finalize(TurnOutcome(
+                    status=TurnStatus.FAILED,
+                    safe_message="Loop ended without terminal outcome",
+                    failure_stage="unclassified_terminal_path",
+                ))
+
         if not interrupted:
             if self.state.status == "RUNNING" and not self.state.is_loop_safe():
                 self.state.update_status("PAUSED")

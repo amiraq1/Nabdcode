@@ -32,6 +32,12 @@ COLORS: Dict[str, str] = {
     "border": "#1a1a1a",
 }
 
+# Selection highlight for keyboard navigation (Phase 1)
+SELECTED_COLOR: str = "bright_cyan"
+
+# Footer hint text color (Phase 4)
+FOOTER_COLOR: str = "grey50"
+
 ACTION_COLORS: Dict[str, str] = {
     "READ": "#0891B2",        # ice blue / teal (cyan-600)
     "EDIT": "#0891B2",        # ice blue / teal

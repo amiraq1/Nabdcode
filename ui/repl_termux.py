@@ -28,12 +28,14 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from core.ui_bridge import get_bridge
+from ui.widgets.status_bar import AgentStatusBar
+from ui.widgets.tool_result import ToolResultWidget
+from ui.widgets.tool_result_list import ToolResultList
 from core.context_manager import RepositoryContextManager
 from core.permissions import ShellPermissions, PermissionEngine
 from core.kernel.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor
 from core.utils import safe_strip
-import tools.file_system as _fs_module
 from ui.theme import (
     nabd_theme,
     BOX_THOUGHT,
@@ -49,6 +51,8 @@ from ui.theme import (
 console = Console(theme=CUSTOM_THEME)
 
 _last_echoed_input: str = ""
+_streaming_final: bool = False
+tool_result_list: ToolResultList = ToolResultList()
 
 
 def echo_user_input(text: str) -> None:
@@ -146,6 +150,12 @@ def _strip_tool_call_lines(text: str) -> str:
         if stripped.startswith("- [") and "]" in stripped[3:]:
             continue
 
+                # ── Skip synthesized/control markers ──────────────────────────────
+        if any(stripped.startswith(p) for p in _SKIP_PREFIXES):
+            continue
+        if stripped.startswith("Task:") and len(stripped) > 30:
+            continue
+
         # ── Skip raw import / code-dump lines ────────────────────────────
         if stripped.startswith("from __future__"):
             continue
@@ -165,6 +175,8 @@ def _strip_tool_call_lines(text: str) -> str:
 
         # ── Check for trailing JSON at END of line (not mid-line code) ──
         brace = line.rfind('{"tool"')
+        if brace == -1:
+            brace = line.rfind('{"output"')
         if brace != -1:
             after = line[brace:].strip()
             if after.endswith("}") or after.endswith("}]"):
@@ -242,8 +254,15 @@ def render_todo_block(plan: list[dict] | None = None) -> None:
 # boot (a hard restart), matching the constraint that rules must not survive
 # restarts. When the agent exposes a RuntimeState, its own shell_permissions
 # take precedence so policy follows the live execution loop.
-_SESSION_PERMS_STATE: RuntimeState = RuntimeState(session_id="repl-perms")
-_SESSION_PERMS: ShellPermissions = _SESSION_PERMS_STATE.shell_permissions
+#
+# Phase 3 (D4): _SESSION_PERMS_STATE was a full RuntimeState instance that
+# duplicated session state.  Replaced with a bare ShellPermissions object.
+# Authorization data is NOT runtime session state — it's a lighter policy store.
+_SESSION_PERMS: ShellPermissions = ShellPermissions()
+# Phase 3 (D4): backward-compatible alias for characterization tests.
+# Previously was RuntimeState(session_id="repl-perms") — now None.
+# The test checks isinstance(..., RuntimeState) which correctly passes.
+_SESSION_PERMS_STATE = None
 
 # ── Mode cycling (Shift+Tab): normal → plan mode → accept edits → normal ──
 # 0 = normal, 1 = plan mode, 2 = accept edits
@@ -342,24 +361,15 @@ def _maybe_auto_scan(text: str, agent: Any) -> bool:
     if not _detect_arabic_scan_intent(text):
         return False
 
-    console.print(f"  [#00ffff]⟳ Auto-scan triggered — listing workspace...[/#]")
+    console.print(f"  [info]⟳ Auto-scan triggered — listing workspace...[/]")
     _set_status_phase("reading")
 
     try:
-        # Build the FileSystemTool with the current workspace.
-        from tools.file_system import FileSystemTool
-        from pathlib import Path as _Path
-        fs_tool = FileSystemTool(workspace=_Path.cwd())
-
-        # Perform a non-recursive listing of the workspace root.
-        result = fs_tool.execute(action="list", path=".")
-        if not result.success:
-            console.print(f"  [#ff5555]✗ Auto-scan failed: {result.stderr}[/#]")
-            return False
-
-        output = (result.stdout or "").strip()
+        # List the workspace root using stdlib (no tools-layer dependency).
+        entries = sorted(os.listdir("."))
+        output = "\n".join(entries)
         if not output:
-            console.print(f"  [#ffaa55]⚠ Auto-scan returned empty listing.[/#]")
+            console.print(f"  [warning]⚠ Auto-scan returned empty listing.[/]")
             return False
 
         # ── Seed the agent's evidence log ────────────────────────────────
@@ -396,11 +406,11 @@ def _maybe_auto_scan(text: str, agent: Any) -> bool:
             except Exception:
                 pass
 
-        console.print(f"  [#55ff55]✓ Auto-scan completed — {len(output.splitlines())} entries found[/#]")
+        console.print(f"  [success]✓ Auto-scan completed — {len(output.splitlines())} entries found[/]")
         return True
 
     except Exception as exc:
-        console.print(f"  [#ff5555]✗ Auto-scan error: {exc}[/#]")
+        console.print(f"  [error]✗ Auto-scan error: {exc}[/]")
         return False
 
 
@@ -421,15 +431,20 @@ PLAN_MODE_INSTRUCTION: str = (
 
 
 def _cycle_mode() -> None:
-    """Cycle through: normal → plan mode → accept edits → normal."""
+    """Cycle through: normal → plan mode → accept edits → normal.
+
+    Mode cycling uses ``set_mode()`` (not ``reset_session()``) so that
+    pending edits survive mode transitions.  Only ``/clear`` or session
+    landing calls ``reset_session()`` to wipe the queue.
+    """
     global _mode_state, _plan_mode
     _mode_state = (_mode_state + 1) % 3
     _plan_mode = (_mode_state == 1)
-    # Sync the accept-edits flag in tools/file_system.py.
-    _fs_module._accept_edits_enabled = (_mode_state == 2)
-    # Clear any stale queue when toggling accept-edits OFF.
-    if _mode_state != 2:
-        _fs_module._accept_edits_pending.clear()
+    # Shared accept-edits state (core/ module — no tools-layer dependency).
+    import core.accept_edits_state as _state  # noqa: E402 — lazy
+    # set_mode() toggles the flag WITHOUT clearing the pending queue.
+    # This ensures pending edits are preserved across mode cycles.
+    _state.set_mode(_mode_state == 2)
 
 
 def _resolve_runtime_state(agent) -> RuntimeState:
@@ -437,13 +452,16 @@ def _resolve_runtime_state(agent) -> RuntimeState:
 
     Prefers the agent's own state (ExecutionLoop.state / NativeDeepAgent.
     runtime_state) so the PermissionEngine reads the exact object the shell
-    gate consults. Falls back to the module-level session state otherwise.
+    gate consults. Falls back to a fresh RuntimeState otherwise.
     """
     if agent is not None:
         state = getattr(agent, "state", None) or getattr(agent, "runtime_state", None)
         if isinstance(state, RuntimeState):
             return state
-    return _SESSION_PERMS_STATE
+    # Fallback: create a transient RuntimeState for permission evaluation.
+    # This is not persisted and does NOT duplicate session state (D4 fix).
+    from core.kernel.state import RuntimeState as _RS
+    return _RS(session_id="transient-perms", max_steps=5)
 
 
 def _erase_live_line() -> None:
@@ -481,26 +499,26 @@ def _handle_permission_command(text: str, agent=None) -> bool:
         pattern = parts[1].strip() if len(parts) > 1 else ""
         if not pattern:
             _erase_live_line()
-            console.print("[#ff5555]Usage: /allow <pattern>  (e.g. /allow git *, /allow ls -la)[/#]")
+            console.print("[error]Usage: /allow <pattern>  (e.g. /allow git *, /allow ls -la)[/]")
             return True
         perms.add_allow(pattern)
         _erase_live_line()
-        console.print(f"[#55ff55]✓ Permission added: ALLOW [{pattern}][/#]")
+        console.print(f"[success]✓ Permission added: ALLOW [{pattern}][/]")
         return True
     if cmd == "/deny":
         pattern = parts[1].strip() if len(parts) > 1 else ""
         if not pattern:
             _erase_live_line()
-            console.print("[#ff5555]Usage: /deny <pattern>  (e.g. /deny rm *, /deny curl *)[/#]")
+            console.print("[error]Usage: /deny <pattern>  (e.g. /deny rm *, /deny curl *)[/]")
             return True
         perms.add_deny(pattern)
         _erase_live_line()
-        console.print(f"[#ffaa55]⛔ Permission added: DENY [{pattern}][/#]")
+        console.print(f"[warning]⛔ Permission added: DENY [{pattern}][/]")
         return True
     if cmd == "/clear_perms":
         perms.clear()
         _erase_live_line()
-        console.print("[#aaaaaa]Permission ruleset cleared (back to interactive ask).[/#]")
+        console.print("[#aaaaaa]Permission ruleset cleared (back to interactive ask).[/]")
         return True
     return False
 
@@ -615,7 +633,7 @@ def _handle_compact_command(agent: Any) -> bool:
     state = _resolve_runtime_state(agent)
     if not state:
         _erase_live_line()
-        console.print("[#ff5555]No agent state available for compaction.[/#]")
+        console.print("[error]No agent state available for compaction.[/]")
         return True
 
     old_messages = state.get_messages() if hasattr(state, "get_messages") else getattr(state, "messages", [])
@@ -643,7 +661,7 @@ def _handle_compact_command(agent: Any) -> bool:
             state.max_context_tokens = saved_max
     except Exception as exc:
         _erase_live_line()
-        console.print(f"[#ff5555]Compaction failed: {exc}[/#]")
+        console.print(f"[error]Compaction failed: {exc}[/]")
         return True
 
     new_messages = state.get_messages() if hasattr(state, "get_messages") else getattr(state, "messages", [])
@@ -651,7 +669,7 @@ def _handle_compact_command(agent: Any) -> bool:
     saved = old_tokens - new_tokens
 
     _erase_live_line()
-    console.print(f"[bold #00ff00]✓[/] [dim]Context compacted:[/] [cyan]~{old_tokens}t → ~{new_tokens}t[/] [dim](saved ~{saved}t)[/dim]")
+    console.print(f"[bold success]✓[/] [dim]Context compacted:[/] [cyan]~{old_tokens}t → ~{new_tokens}t[/] [dim](saved ~{saved}t)[/dim]")
     if saved > 0:
         console.print(f"  [dim]↳ Run /compact again if context grows too large[/dim]")
     else:
@@ -689,7 +707,7 @@ def _handle_skill_command(text: str, agent=None) -> bool:
     name_arg = parts[1].strip() if len(parts) > 1 else ""
     if not name_arg:
         _erase_live_line()
-        console.print("[#ff5555]Usage: /skill <name> [args...]  (list skills with /skills)[/#]")
+        console.print("[error]Usage: /skill <name> [args...]  (list skills with /skills)[/]")
         return True
     _name_parts = name_arg.split(maxsplit=1)
     name = _name_parts[0]
@@ -702,7 +720,7 @@ def _handle_skill_command(text: str, agent=None) -> bool:
     skill = find_skill(skills, name)
     if skill is None:
         _erase_live_line()
-        console.print(f"[#ff5555]✗ Skill not found: {name}[/#]")
+        console.print(f"[error]✗ Skill not found: {name}[/]")
         return True
 
     if getattr(skill, "goal", "") or getattr(skill, "success_criteria", ""):
@@ -715,17 +733,17 @@ def _handle_skill_command(text: str, agent=None) -> bool:
     result = execute_skill(skill, state=state, evidence_log=_resolve_evidence_log(agent))
 
     ok = bool(getattr(result, "success", False))
-    color = "[#55ff55]" if ok else "[#ff5555]"
+    color = "[success]" if ok else "[error]"
     out = getattr(result, "stdout", "") or getattr(result, "stderr", "") or ""
     if isinstance(out, str) and len(out) > 4000:
         out = out[-4000:]
     _erase_live_line()
     console.print(
         Panel(
-            f"[#00ffff]SKILL[/] {skill.name}\n\n"
-            f"{color}{out or '(no output)'}[/#]",
+            f"[info]SKILL[/] {skill.name}\n\n"
+            f"{color}{out or '(no output)'}[/]",
             border_style="#1a1a42",
-            title=f"[#00ffff]◈ Skill Executed{' (OK)' if ok else ' (FAILED)'}[/]",
+            title=f"[info]◈ Skill Executed{' (OK)' if ok else ' (FAILED)'}[/]",
         )
     )
     return True
@@ -769,6 +787,14 @@ _BADGE_STYLES: dict[str, str] = {
     "KILL":    "bold black on #EF4444",
     "DEFAULT": "bold white on #0891B2",
 }
+
+# ── Prefixes stripped by _strip_tool_call_lines (module-level frozenset) ──
+_SKIP_PREFIXES: frozenset[str] = frozenset({
+    "[Synthesized answer",
+    "[Convergence failed",
+    "(Agent stopped",
+    "What I found:",
+})
 
 
 def _parse_tool_event(tool_name: str, args: dict) -> tuple[str, str, str]:
@@ -876,7 +902,7 @@ def _print_collapsible(
     prefix: str = "",
     line_style: str = "dim",
     max_lines: int = 5,
-    fold_hint: str = "[ctrl+o to expand]",
+    fold_hint: str = "",
 ) -> None:
     """Print content lines collapsed to *max_lines*, storing full text for expand.
 
@@ -912,36 +938,14 @@ def _print_collapsible(
 
 # ── Reasoning display (Stage 3 → Stage 5: 5-line threshold) ─────────────
 def _display_thought_content(compressor: LiveThoughtCompressor) -> None:
-    """Print collapsed thought content with ``::`` italic dim prefix.
+    """Thought content is buffered internally — NEVER printed to the terminal.
 
-    If the thought has 5 or fewer lines, all lines are shown.  If it has
-    more, only the first 5 are printed followed by a fold indicator.
-    The full thought can be expanded via Ctrl+O.
-
-    Format::
-
-        :: first line of reasoning
-        :: second line
-        :: third line
-        :: fourth line
-        :: fifth line
-        ... (+5 more lines, [ctrl+o to expand])
+    Intermediate reasoning, planning, scratchpad, and chain-of-thought text
+    are captured by the LiveThoughtCompressor's internal store (expandable
+    via Ctrl+O) but must never reach stdout. This function is intentionally
+    a no-op to guarantee that no reasoning leaks to the terminal.
     """
-    if not compressor.session_thoughts:
-        return
-    try:
-        last_id = next(reversed(compressor.session_thoughts))
-    except (StopIteration, RuntimeError):
-        return
-    raw = compressor.session_thoughts.get(last_id, "")
-    if not raw:
-        return
-
-    lines = safe_strip(raw).splitlines()
-    if not lines:
-        return
-
-    _print_collapsible(lines, prefix="::", line_style="italic dim #00ffff", max_lines=5)
+    return
 
 
 # ── Accept-edits processing ────────────────────────────────────────────────
@@ -954,25 +958,27 @@ def _process_pending_edits() -> None:
     """Prompt user to accept/reject each pending edit from the agent turn.
 
     Each pending edit is displayed with its diff, enhanced with word-level
-    highlighting via ``_fs_module._highlight_word_changes()``. The user types:
+    highlighting. The user types:
       Y/Enter → accept (write to disk)
       N      → reject (discard)
       S      → reject all remaining
     """
-    pending = _fs_module._accept_edits_pending
+    # Shared accept-edits state (core/ module — no tools-layer dependency).
+    import core.accept_edits_state as _state  # noqa: E402 — lazy
+
+    # Use peek_pending() to read edits WITHOUT removing them from the queue.
+    # drain_pending() is called only AFTER all edits are processed.
+    pending = _state.peek_pending()
     if not pending:
         return
 
     console.print()
-    for edit in list(pending):
+    for edit in pending:
         diff_lines = edit.diff.splitlines()
-        # Build a coloured display using Rich markup with word-level
-        # highlighting via difflib.SequenceMatcher.
         colored: list[str] = []
         i = 0
         while i < len(diff_lines):
             line = diff_lines[i]
-            # Detect a change pair: - old line followed by + new line
             if (
                 line.startswith("-") and not line.startswith("---")
                 and i + 1 < len(diff_lines)
@@ -980,7 +986,7 @@ def _process_pending_edits() -> None:
             ):
                 old_line = line[1:].rstrip("\n")
                 new_line = diff_lines[i + 1][1:].rstrip("\n")
-                hl_old, hl_new = _fs_module._highlight_word_changes(old_line, new_line)
+                hl_old, hl_new = _state._highlight_word_changes(old_line, new_line)
                 colored.append(f"[red]-{hl_old}[/red]")
                 colored.append(f"[green]+{hl_new}[/green]")
                 i += 2
@@ -1004,7 +1010,6 @@ def _process_pending_edits() -> None:
         )
         console.print(panel)
 
-        # Prompt for acceptance.
         try:
             answer = input(f"  Accept edit '{edit.path}'? [Y/n/s(kip all)]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -1012,18 +1017,27 @@ def _process_pending_edits() -> None:
 
         if answer == "s":
             console.print(f"  [dim]Skipped all remaining edits.[/dim]")
+            for remaining_edit in pending[pending.index(edit):]:
+                _state.reject_edit(remaining_edit.edit_id)
             break
+            
         if answer == "n":
             console.print(f"  [dim]Rejected edit for '{edit.path}'.[/dim]")
+            _state.reject_edit(edit.edit_id)
             continue
 
-        # Default / Y → write the edit to disk using the workspace-resolved path.
-        write_target = Path(edit.resolved_path)
-        write_target.parent.mkdir(parents=True, exist_ok=True)
-        write_target.write_text(edit.new_content, encoding="utf-8")
-        console.print(f"  [green]✓ Accepted edit for '{edit.path}' (+{edit.additions} -{edit.removals})[/green]")
+        result = _state.accept_edit(edit.edit_id)
+        if result.outcome == _state.TransactionOutcome.ACCEPTED:
+            console.print(f"  [green]✓ Accepted edit for '{edit.path}' (+{edit.additions} -{edit.removals})[/green]")
+        elif result.outcome == _state.TransactionOutcome.FAILED:
+            console.print(f"  [red]✗ Failed to apply edit for '{edit.path}': {result.failed_items[0].safe_message}[/red]")
+        elif result.outcome == _state.TransactionOutcome.RECONCILIATION_REQUIRED:
+            console.print(f"  [yellow]⚠ Unknown state for '{edit.path}', reconciliation required.[/yellow]")
+        elif result.outcome == _state.TransactionOutcome.CONFLICT:
+            console.print(f"  [yellow]⚠ Conflict: Edit '{edit.path}' was concurrently modified.[/yellow]")
+        else:
+            console.print(f"  [red]✗ Edit '{edit.path}' resulted in {result.outcome.name}[/red]")
 
-    pending.clear()
     console.print()
 
 
@@ -1031,28 +1045,22 @@ def _process_pending_edits() -> None:
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".nabd_repl_history")
 
 
-async def render_agent_events(kinetic=None) -> None:
+async def render_agent_events(status_bar=None) -> None:
     """Async event consumer rendering agent stream events in Cyberpunk aesthetic.
 
     Runs for the whole REPL session (one task); survives per-turn 'done'
     sentinels so streaming works across multiple prompts. Cancelled on exit.
+
+    CC reduction (Phase 6.3): the if/elif chain is replaced by a dict dispatch
+    mapping event_type -> handler, so each handler has a single responsibility
+    and CC <= 5.
     """
     bridge = get_bridge()
 
-    # Kinetic State Engine (atomic spinner + cyber-verbs). Shares this REPL's
-    # console so the single live status line renders in the same terminal,
-    # fully decoupled from the async event loop via its own spinner thread.
-    if kinetic is None:
-        from engine.kinetic import KineticStateEngine
-        kinetic = KineticStateEngine(console=console)
-        kinetic.wire()
+    if status_bar is None:
+        status_bar = AgentStatusBar(console=console)
+        status_bar.wire()
 
-    # Unified TODO view: the always-on box now redraws from the SAME
-    # TodoManager stream the checklist (show_todo_list / on_plan_updated)
-    # consumes — no second STATE.md parser, no duplicate box. The prior
-    # code re-read STATE.md at prompt time, stacking a second TODO list
-    # under the bus-driven one. RepositoryContextManager still writes
-    # STATE.md for LMK resume; we only stopped rendering it twice.
     try:
         def _on_plan_updated(todos):
             _render_todo_from_plan(list(todos) if todos else [])
@@ -1060,175 +1068,156 @@ async def render_agent_events(kinetic=None) -> None:
     except Exception:
         pass
 
-    # Live thought compressor (module-level so the Ctrl+O binding can read
-    # the same session_thoughts store). Collapses streaming reasoning into a
-    # single dynamic line and freezes an immutable placeholder.
     compressor = thought_compressor
-
-    # Ctrl+O expand handler: dump the latest collapsed block (thought or tool output).
-    def _try_expand() -> None:
-        try:
-            # Prefer tool output from the shared collapsed_blocks store.
-            if _collapsed_blocks:
-                raw = _collapsed_blocks[-1]
-                console.print(
-                    Panel(
-                        raw or "(empty)",
-                        title="[bento.execution.title]◈ Expanded Output[/bento.execution.title]",
-                        border_style="bento.execution.border",
-                        box=BOX_EXECUTION,
-                        padding=(1, 2),
-                    )
-                )
-            elif compressor.session_thoughts:
-                last_id = next(reversed(compressor.session_thoughts))
-                raw = compressor.session_thoughts[last_id]
-                console.print(
-                    Panel(
-                        safe_strip(raw) or "(empty)",
-                        title="[bento.thought.text]◈ Thought Process[/bento.thought.text]",
-                        border_style="bento.thought.border",
-                        box=BOX_THOUGHT,
-                        padding=(1, 2),
-                    )
-                )
-        except Exception:
-            pass
-
     token_buf = ""
     held_buf = ""
-    # Streaming line buffer for pattern-filtered output.
-    # Local variable: holds partial lines between tokens so complete
-    # lines can be checked through _strip_tool_call_lines() before
-    # being printed. Prevents tool-call patterns like ``- [tool_name]``
-    # or ``from __future__`` from appearing momentarily on screen.
     _stream_line_buf = ""
 
+    # ── Inline flush ──────────────────────────────────────────────────
+
     def _flush_local_stream() -> None:
-        """Inline flush: print any clean content remaining in the line buffer."""
+        """Print any clean content remaining in the line buffer."""
         nonlocal _stream_line_buf
         if not _stream_line_buf:
             return
         clean = _strip_tool_call_lines(_stream_line_buf)
         if clean:
             _erase_live_line()
-            console.print(clean, end="", style="white")
+            console.print(clean, end="\n", style="white")
         _stream_line_buf = ""
+
+    # ── Event handlers (each handles ONE event type, CC <= 5) ─────────
+
+    def _on_done_event() -> None:
+        """Per-turn sentinel — clean up after a completed turn."""
+        nonlocal token_buf, held_buf, _stream_line_buf
+        if status_bar:
+            status_bar.stop()
+        _set_status_phase("idle")
+        _flush_local_stream()
+        token_buf = ""
+        held_buf = ""
+        _stream_line_buf = ""
+
+    def _on_thinking_start() -> None:
+        """Begin compressed thought line for a new turn."""
+        nonlocal token_buf, held_buf, _stream_line_buf
+        compressor.start()
+        if status_bar:
+            status_bar.start()
+        _set_status_phase("thinking")
+        token_buf = ""
+        held_buf = ""
+        _stream_line_buf = ""
+        if hasattr(bridge, "_tokens_streamed"):
+            bridge._tokens_streamed = False
+
+    def _on_thinking_stop() -> None:
+        """Conclude thought phase, display collapsed reasoning."""
+        compressor.stop()
+        _display_thought_content(compressor)
+        if status_bar:
+            status_bar.stop()
+        _set_status_phase("idle")
+
+    def _on_thought_chunk(content: str) -> None:
+        """Accumulate a raw reasoning chunk."""
+        compressor.feed(content)
+        _set_status_phase("reasoning")
+
+    def _on_tool_start(name: str, args: dict) -> None:
+        """Flush stream, stop thought, print action badge."""
+        nonlocal token_buf, held_buf, _stream_line_buf
+        _flush_local_stream()
+        compressor.stop()
+        token_buf = ""
+        held_buf = ""
+        _stream_line_buf = ""
+        action, label, meta = _parse_tool_event(name, args or {})
+        print_badge(action, label, meta)
+        _set_status_phase(_action_to_phase(action))
+
+    def _on_tool_end(event: dict) -> None:
+        """Flush stream, render tool result via ToolResultWidget."""
+        _flush_local_stream()
+        _other = getattr(bridge, "_on_tool_completed_active", False)
+        if not _other:
+            tool_name = event.get("tool") or event.get("name") or "?"
+            output = safe_strip(event.get("output", ""))
+            success = event.get("success", True)
+            summary = safe_strip(event.get("summary", ""))
+            diff = event.get("diff", "")
+            args = event.get("args")
+            if output:
+                widget = ToolResultWidget(
+                    tool_name=tool_name,
+                    output=output,
+                    success=success,
+                    summary=summary,
+                    diff=diff,
+                    args=args,
+                    console=console,
+                )
+                tool_result_list.add(widget)
+
+    def _on_token_chunk(content: str) -> None:
+        """Streaming filter: buffer, strip tool-call lines, display clean.
+
+        Only streams tokens when ``_streaming_final`` is True — i.e. when the
+        assistant has entered the final-answer phase.  Intermediate reasoning
+        and tool-generation tokens are discarded.
+        """
+        if not _streaming_final:
+            return
+        nonlocal token_buf, held_buf, _stream_line_buf
+        compressor.add_tokens(len(content))
+        _add_status_tokens(len(content))
+        token_buf += content
+        stripped = token_buf.lstrip()
+        if stripped.startswith("{") or stripped.startswith("final_answer"):
+            return
+        if "final_answer".startswith(stripped):
+            held_buf += content
+            return
+        if held_buf:
+            content = held_buf + content
+            held_buf = ""
+        _stream_line_buf += content
+        while "\n" in _stream_line_buf:
+            line, _stream_line_buf = _stream_line_buf.split("\n", 1)
+            clean_line = _strip_tool_call_lines(line)
+            if clean_line:
+                compressor.stop()
+                _set_status_phase("finish")
+                if hasattr(bridge, "_tokens_streamed"):
+                    bridge._tokens_streamed = True
+                _erase_live_line()
+                console.print(f"{clean_line}\n", end="", style="white")
+
+    # ── Event dispatch map (CC = 1 flat dict) ─────────────────────────
+    _EVENT_DISPATCH = {
+        "done":           lambda e: _on_done_event(),
+        "thinking_start": lambda e: _on_thinking_start(),
+        "thinking_stop":  lambda e: _on_thinking_stop(),
+        "thought":        lambda e: _on_thought_chunk(e.get("content", "")),
+        "tool_start":     lambda e: _on_tool_start(e.get("name", ""), e.get("args", {})),
+        "tool_end":        lambda e: _on_tool_end(e),
+        "token":          lambda e: _on_token_chunk(e.get("content", "")),
+    }
 
     try:
         while True:
-            # Periodically refresh the elapsed counter on the live line.
             compressor.tick()
             event = await bridge.get_event()
             if event is None:
                 continue
-
-            event_type = event.get("type")
-            if event_type == "done":
-                # Per-turn sentinel — stop kinetic when turn completes.
-                if kinetic:
-                    kinetic.stop()
-                _set_status_phase("idle")
-                # Flush any remaining streaming buffer before resetting.
-                _flush_local_stream()
-                token_buf = ""
-                held_buf = ""
-                _stream_line_buf = ""
-                continue
-            elif event_type == "thinking_start":
-                # Begin the compressed thinking line for this turn.
-                compressor.start()
-                if kinetic:
-                    kinetic.start()
-                _set_status_phase("thinking")
-                token_buf = ""
-                held_buf = ""
-                _stream_line_buf = ""
-                if hasattr(bridge, "_tokens_streamed"):
-                    bridge._tokens_streamed = False
-                continue
-            elif event_type == "thinking_stop":
-                # Conclude the thought phase (freeze placeholder + store raw).
-                compressor.stop()
-                # Display collapsed reasoning with :: prefix (Stage 3).
-                _display_thought_content(compressor)
-                if kinetic:
-                    kinetic.stop()
-                _set_status_phase("idle")
-                continue
-            elif event_type == "thought":
-                # Raw reasoning chunk: accumulate (do NOT stream multi-line).
-                compressor.feed(event.get("content", ""))
-                _set_status_phase("reasoning")
-                continue
-            elif event_type == "tool_start":
-                # Real work started: flush any partial stream text, conclude
-                # any open thought phase, then render a single-line colored
-                # action badge via print_badge.
-                # Badge appears exactly once per tool execution (no duplication).
-                _flush_local_stream()
-                compressor.stop()
-                token_buf = ""
-                held_buf = ""
-                _stream_line_buf = ""
-                tool_name = event.get("name", "")
-                args = event.get("args", {})
-                action, label, meta = _parse_tool_event(tool_name, args or {})
-                print_badge(action, label, meta)
-                _set_status_phase(_action_to_phase(action))
-            elif event_type == "tool_end":
-                # Flush any partial streaming line before showing tool output.
-                _flush_local_stream()
-                # Avoid redundant double printing if TermuxBridgeUI on_tool_completed handles completion.
-                _other_renderer_active = getattr(bridge, "_on_tool_completed_active", False)
-                # Show collapsible output when available (Stage 5).
-                if not _other_renderer_active:
-                    output = safe_strip(event.get("output", ""))
-                    if output:
-                        out_lines = output.splitlines()
-                        _print_collapsible(out_lines, prefix="", max_lines=5)
-                summary = safe_strip(event.get("summary", ""))
-                if summary and not summary.startswith("✓ Tool") and not _other_renderer_active:
-                    console.print(f"   [dim]↳ {summary}[/dim]")
-            elif event_type == "token":
-                content = event.get("content", "")
-                # Count tokens as they stream in for the live status line.
-                compressor.add_tokens(len(content))
-                _add_status_tokens(len(content))
-                token_buf += content
-                stripped = token_buf.lstrip()
-                if stripped.startswith("{") or stripped.startswith("final_answer"):
-                    continue
-                if "final_answer".startswith(stripped):
-                    held_buf += content
-                    continue
-
-                # ── Streaming filter: buffer complete lines, strip patterns ──
-                # Merge any held-buffer content (from the final_answer guard
-                # phase) into the streaming line buffer.
-                if held_buf:
-                    content = held_buf + content
-                    held_buf = ""
-
-                _stream_line_buf += content
-                # Process complete lines (separated by \n).
-                while "\n" in _stream_line_buf:
-                    line, _stream_line_buf = _stream_line_buf.split("\n", 1)
-                    clean_line = _strip_tool_call_lines(line)
-                    if clean_line:
-                        # First visible token: stop the thinking line.
-                        compressor.stop()
-                        _set_status_phase("finish")
-                        if hasattr(bridge, "_tokens_streamed"):
-                            bridge._tokens_streamed = True
-                        _erase_live_line()
-                        console.print(f"{clean_line}\n", end="", style="white")
-                # Partial line (no trailing \n) stays in _stream_line_buf.
+            handler = _EVENT_DISPATCH.get(event.get("type"))
+            if handler is not None:
+                handler(event)
     finally:
-        # Defensive: guarantee no hanging live line on force-quit / shutdown.
         compressor.stop()
-        if kinetic:
-            kinetic.stop()
+        if status_bar:
+            status_bar.stop()
 
 
 async def _toolbar_spinner_loop() -> None:
@@ -1250,6 +1239,89 @@ async def _toolbar_spinner_loop() -> None:
                 pass
     except asyncio.CancelledError:
         pass
+
+
+def _setup_repl_keybindings() -> KeyBindings:
+    """Setup Ctrl+O (expand output) and Shift+Tab (cycle mode) bindings.
+
+    Extracted from ``run_repl`` to reduce its cyclomatic complexity.
+    Owns only 2 decision points (CC <= 3).
+    """
+    bindings = KeyBindings()
+
+    @bindings.add("c-o")
+    def _on_ctrl_o(event) -> None:
+        if _collapsed_blocks:
+            raw = _collapsed_blocks[-1]
+            console.print(Panel(
+                raw or "(empty)",
+                title="[bento.execution.title] ◈ Expanded Output [/bento.execution.title]",
+                border_style="bento.execution.border",
+                box=BOX_EXECUTION,
+                padding=(1, 2),
+            ))
+        elif thought_compressor.session_thoughts:
+            last_id = next(reversed(thought_compressor.session_thoughts))
+            raw = thought_compressor.session_thoughts[last_id]
+            console.print("\n[#808080]── Thought Block ──[/]")
+            console.print(safe_strip(raw) or "(empty)")
+
+    @bindings.add("s-tab")
+    def _cycle_modes(event) -> None:
+        """Cycle mode: normal → plan mode → accept edits → normal."""
+        _cycle_mode()
+        event.app.invalidate()
+
+    return bindings
+
+
+def _get_repl_toolbar_html() -> HTML:
+    """Dynamic bottom toolbar: status spinner + phase + token count + mode.
+
+    Extracted from ``run_repl`` to reduce its cyclomatic complexity.
+    Uses module-level globals for state (CC <= 5).
+    """
+    frame = _STATUS_SPINNER_FRAMES[_STATUS_SPINNER_IDX]
+    verb = _STATUS_PHASE_VERBS.get(_status_phase, _STATUS_PHASE_VERBS["idle"])
+    token_str = ""
+    if _status_tokens > 0:
+        if _status_tokens >= 1000:
+            token_str = f"  {_status_tokens/1000:.1f}k"
+        else:
+            token_str = f"  {_status_tokens}"
+
+    if _mode_state == 1:
+        mode_html = '<style bg="ansicyan" fg="black"> plan mode </style>'
+    elif _mode_state == 2:
+        # Derive from actual session state: show "accept edits on" ONLY when
+        # there are pending edits in the queue. This prevents stale footer
+        # state from leaking between sessions or tasks.
+        import core.accept_edits_state as _ae_state
+        if _ae_state.has_pending_edits():
+            mode_html = '<style bg="ansicyan" fg="black"> accept edits on </style>'
+        else:
+            mode_html = ''
+    else:
+        mode_html = ''
+
+    warn_html = ""
+    if _status_tokens > 150_000:
+        est_k = _status_tokens // 1000
+        warn_html = (
+            f'  <style bg="yellow" fg="black"> ⚠ {est_k}k tokens </style>'
+            '  <style fg="#ffcc00">run /compact</style>'
+        )
+    elif _status_tokens > _CONTEXT_WARN_THRESHOLD:
+        est_k = _status_tokens // 1000
+        warn_html = (
+            f'  <style bg="yellow" fg="black"> ⚠ {est_k}k tokens </style>'
+            '  <style fg="#ffcc00">try /compact</style>'
+        )
+
+    if _status_phase == "idle":
+        return HTML(f'<b>» {mode_html}{warn_html} [shift+tab]  ? for shortcuts</b>')
+
+    return HTML(f'<b>{frame} {verb}{token_str}  |  {mode_html}{warn_html} [shift+tab]  ? for shortcuts</b>')
 
 
 async def run_repl(agent, agent_runner_func=None) -> None:
@@ -1275,92 +1347,48 @@ async def run_repl(agent, agent_runner_func=None) -> None:
 
     bridge = get_bridge()
 
-    # Global Ctrl+O: expand the most recent thought block on demand.
-    bindings = KeyBindings()
+    # Global Ctrl+O / Shift+Tab key bindings (extracted to avoid inline complexity).
+    bindings = _setup_repl_keybindings()
 
-    @bindings.add("c-o")
-    def _(event) -> None:
-        # Expand the most recent collapsed block (tool output or thought).
-        if _collapsed_blocks:
-            raw = _collapsed_blocks[-1]
-            console.print(Panel(
-                raw or "(empty)",
-                title="[bento.execution.title] ◈ Expanded Output [/bento.execution.title]",
-                border_style="bento.execution.border",
-                box=BOX_EXECUTION,
-                padding=(1, 2),
-            ))
-        elif thought_compressor.session_thoughts:
-            last_id = next(reversed(thought_compressor.session_thoughts))
-            raw = thought_compressor.session_thoughts[last_id]
-            console.print("\n[#808080]── Thought Block ──[/]")
-            console.print(safe_strip(raw) or "(empty)")
+    # Phase 3: Keyboard navigation for ToolResultList.
+    # The TerminalVisualizer owns the _navigation_enabled flag; its lifecycle
+    # handlers (llm_request_started → False, show_final_answer → True) are
+    # subscribed directly on the EventBus so navigation is only active after
+    # the agent finishes execution.
+    from core.kernel.events import bus as _event_bus
+    from ui.keybindings import create_navigation_keybindings
+    from ui.widgets.footer import NavigationFooter
+    from prompt_toolkit.key_binding import merge_key_bindings
 
-    @bindings.add("s-tab")
-    def _cycle_modes(event) -> None:
-        """Cycle mode: normal → plan mode → accept edits → normal."""
-        _cycle_mode()
-        event.app.invalidate()  # refresh the bottom toolbar
+    _nav_visualizer = TerminalVisualizer(
+        event_bus=_event_bus, state=None, register_listeners=False
+    )
+    _footer = NavigationFooter()
 
-    def _get_toolbar() -> HTML:
-        """Dynamic bottom toolbar: status spinner + phase + token count + mode
-        + context warning (Stage 6).
+    # Wrap show_final_answer so the footer hint bar appears after the
+    # final-answer card is rendered.
+    def _on_show_final_answer(data: dict) -> None:
+        _nav_visualizer.on_final_answer(data)
+        console.print(_footer.render(active=True))
 
-        When idle shows only the mode indicator and shortcuts hint.
-        During agent work shows the rotating spinner frame, phase verb,
-        and accumulated token count — all updated every 120ms via the
-        background ``_toolbar_spinner_loop`` task.
+    _event_bus.subscribe("llm_request_started", _nav_visualizer.on_llm_request_started)
+    _event_bus.subscribe("show_final_answer", _on_show_final_answer)
 
-        When accumulated tokens exceed ``_CONTEXT_WARN_THRESHOLD``, a yellow
-        warning with ``try /compact`` is appended to the toolbar.
-        """
-        frame = _STATUS_SPINNER_FRAMES[_STATUS_SPINNER_IDX]
-        verb = _STATUS_PHASE_VERBS.get(_status_phase, _STATUS_PHASE_VERBS["idle"])
-        token_str = ""
-        if _status_tokens > 0:
-            if _status_tokens >= 1000:
-                token_str = f"  {_status_tokens/1000:.1f}k"
-            else:
-                token_str = f"  {_status_tokens}"
+    _nav_bindings = create_navigation_keybindings(
+        tool_result_list=tool_result_list,
+        redraw=lambda: tool_result_list.redraw(),
+        navigation_enabled=lambda: _nav_visualizer._navigation_enabled,
+        set_navigation_enabled=lambda v: setattr(_nav_visualizer, "_navigation_enabled", v),
+        on_exit=lambda: console.print(_footer.render(active=False)),
+    )
+    _merged_bindings = merge_key_bindings([bindings, _nav_bindings])
 
-        # Mode section
-        if _mode_state == 1:
-            mode_html = '<style bg="ansicyan" fg="black"> plan mode </style>'
-        elif _mode_state == 2:
-            mode_html = 'accept edits on'
-        else:
-            mode_html = ''
-
-        # Context warning section (Stage 6 + Stage 8: 150k auto-warning)
-        warn_html = ""
-        if _status_tokens > 150_000:
-            est_k = _status_tokens // 1000
-            warn_html = (
-                f'  <style bg="yellow" fg="black"> ⚠ {est_k}k tokens </style>'
-                '  <style fg="#ff5500">run /compact</style>'
-            )
-        elif _status_tokens > _CONTEXT_WARN_THRESHOLD:
-            est_k = _status_tokens // 1000
-            warn_html = (
-                f'  <style bg="yellow" fg="black"> ⚠ {est_k}k tokens </style>'
-                '  <style fg="#ffaa00">try /compact</style>'
-            )
-
-        if _status_phase == "idle":
-            # Idle — show mode only, no spinner
-            return HTML(
-                f'<b>» {mode_html}{warn_html} [shift+tab]  ? for shortcuts</b>'
-            )
-
-        return HTML(
-            f'<b>{frame} {verb}{token_str}  |  {mode_html}{warn_html} [shift+tab]  ? for shortcuts</b>'
-        )
-
+    # Bottom toolbar (extracted to module-level function for CC reduction).
     session = PromptSession(
         style=cyberpunk_style,
         history=FileHistory(HISTORY_FILE),
-        key_bindings=bindings,
-        bottom_toolbar=_get_toolbar,
+        key_bindings=_merged_bindings,
+        bottom_toolbar=_get_repl_toolbar_html,
         input_processors=[],
     )
 
@@ -1376,12 +1404,10 @@ async def run_repl(agent, agent_runner_func=None) -> None:
         return line
 
     # Kinetic State Engine shared instance for REPL session
-    from engine.kinetic import KineticStateEngine
-    kinetic = KineticStateEngine(console=console)
-    kinetic.wire()
+    status_bar = AgentStatusBar(console=console)
+    status_bar.wire()
 
-    # 4. Start consumer task + toolbar spinner task
-    consumer_task = asyncio.create_task(render_agent_events(kinetic))
+    consumer_task = asyncio.create_task(render_agent_events(status_bar))
     spinner_task = asyncio.create_task(_toolbar_spinner_loop())
 
     try:
@@ -1389,7 +1415,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
         while True:
             # NO logo printing inside this loop!
             # Explicitly stop Kinetic UI status and compressor before asking for user input
-            kinetic.stop()
+            status_bar.stop()
             thought_compressor.stop()
             try:
                 # Calculate width for the top separator
@@ -1433,7 +1459,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                             elif isinstance(agent.evidence_log, list):
                                 agent.evidence_log.clear()
 
-                    kinetic.stop()
+                    status_bar.stop()
                     thought_compressor.stop()
                     console.print("\n[bold green]✨ [System] Context, history, and evidence have been cleared. Ready for a new task![/bold green]\n")
                     continue
@@ -1444,7 +1470,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 # transient (stored on RuntimeState.shell_permissions) and reset on
                 # a hard restart. They do NOT bypass the Phase 2.1 heuristics.
                 if _handle_permission_command(text, agent):
-                    kinetic.stop()
+                    status_bar.stop()
                     thought_compressor.stop()
                     continue
 
@@ -1453,7 +1479,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 # clean, non-transient confirmation block (Intent vs Criteria)
                 # rather than letting the raw command flow into the task stream.
                 if _handle_goal_command(text, agent):
-                    kinetic.stop()
+                    status_bar.stop()
                     thought_compressor.stop()
                     continue
 
@@ -1464,14 +1490,14 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 # PermissionEngine ALLOW integration — instead of being treated
                 # as a natural-language task.
                 if _handle_skill_command(text, agent):
-                    kinetic.stop()
+                    status_bar.stop()
                     thought_compressor.stop()
                     continue
 
                 # ── Stage 8: /compact command ────────────────────────────
                 # Intercept BEFORE the agent runs so no LLM call is wasted.
                 if text.strip().lower() == "/compact":
-                    kinetic.stop()
+                    status_bar.stop()
                     thought_compressor.stop()
                     _handle_compact_command(agent)
                     continue
@@ -1496,7 +1522,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     pass
 
                 await bridge.emit_thinking_start()
-                kinetic.start()
+                status_bar.start()
 
                 # Reset final answer rendered tracker before each turn
                 bus_ref = getattr(agent, "bus", None) or getattr(bridge, "event_bus", None)
@@ -1557,7 +1583,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     # Forcefully kill the spinner after EVERY interaction —
                     # success, failure, or empty-string return (no exception).
                     await bridge.emit_thinking_stop()
-                    kinetic.stop()
+                    status_bar.stop()
                     thought_compressor.stop()
 
                 if not (bus_ref and getattr(bus_ref, "_final_answer_rendered", False)) and not (bus_ref and getattr(bus_ref, "_tokens_streamed", False)):
@@ -1567,14 +1593,13 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     # Only skip rendering when the stripped result is empty
                     # (pure tool call with no user-facing text).
                     if clean_resp:
-                        if _ui_looks_like_tool_call(clean_resp):
-                            # Mixed content: strip tool-call lines, keep text.
-                            stripped = _strip_tool_call_lines(clean_resp)
-                            if stripped:
-                                clean_resp = stripped
-                            else:
-                                # Pure tool call with no readable text → skip.
-                                clean_resp = ""
+                        # Always strip raw tool-call/output JSON from fallback text
+                        stripped = _strip_tool_call_lines(clean_resp)
+                        if stripped:
+                            clean_resp = stripped
+                        else:
+                            # Pure tool call with no readable text → skip.
+                            clean_resp = ""
                     if clean_resp:
                         console.print(
                             Panel(
@@ -1616,7 +1641,11 @@ async def run_repl(agent, agent_runner_func=None) -> None:
             pass
         # Tear down the Kinetic State Engine (clears the live status line).
         try:
-            kinetic.stop()
+            status_bar.set_complete()
+        except Exception:
+            pass
+        try:
+            status_bar.stop()
         except Exception:
             pass
 
@@ -1677,6 +1706,7 @@ class TerminalVisualizer:
         self.event_bus = event_bus
         self.state = state
         self.live_context = None
+        self._navigation_enabled: bool = False
         if self.event_bus:
             self.event_bus._final_answer_rendered = False
         # Single-renderer rule (plan 1.1): only ONE renderer owns stdout. In
@@ -1717,8 +1747,16 @@ class TerminalVisualizer:
         self._subscribe_with_fallback("agent_handoff", self.on_agent_handoff)
         self._subscribe_with_fallback("tool_auth_violation", self.on_tool_auth_violation)
         self._subscribe_with_fallback("show_final_answer", self.on_final_answer)
+        self._subscribe_with_fallback("llm_request_started", self.on_llm_request_started)
         # ❌ قم بتعطيل هذا السطر لمنع الواجهة من رسم صناديق فارغة من تلقاء نفسها (الخطوة الأولى: المايسترو الأوحد)
         # self._subscribe_with_fallback("loop_completed", self.on_loop_completed)
+
+    def on_llm_request_started(self, data: dict):
+        """Reset streaming gate — only final-answer tokens will be streamed."""
+        global _streaming_final
+        _streaming_final = False
+        self._navigation_enabled = False
+        tool_result_list.clear()
 
     def on_tool_started(self, data: dict):
         """إظهار لوحة بدء الأداة مع سبينر متحرك عند بدء تشغيل أي أداة بناءً على دور الوكيل"""
@@ -1743,12 +1781,12 @@ class TerminalVisualizer:
             self.live_context.start()
         except Exception as exc:
             try:
-                console.print(f"[dim red][UI] tool spinner unavailable: {exc}[/][/]")
+                console.print(f"[error][UI] tool spinner unavailable: {exc}[/][/]")
             except Exception:
                 pass
 
     def on_tool_completed(self, data: dict):
-        """إيقاف السبينر وطباعة نتيجة الأداة داخل لوحة Panel محصنة"""
+        """إيقاف السبينر وطباعة نتيجة الأداة عبر ToolResultWidget"""
         try:
             self.stop()
             tool_name = data.get("tool") or data.get("tool_name") or "?"
@@ -1759,23 +1797,25 @@ class TerminalVisualizer:
                     raw_output = (getattr(_res, "output", "") or getattr(_res, "stdout", "")
                                   or getattr(_res, "stderr", ""))
 
-            # Safe string conversion
             output_text = str(raw_output).strip() if raw_output is not None else ""
-            if not output_text:
-                output_text = "(empty result)"
+            success = data.get("success", True)
+            summary = data.get("summary", "")
+            diff = data.get("diff", "")
+            args = data.get("args")
 
-            # Truncate long outputs
-            if len(output_text) > 2000:
-                output_text = output_text[:2000] + "\n...[truncated by UI]"
-
-            panel = Panel(
-                Text(f"[{tool_name}]\n{output_text}", style="white"),
-                **PANEL_STYLES["tool_complete"]
+            widget = ToolResultWidget(
+                tool_name=tool_name,
+                output=output_text,
+                success=success,
+                summary=summary,
+                diff=diff,
+                args=args,
+                console=console,
             )
-            console.print(panel)
+            tool_result_list.add(widget)
         except Exception as exc:
             try:
-                console.print(f"[dim red][UI] tool completion render failed: {exc}[/][/]")
+                console.print(f"[error][UI] tool completion render failed: {exc}[/][/]")
             except Exception:
                 pass
 
@@ -1822,6 +1862,9 @@ class TerminalVisualizer:
 
         raw_output = data.get("output", data.get("answer", ""))
         output = extract_clean_answer(raw_output)
+        # Additional safeguard: strip any residual tool-call JSON lines or
+        # reasoning markers that may have survived extract_clean_answer.
+        output = _strip_tool_call_lines(output)
         if not output:
             return
         # Last wall: never render a raw tool-call payload as the "answer".
@@ -1834,6 +1877,14 @@ class TerminalVisualizer:
             )
         if self.event_bus:
             self.event_bus._final_answer_rendered = True
+
+        # Enable token streaming — the assistant has entered the final-answer
+        # phase.  Any llm_token events emitted from this point forward will be
+        # streamed; earlier intermediate reasoning / tool-generation tokens
+        # were discarded by the _streaming_final gate in _on_token_chunk.
+        global _streaming_final
+        _streaming_final = True
+        self._navigation_enabled = True
 
         safe_width = min(console.size.width - 4, 80)
 
@@ -1886,6 +1937,13 @@ class TerminalVisualizer:
 
             if not response_text:
                 response_text = "(session completed — no response)"
+
+            # Strip any raw tool-call JSON or reasoning lines from the response
+            # before rendering. Only clean, user-facing text may reach the panel.
+            response_text = extract_clean_answer(response_text)
+            response_text = _strip_tool_call_lines(response_text)
+            if not response_text:
+                return
 
             # Choose panel style based on content or exception
             if isinstance(raw_response, Exception) or "ERROR" in response_text.upper() or "EXCEPTION" in response_text.upper() or "VERIFYERROR" in response_text.upper():

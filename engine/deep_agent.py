@@ -17,6 +17,8 @@ from core.kernel.events import bus
 from engine.interfaces import DispatcherProtocol
 from engine.state import RuntimeState, GoalSpec
 from engine.consent import ConsentManager
+from core.turn_finalizer import TurnFinalizer
+from core.turn_outcome import TurnOutcome, TurnStatus
 from core.parser import extract_command, validate_tool_call, get_workspace_root
 from core.evidence import EvidenceLog, VerifierError
 from tools.models import ToolResult
@@ -237,6 +239,8 @@ class NativeDeepAgent:
         # Phase3.2: True only for the FIRST execute_node call after an LMK
         # resume, so the mid-EXECUTE re-dispatch guard fires once (then cleared).
         self._resume_mode = False
+        # Phase 3: turn-finalization authority.
+        self._turn_finalizer = TurnFinalizer()
 
     # ------------------------------------------------------------------
     # LMK-Survival Checkpointing (atomic write to workspace root)
@@ -406,8 +410,6 @@ class NativeDeepAgent:
                     response = self.llm(messages)
                     parsed = extract_json_array(response)
                     if parsed and all(isinstance(s, str) for s in parsed):
-                        sys.stdout.write("\r\033[K")
-                        sys.stdout.flush()
                         state.plan = [s.strip() for s in parsed if s.strip()]
                         return state
                 except Exception:
@@ -442,8 +444,6 @@ class NativeDeepAgent:
                     response = self.llm(messages)
                     parsed = extract_json_array(response)
                     if parsed and all(isinstance(s, str) for s in parsed):
-                        sys.stdout.write("\r\033[K")
-                        sys.stdout.flush()
                         state.plan = [s.strip() for s in parsed if s.strip()]
                         # Phase4.1 Auto-Critical (d): a programmatic replan flag freezes
                         # the most-recent evidence so the corrective branch keeps its anchor.
@@ -723,11 +723,15 @@ class NativeDeepAgent:
         path.  If verification fails, raises VerifierError (propagated as
         ToolRequiredError by the caller).
 
-        DESIGN DECISION — TodoManager ownership:
+        DESIGN DECISION — Convergence tracker ownership:
           NativeDeepAgent manages its own plan via DeepAgentState.plan and does
           NOT write to the shared TodoManager.  Two parallel task lists (one on
           screen, one internal) would cause confusion.  The ExecutionLoop path
-          owns TodoManager; the deep agent path owns DeepAgentState.plan.
+          owns TodoManager (via TodoManagerCompletionTracker); the deep agent
+          path owns DeepAgentState.plan (via DeepAgentPlanCompletionTracker).
+          Both adapters implement the CompletionTracker Protocol so can_finalize()
+          has a single choke point — the gate is no longer bypassed when
+          TodoManager is absent.
         """
         # Resume if a stale checkpoint exists for this workspace.
         restored = self._load_checkpoint()
@@ -803,6 +807,31 @@ class NativeDeepAgent:
         MAX_SELF_CORRECT = 3
         while retry_count <= MAX_SELF_CORRECT:
             try:
+                # Convergence gate: bind NativeDeepAgent's internal plan to the
+                # convergence contract via DeepAgentPlanCompletionTracker. This
+                # replaces the old DESIGN DECISION of bypassing can_finalize()
+                # when TodoManager is absent — now the plan IS the tracker.
+                from core.convergence_gate import (
+                    can_finalize,
+                    DeepAgentPlanCompletionTracker,
+                )
+                plan_tracker = DeepAgentPlanCompletionTracker(
+                    plan=state.plan,
+                    current_plan_index=state.current_plan_index,
+                    past_steps=state.past_steps,
+                )
+                plan_decision = can_finalize(
+                    completion_tracker=plan_tracker,
+                    evidence_log=self.evidence_log,
+                    requires_plan=True,
+                )
+                if not plan_decision.allowed:
+                    raise VerifierError(
+                        f"Plan incomplete — {len(plan_decision.blocking_todos)} "
+                        f"item(s) block finalization: {plan_decision.blocked_reason}. "
+                        f"Evidence summary:\n{plan_decision.evidence_summary}"
+                    )
+
                 self.evidence_log.verify(require_tools=True, claim=state.final_output)
                 # Phase5 (GoalSpec): verifiable exit condition.
                 # Even though the generic verifier (L0/L1) passed, a GoalSpec is a

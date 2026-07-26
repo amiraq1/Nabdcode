@@ -214,41 +214,27 @@ class _ContextMixin:
         if critique is not None:
             out.append(critique)
         return out
-    def _inject_runtime_context(
-        self, compacted: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        """Prepend AGENT.md rules + untrusted memory to the system message.
+    # ------------------------------------------------------------------
+    # _inject_runtime_context — decomposed into 3 focused helpers
+    # ------------------------------------------------------------------
+    def _inject_rules(self, compacted: list[dict[str, Any]]) -> tuple[str, str]:
+        """Build the ``system_instructions`` block: policies + AGENT.md rules + memory.
 
-        Untrusted injected context (AGENT.md / memory) is delimited in
-        ``<system_instructions>`` / ``<untrusted_memory_data>`` tags so the model
-        can distinguish real system instructions from data that may carry
-        injected directives. Treated as DATA, not commands.
+        Returns (prefix_string, skills_block_string).
         """
-        # Phase 3 (tech-debt fix): AGENT.md rules + skills + taste are invariant
-        # for the whole run and are pulled from the per-run cache built once in
-        # run() (see _build_static_context), instead of re-read from disk here.
-        # Lazily build it if absent (e.g. when _inject_runtime_context is called
-        # standalone, outside run()) so behavior matches the original per-call
-        from engine._loop_helpers import _prompt_requires_investigation, _has_active_goal
-        # path; in run() the cache is populated once and reused here.
+        from engine._loop_helpers import _prompt_requires_investigation
         if self._static_context_cache is None:
             self._static_context_cache = self._build_static_context()
         static_ctx = self._static_context_cache or ""
-        rules = ""  # populated below from the cached static context
         memory = sanitize(load_memory() or "")[:4000]
-        from core.constants import TODO_DISCIPLINE, SECURITY_COMPLIANCE_RULE, LANGUAGE_POLICY, PYTHON_AND_CODE_EXPLORATION_POLICY, GRAPHIFY_KNOWLEDGE_GRAPH_POLICY
+        from core.constants import (
+            TODO_DISCIPLINE, SECURITY_COMPLIANCE_RULE, LANGUAGE_POLICY,
+            PYTHON_AND_CODE_EXPLORATION_POLICY, GRAPHIFY_KNOWLEDGE_GRAPH_POLICY,
+        )
 
-        # Split the cached static context into AGENT.md rules (first, if present)
-        # and the remainder (skills + taste). The AGENT.md block dominates `rules`.
+        # Split static context into AGENT.md rules vs skills/taste block.
+        _skills_marker = "<workspace_skills>"
         if static_ctx:
-            # The AGENT.md text is the portion before the skills block marker if
-            # both were captured; simplest correct split: treat whole static_ctx
-            # as rules when no skill marker, else separate. We keep it simple and
-            # inject the entire cached block as `rules` since downstream only
-            # appends `rules` into <system_instructions>. Skills/taste are already
-            # wrapped inside their own guards by the builder, so re-wrapping here
-            # would double-wrap — instead we emit them after </system_instructions>.
-            _skills_marker = "<workspace_skills>"
             if _skills_marker in static_ctx:
                 rules, _skills_tail = static_ctx.split(_skills_marker, 1)
                 rules = rules.strip()
@@ -261,14 +247,32 @@ class _ContextMixin:
             _skills_block = ""
 
         prefix = "<system_instructions>\n"
+
+        # Find first user message to decide investigation vs casual mode.
         user_msg = ""
         for m in compacted:
             if m.get("role") == "user" and isinstance(m.get("content"), str):
                 user_msg = m["content"]
                 break
-        goal_obj = getattr(self.state, "active_goal", None) if hasattr(self, "state") and self.state else getattr(self, "_goal", None)
-        has_active_goal = bool(goal_obj and getattr(goal_obj, "success_criteria", None) and getattr(goal_obj, "success_criteria", None) != "None")
-        req_tools = _prompt_requires_investigation(user_msg, has_active_goal=has_active_goal) if user_msg else True
+
+        # Stash user_msg on self so _inject_prompts can reuse it (avoids
+        # re-scanning compacted).
+        self._last_user_msg = user_msg
+
+        goal_obj = (
+            getattr(self.state, "active_goal", None)
+            if hasattr(self, "state") and self.state
+            else getattr(self, "_goal", None)
+        )
+        has_active_goal = bool(
+            goal_obj
+            and getattr(goal_obj, "success_criteria", None)
+            and getattr(goal_obj, "success_criteria", None) != "None"
+        )
+        req_tools = (
+            _prompt_requires_investigation(user_msg, has_active_goal=has_active_goal)
+            if user_msg else True
+        )
 
         if req_tools:
             prefix += f"{TODO_DISCIPLINE}\n\n"
@@ -277,14 +281,19 @@ class _ContextMixin:
             if inv_prompt:
                 prefix += f"{inv_prompt}\n\n"
         else:
-            prefix += "## Casual/Direct Context Exception (Active)\nThis user prompt is purely conversational, informational, or conceptual without an active goal or workspace task. Answer directly, warmly, and immediately using final_answer without executing tools or inspecting workspace files.\n\n"
+            prefix += (
+                "## Casual/Direct Context Exception (Active)\n"
+                "This user prompt is purely conversational, informational, or conceptual "
+                "without an active goal or workspace task. Answer directly, warmly, and "
+                "immediately using final_answer without executing tools or inspecting "
+                "workspace files.\n\n"
+            )
+
         prefix += f"{SECURITY_COMPLIANCE_RULE}\n\n"
         prefix += f"{LANGUAGE_POLICY}\n\n"
         prefix += f"{PYTHON_AND_CODE_EXPLORATION_POLICY}\n\n"
-        # Phase 1.1: inject the graphify policy only when the graph exists;
-        # otherwise we mandate a tool for an absent subsystem.
-        # TODO: test_graphify_policy_injected fails on HEAD (pre-existing, _graph_ok gate).
-        #       Needs graph.json fixture in tests or gate removal decision by maintainer.
+
+        # Only inject graphify policy when the graph.json exists on disk.
         try:
             from pathlib import Path as _GPath
             from core.kernel.security import get_workspace_root as _wsr
@@ -294,12 +303,10 @@ class _ContextMixin:
         if _graph_ok:
             prefix += f"{GRAPHIFY_KNOWLEDGE_GRAPH_POLICY}\n\n"
 
-        # Taste summary is now part of the per-run static cache (see
-        # _build_static_context) and is no longer re-read from disk per call.
-
         if rules:
             prefix += f"{rules}\n\n"
         prefix += "</system_instructions>\n"
+
         if memory:
             prefix += (
                 "<untrusted_memory_data>\n"
@@ -307,12 +314,16 @@ class _ContextMixin:
                 "</untrusted_memory_data>\n\n"
             )
 
-        # Phase5 (Workspace Context): project-specific instructions loaded from
-        # the cwd (AGENTS.md / .agents/config.md). Injected into the system anchor
-        # (messages[0]) inside strict <workspace_context> guards so the Phase 4
-        # compaction engine treats it as an instruction and hard-preserves it —
-        # it is never evicted by the sliding window. Untrusted file content, so
-        # the model must treat it as DATA/context, not overriding commands.
+        return prefix, _skills_block
+
+    def _inject_prompts(
+        self, compacted: list[dict[str, Any]], prefix: str, skill_block: str
+    ) -> str:
+        """Append workspace context, goal block, fallback/fewshot, and repo scan.
+
+        Returns the fully-built ``system_content`` string.
+        """
+        # Phase5 — workspace context from AGENTS.md / .agents/config.md
         ws_ctx = getattr(self, "_workspace_context", "") or ""
         if ws_ctx:
             prefix += (
@@ -321,43 +332,62 @@ class _ContextMixin:
                 "</workspace_context>\n\n"
             )
 
-        # Phase 6 (Native Skills Loader): skills are now part of the per-run
-        # static cache (_build_static_context). Emit the cached block verbatim.
-        skill_block = _skills_block
+        # Phase6 — native skills loaded by _build_static_context
         if skill_block:
             prefix += skill_block + "\n\n"
 
         system_content = f"{prefix}{compacted[0]['content']}"
-        goal = getattr(self.state, "active_goal", None) if hasattr(self, "state") and self.state else getattr(self, "_goal", None)
+
+        # Goal block pinned by active GoalSpec.
+        goal = (
+            getattr(self.state, "active_goal", None)
+            if hasattr(self, "state") and self.state
+            else getattr(self, "_goal", None)
+        )
         if goal:
             from engine.state import build_goal_block
             goal_block = build_goal_block(goal)
             if goal_block:
                 system_content += f"\n{goal_block}"
 
-        # Phase 2: small / fallback models get a tight few-shot anchor so they
-        # emit a single clean JSON tool call instead of prose. Capable models
-        # are left untouched to avoid context bloat.
-        if getattr(self.state, 'is_fallback_mode_active', False):
+        # Phase2 — fallback / small-model few-shot anchor
+        is_fallback = getattr(self.state, "is_fallback_mode_active", False)
+        if is_fallback:
             system_content += f"\n\n{FALLBACK_RESTRICTED_PROMPT}"
-        if self._is_small_or_fallback_model() or getattr(self.state, 'is_fallback_mode_active', False):
+        if self._is_small_or_fallback_model() or is_fallback:
             system_content += f"\n\n{TOOL_FEWSHOT_FALLBACK}"
         else:
             system_content += f"\n\n{CRITICAL_RULES_FOR_TOOL_CALLING}"
 
-        # Phase 9 (Repo Scan Recovery): when the user asks to scan / inspect the
-        # repository architecture, inject a few-shot that forces ≥3 reads and an
-        # explicit "File not found" recovery path. This is query-conditional so
-        # it never bloats non-scan prompts. Does NOT relax the convergence gate.
-        _repo_scan_keywords = ["فحص", "مستودع", "scan", "repository", "هيكل", "architecture", "معمارية"]
-        _query_for_scan = user_msg or (getattr(self._ctx, "user_prompt", "") if getattr(self, "_ctx", None) else "")
-        if _query_for_scan and any(kw in _query_for_scan.lower() for kw in _repo_scan_keywords):
+        # Phase9 — repo-scan recovery few-shot (query-conditional)
+        user_msg = getattr(self, "_last_user_msg", "") or (
+            getattr(self._ctx, "user_prompt", "") if getattr(self, "_ctx", None) else ""
+        )
+        _repo_scan_keywords = [
+            "فحص", "مستودع", "scan", "repository", "هيكل", "architecture", "معمارية",
+        ]
+        if user_msg and any(kw in user_msg.lower() for kw in _repo_scan_keywords):
             system_content += f"\n\n{REPO_SCAN_EXAMPLE}"
 
-        # Phase 7 (Tool Visibility): explicitly list all available tools with
-        # their parameters so the model knows what it CAN call. Without this,
-        # small/fallback models never see the tool registry and hallucinate.
-        tools_block = self._format_tools_for_prompt()
+        return system_content
+
+    def _inject_tools(self) -> str:
+        """Format the tool registry as a text block for the system message."""
+        return self._format_tools_for_prompt() or ""
+
+    def _inject_runtime_context(
+        self, compacted: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Prepend AGENT.md rules + untrusted memory to the system message.
+
+        Untrusted injected context (AGENT.md / memory) is delimited in
+        ``<system_instructions>`` / ``<untrusted_memory_data>`` tags so the model
+        can distinguish real system instructions from data that may carry
+        injected directives. Treated as DATA, not commands.
+        """
+        prefix, skill_block = self._inject_rules(compacted)
+        system_content = self._inject_prompts(compacted, prefix, skill_block)
+        tools_block = self._inject_tools()
         if tools_block:
             system_content += f"\n\n{tools_block}"
 

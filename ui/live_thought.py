@@ -127,12 +127,14 @@ class LiveThoughtCompressor:
         total_time = max(0, int(time.time() - self._start_ts))
         icon, label = _get_thinking_label(total_time)
         token_info = _fmt_tokens(self._token_count)
-        # Erase the live line entirely, then freeze the clean,
-        # immutable placeholder onto its own line (no thought leakage).
+        # Erase the live line entirely. The frozen thinking placeholder
+        # (e.g. "○ Examining... 3s") is NOT written to stdout — only the
+        # raw reasoning is stored internally for Ctrl+O expansion.
+        # This guarantees no thinking indicator or reasoning text leaks.
         if self._ansi:
-            sys.stdout.write(f"\r\033[K\033[2m{icon} {label}...  {total_time}s{token_info} [ctrl+o to expand]\033[0m\n")
+            sys.stdout.write("\r\033[K")
         else:
-            sys.stdout.write(f"{icon} {label}...  {total_time}s{token_info} [ctrl+o to expand]\n")
+            sys.stdout.write("\n")
         sys.stdout.flush()
         # Store raw reasoning keyed by a unique step id.
         self._step_counter += 1
@@ -153,23 +155,12 @@ class LiveThoughtCompressor:
         self._render_live(int(now - self._start_ts))
 
     def _render_live(self, elapsed: int) -> None:
-        """Update the single dynamic live line (no implicit newline).
+        """No-op — live thinking line is never written to stdout.
 
-        The icon and label shift as elapsed time increases, giving the user
-        a visceral sense of progressing depth:
-          0-2s  → · Thinking
-          3-6s  → ○ Examining
-          7-14s → ◇ Contemplating
-          15s+  → ★ Conjuring
+        The Status Bar (AgentStatusBar) is the sole visible indicator of
+        agent activity. The live thinking line is buffered internally only.
         """
-        icon, label = _get_thinking_label(elapsed)
-        token_info = _fmt_tokens(self._token_count)
-        line = f"{icon} {label}...  [{elapsed}s{token_info}]".rstrip("\n")
-        if self._ansi:
-            sys.stdout.write(f"\r\033[K{line}")
-        else:
-            sys.stdout.write(line)
-        sys.stdout.flush()
+        pass
 
     def _erase_line(self) -> None:
         if self._ansi:

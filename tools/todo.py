@@ -13,13 +13,16 @@ class TodoWriteArgs(BaseModel):
     item_id: Optional[int] = None
     status: Optional[str] = None
     verification_note: Optional[str] = None
+    reason: Optional[str] = None
 
 
 class TodoWriteTool(BaseTool):
     """
-    Creates or updates the TODO plan. Two modes:
+    Creates or updates the TODO plan. Modes:
     - action="plan": pass `items` (list[str]) to set the full plan.
     - action="update": pass `item_id` + `status` (+ `verification_note` if status=done).
+    - action="skip": pass `item_id` + `reason` to mark a TODO as skipped.
+    - action="block": pass `item_id` + `reason` to mark a TODO as blocked.
     """
 
     name = "todo_write"
@@ -28,11 +31,14 @@ class TodoWriteTool(BaseTool):
         "Create or update the TODO plan for the current session. "
         "Use action='plan' with a list of items to set the full plan, "
         "or action='update' with item_id and status (pending/in_progress/done) "
-        "to update a single item. When marking done, a verification_note is required."
+        "to update a single item. When marking done, a verification_note is required. "
+        "Use action='skip' with item_id and reason to skip a task, "
+        "or action='block' with item_id and reason to block a task."
     )
 
     def __init__(self, todo_manager: TodoManager):
         self._manager = todo_manager
+        self.todo_manager = todo_manager
 
     @property
     def args_schema(self) -> Optional[Type[BaseModel]]:
@@ -80,6 +86,12 @@ class TodoWriteTool(BaseTool):
                     item = self._manager.mark_done(item_id, verification_note)
                 elif status == TodoStatus.IN_PROGRESS.value:
                     item = self._manager.mark_in_progress(item_id)
+                elif status == TodoStatus.SKIPPED.value:
+                    reason = kwargs.get("reason", "") or kwargs.get("verification_note", "")
+                    item = self._manager.mark_skipped(item_id, reason)
+                elif status == TodoStatus.BLOCKED.value:
+                    reason = kwargs.get("reason", "") or kwargs.get("verification_note", "")
+                    item = self._manager.mark_blocked(item_id, reason)
                 else:
                     return ToolResult(
                         success=False,
@@ -89,7 +101,7 @@ class TodoWriteTool(BaseTool):
 
                 return ToolResult(
                     success=True,
-                    stdout=f"TODO #{item.id} → {item.status.value}",
+                    stdout=f"TODO #{item.id} -> {item.status.value}",
                 )
 
             return ToolResult(

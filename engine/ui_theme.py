@@ -98,15 +98,12 @@ def strike(s: str) -> str:
 # ── Thought line ────────────────────────────────────────────────────────────
 def think_line(seconds: float | None = None) -> str:
     if seconds is None:
-        body = "Thought"
+        body = "Thinking"
     else:
         sec = max(1, int(round(seconds)))
         unit = "second" if sec == 1 else "seconds"
-        body = f"Thought for {sec} {unit}"
-    return (
-        f"{fg(*P['think'])}* {body} "
-        f"{dim('[ctrl+o to expand]')}{_RESET}"
-    )
+        body = f"Thinking  {sec} {unit}"
+    return f"{fg(*P['think'])}* {body}{_RESET}"
 
 
 # ── Status chip (Examining / Sculpting) ────────────────────────────────────
@@ -138,8 +135,10 @@ def tree_prefix() -> str:
     return f"{fg(*P['tree'])}└{_RESET} "
 
 
-def collapsed(n_lines: int, key_hint: str = "ctrl+o to expand") -> str:
-    return f"{tree_prefix()}{dim(f'... +{n_lines} lines [{key_hint}]')}"
+def collapsed(n_lines: int, key_hint: str = "") -> str:
+    if key_hint:
+        return f"{tree_prefix()}{dim(f'... +{n_lines} lines [{key_hint}]')}"
+    return f"{tree_prefix()}{dim(f'... +{n_lines} lines')}"
 
 
 # ── Tools → badge map ──────────────────────────────────────────────────────

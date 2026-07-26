@@ -22,6 +22,19 @@ MAX_BUDGET_TOKENS: Final[int] = 12000  # سقف التوكنات التقريب�
 MAX_CONSECUTIVE_NO_TOOL_ROUNDS: Final[int] = 3
 BUDGET_SOFT_WARN_RATIO: Final[float] = 0.80
 
+# Prompt Leak Markers — shared between streaming and non-streaming paths.
+# Detects structural system markers leaked in model output and triggers
+# provider failover instead of displaying them to the user.
+_LEAK_MARKERS: Final[frozenset[str]] = frozenset({
+    "## TODO Discipline",
+    "<hard_rules>",
+    "<system_instructions>",
+    "<system_identity>",
+    "CRITICAL RULE:",
+    "TASK CLASSIFICATION",
+    "SMALL-TALK & CHIT-CHAT PROTOCOL",
+})
+
 TOOL_FEWSHOT_FALLBACK: Final[str] = (
     f"{CRITICAL_RULES_FOR_TOOL_CALLING}\n\n"
     "## Tool Call Format (few-shot)\n"

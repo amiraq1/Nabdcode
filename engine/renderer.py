@@ -6,8 +6,8 @@ EventBus (loop thread)
     │
     ├── tool_start()    → badge + path line (READ / SHELL / EDIT / …)
     ├── tool_end()      → output block with optional collapse + diff
-    ├── thought_start() → * Thought [ctrl+o to expand]
-    ├── thought_end()   → * Thought for Xs …
+    ├── thought_start() → * Thought
+    ├── thought_end()   → * Thinking …
     ├── stream_chunk()  → live token output (under lock)
     ├── todos()         → TODOS checklist block
     ├── verifier_reject() → yellow VERIFIER badge
@@ -85,8 +85,15 @@ class Renderer:
         self._status_verb: str = "Examining"
         self._status_last_draw: float = 0.0
         self._status_min_interval: float = 0.15  # ~6 fps throttle
-        # Expand state for ctrl+o
+# Expand state
         self._collapsed_data: list[list[str]] = []  # each entry = full output lines
+        # Internal buffer for live indicators (thinking/status). These are
+        # NEVER flushed to stdout — they are UI-only state captured here so
+        # the TUI can read them without leaking to the terminal.
+        self._live_buffer: list[str] = []
+        # Internal buffer for streamed tokens. Written by stream_chunk(),
+        # committed to stdout only by flush(). Prevents mid-stream leakage.
+        self._stream_buffer: str = ""
 
     # ── Legacy methods (preserved for wire_events backward compat) ─────────
 
@@ -148,15 +155,14 @@ class Renderer:
     # ── Think (single live line, no \n) ────────────────────────────────────
 
     def think_start(self, label: str = "thinking") -> None:
-        """Begin a single-line THINK indicator. Updates in-place via \\r."""
+        """Begin a single-line THINK indicator. Buffered internally — never written to stdout."""
         with self._lock:
             self._think_alive = True
             self._think_last_draw = 0.0
-        self.think_pulse(label)
+            self._live_buffer.append(f"[THINK] {label}...")
 
     def think_pulse(self, label: str = "thinking") -> None:
-        """Atomically update the think line. Never issues \\n."""
-        output_str = None
+        """Update the think indicator in the internal buffer. Never writes to stdout."""
         with self._lock:
             if not self._think_alive:
                 return
@@ -165,83 +171,79 @@ class Renderer:
                 return
             self._think_last_draw = now
             spin = next(self._spinner)
-            output_str = f"{_ERASE_LINE}{_INDENT}\033[2m[THINK]\033[0m {spin} {label}..."
-        if output_str is not None:
-            sys.stdout.write(output_str)
-            sys.stdout.flush()
+            self._live_buffer.append(f"[THINK] {spin} {label}...")
 
     def think_end(self) -> None:
-        """Wipe the think line from the terminal completely."""
-        should_erase = False
+        """Clear the think indicator from the internal buffer. Never writes to stdout."""
         with self._lock:
             if not self._think_alive:
                 return
             self._think_alive = False
-            should_erase = True
-        if should_erase:
-            sys.stdout.write(_ERASE_LINE)
-            sys.stdout.flush()
+            self._live_buffer.clear()
 
     # ── Flush (batched badge + raw lines) ──────────────────────────────────
 
     def flush(self) -> None:
-        """Commit buffered _lines to scrollback atomically."""
+        """Commit buffered _lines and _stream_buffer to stdout atomically."""
         with self._lock:
-            if not self._lines:
+            if not self._lines and not self._stream_buffer:
                 return
             lines = self._lines
             self._lines = []
+            stream_buf = self._stream_buffer
+            self._stream_buffer = ""
         _update_terminal_size()
         sys.stdout.write(_ERASE_LINE)
-        sys.stdout.write("\n".join(lines))
-        sys.stdout.write("\n")
+        if lines:
+            sys.stdout.write("\n".join(lines))
+            sys.stdout.write("\n")
+        if stream_buf:
+            sys.stdout.write(stream_buf)
         sys.stdout.flush()
 
     # ── Stream chunk (progressive token output) ──────────────────────────
 
     def stream_chunk(self, text: str) -> None:
-        """Append a token chunk inline after the THINK indicator on the same line.
+        """Buffer a token chunk for atomic flush. Never writes to stdout directly.
 
-        Thread-safe: separates kernel I/O from state lock.
+        Thread-safe: separates kernel I/O from state lock. Tokens are
+        accumulated in ``_stream_buffer`` and committed to stdout only when
+        ``flush()`` is called, so intermediate reasoning can never leak
+        mid-stream.
         """
         clean = sanitize(text, preserve_tabs=True)
-        sys.stdout.write(clean)
-        sys.stdout.flush()
+        with self._lock:
+            self._stream_buffer += clean
 
     # ══════════════════════════════════════════════════════════════════════
     # Status chip — live \r-based line (○ Examining... 12.3k)
     # ══════════════════════════════════════════════════════════════════════
 
     def status_start(self, verb: str = "Examining") -> None:
-        """Begin a live status chip that updates in-place via \r."""
+        """Begin a live status chip. Buffered internally — never written to stdout."""
         with self._lock:
             self._status_alive = True
             self._status_verb = verb
             self._token_count = 0
             self._status_last_draw = 0.0
-        self._status_draw()
+            self._live_buffer.append(f"○ {verb}... 0")
 
     def status_tick(self, n: int = 1) -> None:
-        """Increment token count and redraw the status chip."""
+        """Increment token count and update the status chip in the internal buffer."""
         with self._lock:
             self._token_count += n
         self._status_draw()
 
     def status_end(self) -> None:
-        """Wipe the status chip line completely. Call before thought_end."""
-        should_erase = False
+        """Clear the status chip from the internal buffer. Never writes to stdout."""
         with self._lock:
             if not self._status_alive:
                 return
             self._status_alive = False
-            should_erase = True
-        if should_erase:
-            sys.stdout.write(_ERASE_LINE)
-            sys.stdout.flush()
+            self._live_buffer.clear()
 
     def _status_draw(self) -> None:
-        """Atomically rewrite the status chip line."""
-        output_str = None
+        """Update the status chip in the internal buffer. Never writes to stdout."""
         with self._lock:
             if not self._status_alive:
                 return
@@ -252,13 +254,10 @@ class Renderer:
             verb = self._status_verb
             count = self._token_count
             chip = ui_status_chip(verb, count)
-            output_str = f"{_ERASE_LINE}{_INDENT}{chip}"
-        if output_str is not None:
-            sys.stdout.write(output_str)
-            sys.stdout.flush()
+            self._live_buffer.append(chip)
 
     # ══════════════════════════════════════════════════════════════════════
-    # Expand state — store collapsed output for ctrl+o
+    # Expand state — store collapsed output
     # ══════════════════════════════════════════════════════════════════════
 
     def store_collapsed(self, lines: list[str]) -> None:
@@ -347,7 +346,7 @@ class Renderer:
         dt = (time.time() - self._think_t0) if self._think_t0 else 1.0
         self._think_t0 = None
         new_line = think_line(dt)
-        if self._lines and "Thought" in self._lines[-1] and "ctrl+o to expand" in self._lines[-1]:
+        if self._lines and "Thinking" in self._lines[-1]:
             self._lines[-1] = new_line
         else:
             self._lines_append(new_line)
@@ -391,6 +390,7 @@ class Renderer:
 
     def shutdown(self) -> None:
         self.think_end()
+        self.status_end()
         self.flush()
 
 

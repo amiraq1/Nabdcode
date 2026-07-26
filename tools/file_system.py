@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import difflib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Final
@@ -10,56 +9,14 @@ from typing import Any, Final
 from tools.base import BaseTool
 from tools.models import ToolResult
 from core.sanitize import sanitize
-
-
-# ── Accept-edits queue (shared across turns) ───────────────────────────────
-@dataclass
-class PendingEdit:
-    """A file edit awaiting user approval before being written to disk."""
-    path: str            # original relative path (for display)
-    resolved_path: str   # absolute path resolved against workspace (for write)
-    old_content: str
-    new_content: str
-    diff: str
-    additions: int
-    removals: int
-
-
-# Module-level queue: populated by _handle_edit() when accept-edits mode is
-# active, drained by ui/repl_termux.py after each agent turn completes.
-_accept_edits_pending: list[PendingEdit] = []
-_accept_edits_enabled: bool = False
-
-
-def _highlight_word_changes(old_line: str, new_line: str) -> tuple[str, str]:
-    """Compare two lines at word level and return Rich-markup highlighted versions.
-
-    Uses ``difflib.SequenceMatcher`` to split lines into word tokens and
-    colourises changed portions:
-
-    * ``[bold red]...[/bold red]`` for deleted words
-    * ``[bold green]...[/bold green]`` for inserted words
-
-    Unchanged words are returned as-is (no markup). The result is safe to pass
-    through ``console.print()`` (Rich markup) or ``render_diff()`` (ANSI — the
-    tags are passed through as plain text in unchanged lines).
-    """
-    matcher = difflib.SequenceMatcher(None, old_line.split(), new_line.split())
-    old_parts: list[str] = []
-    new_parts: list[str] = []
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        old_words = " ".join(old_line.split()[i1:i2])
-        new_words = " ".join(new_line.split()[j1:j2])
-        if tag == "equal":
-            old_parts.append(old_words)
-            new_parts.append(new_words)
-        elif tag in ("replace", "delete"):
-            old_parts.append(f"[bold red]{old_words}[/bold red]")
-            if tag == "replace":
-                new_parts.append(f"[bold green]{new_words}[/bold green]")
-        elif tag == "insert":
-            new_parts.append(f"[bold green]{new_words}[/bold green]")
-    return " ".join(old_parts), " ".join(new_parts)
+from core.kernel.events import bus
+from core.accept_edits_state import (
+    PendingEdit,
+    _accept_edits_pending,
+    _accept_edits_enabled,
+    _compute_digest,
+    _highlight_word_changes,
+)
 
 
 class FileAction(str, Enum):
@@ -163,12 +120,14 @@ class FileSystemTool(BaseTool):
                 return self._list(target, recursive=bool(kwargs.get("recursive", False)))
 
             if action is FileAction.READ:
+                bus.emit("file_read", {"path": path, "action": "read"})
                 return self._read(target)
 
             if action is FileAction.READ_MANY:
                 return self._handle_read_many(kwargs)
 
             if action is FileAction.EDIT:
+                bus.emit("file_modified", {"path": path, "action": "edit"})
                 return self._handle_edit(path, target, kwargs)
 
             # ── Pre-write snapshot (enables /undo) ───────────────────────
@@ -185,6 +144,7 @@ class FileSystemTool(BaseTool):
                     pass
 
             if action is FileAction.WRITE:
+                bus.emit("file_written", {"path": path, "action": "write"})
                 return self._write(target, content)
 
             if action is FileAction.APPEND:
@@ -409,6 +369,7 @@ class FileSystemTool(BaseTool):
                 diff=diff_display,
                 additions=additions,
                 removals=removals,
+                expected_original_digest=_compute_digest(old_content) if old_content else "",
             ))
             summary = f"Pending edit: {path_str} (+{additions} -{removals}) — awaiting approval"
             return ToolResult(
