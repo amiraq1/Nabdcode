@@ -762,6 +762,7 @@ class UnifiedStorage:
         self._store: Any = None
         self._todo_mgr: Any = None
         self._evidence_log: Any = None
+        self._artifact_mgr: Any = None
         self._lru_cache: Any = None
 
     def set_sqlite_path(self, path: Path | str) -> None:
@@ -787,6 +788,11 @@ class UnifiedStorage:
         with self._lock:
             return self._get_evidence_log()
 
+    @property
+    def artifact_manager(self) -> Any:
+        with self._lock:
+            return self._get_artifact_mgr()
+
     def _get_session_mgr(self) -> Any:
         if self._session_mgr is None:
             self._session_mgr = SessionManager(root=self._sessions_dir)
@@ -808,7 +814,10 @@ class UnifiedStorage:
         from core.todo import TodoManager
 
         if self._todo_mgr is None:
-            self._todo_mgr = TodoManager()
+            # Wire the EvidenceLog into the TodoManager so mark_done can
+            # cross-reference TODO completion with actual tool results.
+            ev_log = self._get_evidence_log()
+            self._todo_mgr = TodoManager(evidence_log=ev_log)
         return self._todo_mgr
 
     def _get_evidence_log(self, max_records: int | None = None) -> Any:
@@ -820,6 +829,14 @@ class UnifiedStorage:
             else:
                 self._evidence_log = EvidenceLog()
         return self._evidence_log
+
+    def _get_artifact_mgr(self) -> Any:
+        from core.artifact_manager import ArtifactManager
+
+        if self._artifact_mgr is None:
+            art_dir = self._sessions_dir.parent / ".nabd" / "artifacts"
+            self._artifact_mgr = ArtifactManager(root_dir=art_dir)
+        return self._artifact_mgr
 
     @staticmethod
     def _cap(text: str | None, max_len: int = MAX_OUTPUT_CHARS) -> str:

@@ -210,32 +210,21 @@ def strip_goal_complete_marker(text: str | None) -> str:
 
 def fix_arabic_reversal(text: str | None) -> str:
     """
-    Detect and correct reversed or fragmented Arabic text typed in RTL/LTR terminals
-    (e.g., mirrored byte order or fragmented single Arabic characters).
+    Preserve Arabic text in its ORIGINAL Unicode code-point order.
+
+    Contract (RTL/BiDi discipline):
+      1. Arabic text is NEVER reversed or reordered in the data layer.
+      2. Display-only processing (directional isolation marks) is applied
+         exclusively in the renderer layer via ``core.text_utils.safe_display``.
+      3. Mixed Arabic/English text must not be broken — only Arabic-specific
+         tokens are isolated, never reordered.
+
+    This function is a no-op that returns the text unchanged. It exists for
+    backward compatibility with callers that imported it; the actual
+    bidirectional handling is in ``core.text_utils.safe_display``.
     """
     if not text:
         return ""
-    known_fixes = {
-        "ي ع د و ت س م م ح ف": "فحص مستودعي",
-        "ي ع د و ت س م ص ح ف": "فحص مستودعي",
-        "يعدوتسم صحف": "فحص مستودعي",
-        "يعدوتسممحف": "فحص مستودعي",
-    }
-    cleaned = text.strip()
-    if cleaned in known_fixes:
-        return known_fixes[cleaned]
-
-    arabic_chars = re.findall(r"[\u0600-\u06FF]", text)
-    if not arabic_chars:
-        return text
-
-    tokens = cleaned.split()
-    if len(tokens) >= 2 and all(len(t) == 1 and "\u0600" <= t <= "\u06FF" for t in tokens):
-        reversed_chars = tokens[::-1]
-        return "".join(reversed_chars)
-
+    # Preserve original Unicode order — do NOT reverse tokens.
+    # Display-only processing is handled by the renderer.
     return text
-
-
-
-

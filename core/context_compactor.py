@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 
 @dataclass
 class CompactionConfig:
-    max_bytes: int = 8192  # 8KB default for mobile
+    max_bytes: int = 16384  # 16KB — raised for Termux (was 8KB)
     tool_window: int = 2   # keep last N tool calls full
     max_critical_evidence: int = 3
     epsilon: float = 0.1   # 10% headroom

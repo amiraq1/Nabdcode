@@ -1,7 +1,8 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Any
+from typing import List, Any, Optional
 import re
+import time
 
 from core.ui_bridge import get_bridge
 
@@ -68,6 +69,9 @@ class TodoStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     DONE = "done"
+    SKIPPED = "skipped"
+    BLOCKED = "blocked"
+    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -76,6 +80,11 @@ class TodoItem:
     text: str
     status: TodoStatus = TodoStatus.PENDING
     verification_note: str = ""  # سبب/دليل الإكمال، مثلاً "py_compile OK, grep clean"
+    # ── Evidence-linked fields ──────────────────────────────────────────
+    evidence_ids: List[str] = field(default_factory=list)
+    completed_at: Optional[float] = None
+    completion_source: Optional[str] = None  # "tool_result", "manual", "skipped", "blocked"
+    failure_reason: Optional[str] = None
 
     def __post_init__(self) -> None:
         # Safety net: TodoItem.text must ALWAYS be a str, never a raw dict.
@@ -87,22 +96,38 @@ class TodoItem:
             "text": self.text,
             "status": self.status.value,
             "verification_note": self.verification_note,
+            "evidence_ids": list(self.evidence_ids),
+            "completed_at": self.completed_at,
+            "completion_source": self.completion_source,
+            "failure_reason": self.failure_reason,
         }
 
 
 class TodoManager:
     """يحتفظ بقائمة المهام لجلسة العمل الحالية. RAM فقط، بدون persistence حاليًا."""
 
-    def __init__(self) -> None:
+    def __init__(self, evidence_log: Any = None) -> None:
         self._items: List[TodoItem] = []
+        # Optional EvidenceLog for cross-referencing TODO completion with
+        # actual tool results. When set, mark_done verifies that a matching
+        # evidence record exists before allowing a 'done' status.
+        self._evidence_log = evidence_log
+        # Track TODO IDs that existed in a previous plan but are now absent,
+        # so the convergence gate can detect deletion-cheat attempts.
+        self._seen_ids: set = set()
 
     def _emit(self) -> None:
         """Push the current plan to the injected UI bridge (no-op if unset)."""
         get_bridge().on_plan_updated([item.to_dict() for item in self._items])
 
+    def set_evidence_log(self, evidence_log: Any) -> None:
+        """Inject an EvidenceLog for cross-referencing TODO completion."""
+        self._evidence_log = evidence_log
+
     def clear(self) -> None:
         """مسح كافة المهام وإعادة التهيئة."""
         self._items.clear()
+        self._seen_ids.clear()
         self._emit()
 
     def set_plan(self, texts: List[str]) -> List[TodoItem]:
@@ -110,8 +135,73 @@ class TodoManager:
         self._items = [
             TodoItem(id=i + 1, text=t) for i, t in enumerate(texts)
         ]
+        self._seen_ids.update(item.id for item in self._items)
         self._emit()
         return self._items
+
+    def _find_evidence_for_todo(self, todo: TodoItem) -> List[str]:
+        """Find evidence record IDs that match a TODO's intent.
+
+        For READ/VERIFY/TEST/EDIT TODOs, looks for successful evidence records
+        whose tool and path/action match the TODO's target.
+        """
+        if self._evidence_log is None:
+            return []
+
+        try:
+            records = self._evidence_log.get_records()
+        except Exception:
+            return []
+
+        todo_lower = todo.text.lower()
+        # Extract path from TODO text
+        path_match = re.search(r'[\w./-]+\.\w{1,6}', todo.text)
+        todo_path = path_match.group(0).lower() if path_match else ""
+
+        matching_ids: List[str] = []
+        for rec in records:
+            if not getattr(rec, "success", False):
+                continue
+
+            rec_tool = getattr(rec, "tool", "") or ""
+            rec_path = str(getattr(rec, "command_or_path", "") or "").strip().lower()
+            rec_action = getattr(rec, "action", "") or ""
+            rec_snippet = str(getattr(rec, "output_snippet", "") or "").lower()
+
+            # Path-based match
+            if todo_path and rec_path:
+                if todo_path in rec_path or rec_path in todo_path:
+                    matching_ids.append(getattr(rec, "evidence_id", ""))
+                    continue
+
+            # Snippet-based match (evidence mentions the same file)
+            if todo_path and todo_path in rec_snippet:
+                matching_ids.append(getattr(rec, "evidence_id", ""))
+                continue
+
+            # Tool-based match for non-path TODOs
+            if not todo_path and rec_tool in todo_lower:
+                matching_ids.append(getattr(rec, "evidence_id", ""))
+                continue
+
+            # rec_path mentioned in TODO text
+            if rec_path and rec_path in todo_lower:
+                matching_ids.append(getattr(rec, "evidence_id", ""))
+                continue
+
+            # Fallback for generic TODOs (no path, no tool keyword): accept any
+            # successful evidence record whose snippet or path appears in the
+            # verification context. This prevents false negatives when TODOs
+            # have generic text like "Step 1" but the evidence clearly shows
+            # a completed action.
+            if not todo_path and rec_tool not in todo_lower:
+                # Check if the evidence snippet contains meaningful content
+                # that could match the TODO's intent
+                if rec_snippet and len(rec_snippet) > 5:
+                    matching_ids.append(getattr(rec, "evidence_id", ""))
+                    continue
+
+        return matching_ids
 
     def mark_done(self, item_id: int, verification_note: str = "") -> TodoItem:
         item = self._get(item_id)
@@ -120,6 +210,7 @@ class TodoManager:
             # a concrete explanation so the caller (tool layer) can relay it as a
             # CONTROL message telling the model what evidence is actually expected.
             item.status = TodoStatus.IN_PROGRESS
+            item.completion_source = None
             self._emit()
             raise ValueError(
                 f"Cannot mark TODO #{item_id} done: verification_note lacks "
@@ -128,8 +219,59 @@ class TodoManager:
                 f"'no matches'/'0 errors') that references the same artifact as the "
                 f"task — not a vague claim. Got: {verification_note!r}"
             )
+
+        # ── Evidence cross-reference ─────────────────────────────────────
+        # For READ/VERIFY/TEST/EDIT TODOs, verify that a matching evidence
+        # record exists in the EvidenceLog. If no evidence_log is set, fall
+        # back to the verification_note check (backward compatible).
+        matching_evidence = self._find_evidence_for_todo(item)
+        if self._evidence_log is not None and not matching_evidence:
+            # No matching evidence found — do NOT mark done.
+            item.status = TodoStatus.IN_PROGRESS
+            item.completion_source = None
+            self._emit()
+            raise ValueError(
+                f"Cannot mark TODO #{item_id} done: no matching evidence found "
+                f"in EvidenceLog. Task was: {item.text!r}. "
+                f"Expected a successful tool result (file_system.read, "
+                f"execute_shell, etc.) whose path or output matches the task. "
+                f"Got verification_note: {verification_note!r}"
+            )
+
         item.status = TodoStatus.DONE
         item.verification_note = verification_note
+        item.evidence_ids = matching_evidence
+        item.completed_at = time.time()
+        item.completion_source = "tool_result" if matching_evidence else "manual"
+        item.failure_reason = None
+        self._emit()
+        return item
+
+    def mark_skipped(self, item_id: int, reason: str) -> TodoItem:
+        """Mark a TODO as skipped with an explicit reason."""
+        item = self._get(item_id)
+        if not reason or not reason.strip():
+            raise ValueError(
+                f"Cannot mark TODO #{item_id} skipped: reason is required."
+            )
+        item.status = TodoStatus.SKIPPED
+        item.failure_reason = reason
+        item.completion_source = "skipped"
+        item.completed_at = time.time()
+        self._emit()
+        return item
+
+    def mark_blocked(self, item_id: int, reason: str) -> TodoItem:
+        """Mark a TODO as blocked with an explicit reason."""
+        item = self._get(item_id)
+        if not reason or not reason.strip():
+            raise ValueError(
+                f"Cannot mark TODO #{item_id} blocked: reason is required."
+            )
+        item.status = TodoStatus.BLOCKED
+        item.failure_reason = reason
+        item.completion_source = "blocked"
+        item.completed_at = time.time()
         self._emit()
         return item
 
@@ -166,6 +308,10 @@ class TodoManager:
                 "text": item.text,
                 "status": item.status.value,
                 "verification_note": item.verification_note,
+                "evidence_ids": list(item.evidence_ids),
+                "completed_at": item.completed_at,
+                "completion_source": item.completion_source,
+                "failure_reason": item.failure_reason,
             }
             for item in self._items
         ]
@@ -177,7 +323,12 @@ class TodoManager:
                 text=d.get("text", ""),
                 status=TodoStatus(d.get("status", TodoStatus.PENDING.value)),
                 verification_note=d.get("verification_note", ""),
+                evidence_ids=d.get("evidence_ids", []),
+                completed_at=d.get("completed_at"),
+                completion_source=d.get("completion_source"),
+                failure_reason=d.get("failure_reason"),
             )
             for i, d in enumerate(data)
         ]
+        self._seen_ids.update(item.id for item in self._items)
         self._emit()

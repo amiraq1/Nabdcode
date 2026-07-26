@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 from core.display import display_json
-from core.text_utils import is_arabic, safe_display
+from core.text_utils import is_arabic, safe_display, display_width, wrap_text
 
 console = Console()
 
@@ -32,22 +32,33 @@ def render_badge(label: str, text: str = "") -> None:
 def render_thinking(seconds: int | float, tokens: int = 0) -> None:
     """Render standardized thinking duration and token counts."""
     sec_int = int(seconds) if isinstance(seconds, (int, float)) else seconds
-    info = f"Thought for {sec_int}s"
+    info = f"Thinking  {sec_int}s"
     if tokens:
         info += f"  •  {tokens} tokens"
     console.print(f"[dim italic]{info}[/dim italic]")
 
 
 def render_final_answer(text: str) -> None:
-    """Render unified final answer box with bidi-aware text alignment."""
+    """Render unified final answer box with bidi-aware text alignment.
+
+    Arabic text is preserved in its original Unicode order internally;
+    only display-only directional isolation is applied here via ``safe_display``.
+    Width is computed using ``display_width()`` (not ``len()``) so Arabic
+    and wide characters are measured correctly on narrow Termux screens.
+    """
     safe_text = safe_display(text)
     justify = "right" if is_arabic(text) else "left"
+    # Compute safe width using display_width, capped to console width.
+    console_width = console.size.width if hasattr(console, "size") else 80
+    safe_width = min(display_width(text), console_width - 4)
+    safe_width = max(safe_width, 20)  # minimum width
     console.print(
         Panel(
             Text(safe_text, justify=justify),
             title="[bold magenta]◆ FINAL ANSWER[/bold magenta]",
             border_style="magenta",
             padding=(1, 2),
+            width=safe_width,
         )
     )
 

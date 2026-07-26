@@ -18,6 +18,7 @@ from core.evidence import EvidenceLog
 from core.logger import Logger
 from core.metrics import MetricsEngine
 from core.storage import MemoryManager, SessionManager, UnifiedStorage
+from core.artifact_manager import ArtifactManager
 from core.adapters import _KernelSecurityEngine
 from core.parser import pin_workspace_root
 from core.todo import TodoManager
@@ -42,6 +43,7 @@ class AppContext:
     todo_manager: TodoManager
     evidence_log: EvidenceLog
     snapshot_engine: SnapshotEngine
+    artifact_manager: ArtifactManager
     storage: Optional[UnifiedStorage] = None
 
     @classmethod
@@ -61,12 +63,41 @@ class AppContext:
         memory_mgr = storage.memory_manager
         todo_manager = storage.todo_manager
         evidence_log = storage._get_evidence_log(max_records=config.max_evidence_records)
+        artifact_mgr = storage.artifact_manager
         logger = Logger(log_dir=config.log_dir)
         metrics = MetricsEngine()
         renderer = Renderer()
 
+        # ── Reset STATE.md for fresh session (SESSION-based) ─────────────
+        from core.context_manager import RepositoryContextManager
+        RepositoryContextManager(root=config.workspace_root).reset_session_state()
+
         # ── Snapshot engine (pre-write backups, enables /undo) ───────────
         snapshot_engine = SnapshotEngine(workspace_root=config.workspace_root)
+
+        # ── WAL Journal startup (Phase 2.2B) ──────────────────────────────
+        from core.accept_edits_state import (
+            set_journal_path,
+            load_and_reconcile_journal,
+            load_workspace_identity,
+            get_workspace_identity,
+            _validate_journal_path,
+        )
+        journal_path = os.path.join(config.root_dir, ".nabd", "journal", "journal.jsonl")
+        path_err = _validate_journal_path(journal_path)
+        if path_err is None:
+            load_workspace_identity(workspace_root=config.workspace_root)
+            set_journal_path(journal_path)
+            recovery = load_and_reconcile_journal()
+            if recovery.requires_review:
+                print(f"⚠️  [Journal] {len(recovery.operations)} unresolved operation(s) at startup")
+                for d in recovery.diagnostics:
+                    print(f"   ⚠ {d}")
+            elif recovery.diagnostics:
+                for d in recovery.diagnostics:
+                    print(f"   ℹ {d}")
+        else:
+            print(f"⚠️  [Journal] Path rejected: {path_err}")
 
         # Register all tools
         _security_engine = _KernelSecurityEngine()
@@ -127,6 +158,7 @@ class AppContext:
             todo_manager=todo_manager,
             evidence_log=evidence_log,
             snapshot_engine=snapshot_engine,
+            artifact_manager=artifact_mgr,
             storage=storage,
         )
 

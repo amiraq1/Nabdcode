@@ -8,7 +8,10 @@ a missing/!writable file can never crash the orchestrator.
 from __future__ import annotations
 
 import datetime
+import os
 import re
+import threading
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -29,8 +32,34 @@ def _task_id_for(task: str) -> str:
 class RepositoryContextManager:
     """Maintains STATE.md (task log) and LESSONS.md (failure ledger)."""
 
+    _lock = threading.RLock()
+
     def __init__(self, root: Optional[Path] = None) -> None:
         self.root = Path(root) if root is not None else get_workspace_root()
+
+    @staticmethod
+    def _atomic_write(path: Path, content: str) -> None:
+        tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp_path.write_text(content, encoding="utf-8")
+            os.replace(tmp_path, path)
+        except Exception:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+            raise
+
+    def reset_session_state(self) -> None:
+        """Reset STATE.md for a fresh session (SESSION-based) while preserving LESSONS.md."""
+        try:
+            with self._lock:
+                self.root.mkdir(parents=True, exist_ok=True)
+                path = self.root / "STATE.md"
+                self._atomic_write(path, self._state_header())
+        except Exception:
+            pass
 
     # ── Public API ───────────────────────────────────────────────────────
     def update_state(self, task_id: str, status: str, payload: Dict[str, Any]) -> None:
@@ -42,15 +71,18 @@ class RepositoryContextManager:
         stale copy behind.
         """
         try:
-            self.root.mkdir(parents=True, exist_ok=True)
-            path = self.root / "STATE.md"
-            line = self._format_state_line(task_id, status, payload)
-            raw = path.read_text(encoding="utf-8") if path.exists() else ""
-            if not raw:
-                raw = self._state_header()
-            raw = self._remove_task_id(raw, task_id)
-            raw = self._insert_under_section(raw, status, line)
-            path.write_text(raw, encoding="utf-8")
+            with self._lock:
+                self.root.mkdir(parents=True, exist_ok=True)
+                path = self.root / "STATE.md"
+                line = self._format_state_line(task_id, status, payload)
+                raw = path.read_text(encoding="utf-8") if path.exists() else ""
+                if not raw:
+                    raw = self._state_header()
+                raw = self._remove_task_id(raw, task_id)
+                raw = self._insert_under_section(raw, status, line)
+                if len(raw) > 1_000_000:
+                    raw = self._truncate_if_needed(raw)
+                self._atomic_write(path, raw)
         except Exception:
             # Never let context tracking crash the orchestrator.
             pass
@@ -64,14 +96,15 @@ class RepositoryContextManager:
     ) -> None:
         """Append a concrete failure-mode + prevention rule to LESSONS.md."""
         try:
-            self.root.mkdir(parents=True, exist_ok=True)
-            path = self.root / "LESSONS.md"
-            entry = self._format_lesson(task_id, failed_code, traceback_str, fix_applied)
-            existing = path.read_text(encoding="utf-8") if path.exists() else ""
-            if not existing:
-                existing = self._lessons_header()
-            existing = existing.rstrip() + "\n" + entry + "\n"
-            path.write_text(existing, encoding="utf-8")
+            with self._lock:
+                self.root.mkdir(parents=True, exist_ok=True)
+                path = self.root / "LESSONS.md"
+                entry = self._format_lesson(task_id, failed_code, traceback_str, fix_applied)
+                existing = path.read_text(encoding="utf-8") if path.exists() else ""
+                if not existing:
+                    existing = self._lessons_header()
+                existing = existing.rstrip() + "\n" + entry + "\n"
+                self._atomic_write(path, existing)
         except Exception:
             pass
 
@@ -168,6 +201,35 @@ class RepositoryContextManager:
     @staticmethod
     def _lessons_header() -> str:
         return "# Lessons Learned\n\n"
+
+    @classmethod
+    def _truncate_if_needed(cls, raw: str, force: bool = False) -> str:
+        """Keep STATE.md <= 1MB by retaining structure and newest 25 entries per section."""
+        if not force and len(raw) <= 1_000_000:
+            return raw
+        lines = raw.splitlines()
+        sections: Dict[str, list] = {
+            "## In Progress": [],
+            "## Completed": [],
+            "## Escalated to Human": [],
+        }
+        current_section = None
+        for ln in lines:
+            stripped = ln.strip()
+            if stripped.startswith("## "):
+                current_section = stripped
+                if current_section not in sections:
+                    sections[current_section] = []
+            elif current_section and stripped.startswith("- "):
+                sections[current_section].append(ln)
+
+        out = ["# Task State Log"]
+        for heading, entries in sections.items():
+            out.append("")
+            out.append(heading)
+            for entry in entries[:25]:  # Keep newest 25 per section (top of section)
+                out.append(entry)
+        return "\n".join(out).rstrip() + "\n"
 
     # ── Convenience for orchestrator use ─────────────────────────────────
     @staticmethod

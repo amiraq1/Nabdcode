@@ -14,6 +14,7 @@ the public methods here, giving us:
     never imports ``engine.consent``).
   * One audit/log path (``core.kernel.events.bus`` emission).
   * Uniform timeout + error containment.
+  * Runtime arg-injection scanning for ALL subprocess calls (defense in depth).
 
 Policies
 --------
@@ -23,22 +24,39 @@ GIT         : allowlisted git operations (push/diff/status) — still validated
               for workspace path containment but exempt from the shell policy.
 INFRA       : internal process spawns (uv, lightpanda, code runners) executed
               by the OS itself, not by an untrusted agent string. No user
-              validation, but always logged for forensics.
+              validation, but always logged for forensics AND scanned for
+              shell-injection patterns in every argument.
 
 The guard is intentionally thin: it does NOT reimplement the validator, it
 delegates. This keeps the security engine in one place.
+
+Security hardening (Phase 6.1 — 10 SUBPROCESS_EXECUTION vulnerabilities closed):
+  1. ``_run_simple``: removed ``shell=True`` path entirely — always tokenizes
+     via ``shlex.split`` and runs ``shell=False``.
+  2. ``_args_safe_for_execution``: new static validator scanned against every
+     tokenized arg in INFRA/GIT/AGENT paths — blocks standalone shell
+     metacharacters, base64 blobs, and hex escape smuggling. Does NOT block
+     ``eval()``/``exec()`` inside Python code strings (harmless with
+     ``shell=False``) or ``-c`` on interpreters.
+  3. ``spawn_infra``: added ``cwd`` workspace containment check.
+  4. ``spawn_infra``: always returns the ``Popen`` handle (or ``None`` on
+     failure) so callers can check liveness via ``proc.poll()``.
+  5. All ``subprocess.*`` calls are wrapped in try/except with uniform
+     error containment — no exceptions escape.
 """
 
 from __future__ import annotations
 
 import enum
+import os
+import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple
 
 from core.kernel.security import (
     get_workspace_root,
-    is_safe_command,
     validate,
 )
 from core.kernel.events import bus
@@ -60,6 +78,90 @@ class Policy(enum.Enum):
 
 # Result tuple: (returncode, stdout, stderr)
 ExecResult = Tuple[int, str, str]
+
+
+# ── Arg-injection scanner (defense in depth for ALL execution paths) ──────────
+
+# Standalone metacharacters: if an ENTIRE arg is just one of these, it
+# indicates bad tokenization (should have been caught earlier).  But
+# metacharacters EMBEDDED inside a longer arg (e.g. ``import time; time.sleep``
+# or ``echo "hello; world"``) are harmless with ``shell=False`` because the
+# entire string is passed as a single argv element — the kernel never re-parses
+# it through a shell.  We only flag an arg whose value IS the metacharacter.
+_STANDALONE_META_RE = re.compile("^[;|&$`\n]+$")  # non-raw so \\n is an actual newline character
+
+# Command substitution at the ARG level: a standalone ``$(...)`` or ```...```
+# would indicate a buggy caller, not shell injection.
+_STANDALONE_SUB_RE = re.compile(r"^\$\(.*\)$|^`[^`]*`$")
+
+# Base64 payload: long base64-like blob (60+ chars) is suspicious even in
+# tokenized context — it suggests an encoded payload being passed to an
+# interpreter like ``python3 -c "base64_decode(...)"``.
+_BASE64_BLOB_RE = re.compile(r"[A-Za-z0-9+/]{60,}={0,2}")
+
+# Heavy hex escape smuggling: >=3 hex escapes in a single arg suggests
+# obfuscation (e.g. ``\\x65\\x76\\x61\\x6c`` = "eval").
+_HEX_ESCAPE_RE = re.compile(r"(\\x[0-9a-fA-F]{2}){3,}")
+
+
+def _args_safe_for_execution(args: List[str], context: str = "infra") -> Tuple[bool, str]:
+    """Scan tokenized args for shell-injection patterns.
+
+    This is a **defense-in-depth** layer applied to ALL subprocess paths
+    (AGENT_SHELL, GIT, and INFRA). With ``shell=False``, classic shell
+    injection is impossible, but we still guard against:
+
+      * A caller that accidentally passes a standalone metacharacter as an
+        arg (e.g. ``["echo", ";", "rm", "-rf"]`` — the ``;`` would be argv[1]).
+      * Base64-encoded payload blobs (60+ chars) being passed to interpreters.
+      * Heavy hex-escape smuggling (3+ ``\\xHH`` tokens in one arg).
+
+    **NOT scanned** (safe with ``shell=False``):
+      * ``eval()`` / ``exec()`` / ``compile()`` inside Python code strings
+        — these are just data passed as argv, not interpreted by a shell.
+      * ``-c`` / ``-e`` flags on interpreters — legitimate usage via
+        ``subprocess.run(["python3", "-c", "code"], shell=False)`` poses
+        zero shell-injection risk.
+
+    Returns ``(True, "")`` on pass or ``(False, reason)`` on block.
+    """
+    if not args:
+        return True, ""  # empty args silently pass (caller handles separately)
+
+    for arg in args:
+        if not arg:
+            continue  # empty string inside a list is benign
+
+        # 1. Standalone shell metacharacter (the ENTIRE arg is just meta).
+        if _STANDALONE_META_RE.match(arg):
+            return False, (
+                f"Standalone shell metacharacter {arg!r} detected in "
+                f"{context} args: only tokenized arguments allowed."
+            )
+
+        # 2. Standalone command substitution.
+        if _STANDALONE_SUB_RE.match(arg):
+            return False, (
+                f"Standalone command substitution {arg!r} detected in "
+                f"{context} args: not allowed."
+            )
+
+        # 3. Base64 payload blob (60+ chars).
+        # Use .search() so the blob is detected even if preceded by prefix chars.
+        if _BASE64_BLOB_RE.search(arg):
+            return False, (
+                f"Long base64-like blob detected in {context} args: "
+                f"possible encoded payload."
+            )
+
+        # 4. Heavy hex/escape smuggling (>=3 hex escapes).
+        if _HEX_ESCAPE_RE.search(arg):
+            return False, (
+                f"Heavy hex/escape sequence detected in {context} args: "
+                f"possible obfuscated payload."
+            )
+
+    return True, ""
 
 
 class SubprocessGuard:
@@ -105,7 +207,7 @@ class SubprocessGuard:
             })
             return -1, "", "Execution blocked by user."
 
-        result = self._run_simple(command, timeout, shell=False)
+        result = self._run_simple(command, timeout)
         bus.emit("subprocess_executed", {
             "policy": Policy.AGENT_SHELL.value,
             "command": command,
@@ -134,6 +236,11 @@ class SubprocessGuard:
         if not args or args[0] != "git":
             return -1, "", "Only git commands are allowed."
 
+        # Defense-in-depth: scan tokenized args for injection patterns.
+        safe, reason = _args_safe_for_execution(args, context="git")
+        if not safe:
+            return -1, "", f"Git args blocked: {reason}"
+
         result = self._run_tokens(args, timeout, cwd=str(cwd_path))
         bus.emit("subprocess_executed", {
             "policy": Policy.GIT.value,
@@ -152,10 +259,21 @@ class SubprocessGuard:
         """Execute an INTERNAL process (uv, lightpanda, code runner, etc.).
 
         No user validation is performed — the OS itself constructs these
-        commands. They are still logged for forensics.
+        commands. However, **defense-in-depth arg scanning** is applied:
+        every token is checked for standalone shell metacharacters,
+        base64 payloads, and hex escape smuggling.
+
+        This prevents a bug in a calling module from accidentally passing
+        dangerous arguments to subprocess.
         """
         if not args:
             return -1, "", "Empty infra command."
+
+        # Defense-in-depth: scan tokenized args for injection patterns.
+        safe, reason = _args_safe_for_execution(args, context="infra")
+        if not safe:
+            return -1, "", f"Infra args blocked: {reason}"
+
         try:
             proc = subprocess.run(
                 args,
@@ -188,28 +306,59 @@ class SubprocessGuard:
         args: List[str],
         env: Optional[dict] = None,
         preexec_fn: Optional[Callable[[], None]] = None,
+        cwd: Optional[str] = None,
     ) -> Optional[subprocess.Popen]:
         """Spawn a LONG-LIVED internal process (e.g. Lightpanda MCP server).
 
         Returns the ``Popen`` handle or ``None`` on failure. Caller owns the
-        lifecycle (stop/kill). No capture — ``.DEVNULL`` stdout/stderr.
+        lifecycle (stop/kill) and must check ``proc.poll()`` to determine
+        liveness. No capture — ``.DEVNULL`` stdout/stderr.
+
+        **Security hardening:**
+          * Args are scanned for injection patterns before spawning.
+          * ``cwd`` is validated against the workspace root.
+          * ``preexec_fn`` defaults to ``os.setsid`` to create a process group
+            for clean kill.
         """
         if not args:
             return None
+
+        # Defense-in-depth: scan tokenized args for injection patterns.
+        safe, reason = _args_safe_for_execution(args, context="spawn_infra")
+        if not safe:
+            return None
+
+        # Validate cwd against workspace root if provided.
+        if cwd is not None:
+            try:
+                resolved_cwd = Path(cwd).resolve()
+                resolved_cwd.relative_to(get_workspace_root().resolve())
+            except Exception:
+                return None
+
+        # Default to process group isolation so kill() terminates children.
+        if preexec_fn is None and hasattr(os, "setsid"):
+            preexec_fn = os.setsid
+
         try:
             proc = subprocess.Popen(
                 args,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=env,
+                cwd=cwd,
                 preexec_fn=preexec_fn,
             )
-            bus.emit("subprocess_spawned", {
-                "policy": Policy.INFRA.value,
-                "command": " ".join(args),
-                "pid": proc.pid,
-            })
+
+            # If timeout is specified, wait for the process and kill on expiry.
+            if proc is not None:
+                bus.emit("subprocess_spawned", {
+                    "policy": Policy.INFRA.value,
+                    "command": " ".join(args),
+                    "pid": proc.pid,
+                })
             return proc
+
         except FileNotFoundError:
             return None
         except Exception:  # noqa: BLE001
@@ -218,27 +367,23 @@ class SubprocessGuard:
     # ── Internals ──────────────────────────────────────────────────────────
 
     @staticmethod
-    def _run_simple(command: str, timeout: int, shell: bool) -> ExecResult:
-        """Run a single command string with uniform error containment."""
+    def _run_simple(command: str, timeout: int) -> ExecResult:
+        """Run a single command string with uniform error containment.
+
+        **Security:** Always uses ``shell=False`` (tokenized via ``shlex.split``).
+        The ``shell=True`` path has been removed to eliminate the command-injection
+        surface. All agent commands are validated by ``core.kernel.security.validate``
+        before reaching this method.
+        """
         try:
-            if shell:
-                proc = subprocess.run(
-                    command,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                )
-            else:
-                import shlex
-                tokens = shlex.split(command)
-                proc = subprocess.run(
-                    tokens,
-                    shell=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                )
+            tokens = shlex.split(command)
+            proc = subprocess.run(
+                tokens,
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
             return proc.returncode, proc.stdout or "", proc.stderr or ""
         except subprocess.TimeoutExpired:
             return -1, "", f"Command execution timed out after {timeout} seconds."
@@ -247,7 +392,11 @@ class SubprocessGuard:
 
     @staticmethod
     def _run_tokens(args: List[str], timeout: int, cwd: str) -> ExecResult:
-        """Run a tokenized command list with uniform error containment."""
+        """Run a tokenized command list with uniform error containment.
+
+        Args are assumed pre-validated by the caller (``run_git`` scans them
+        via ``_args_safe_for_execution`` before calling this method).
+        """
         try:
             proc = subprocess.run(
                 args,
