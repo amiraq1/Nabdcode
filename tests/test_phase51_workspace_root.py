@@ -33,7 +33,7 @@ def test_pin_workspace_root_sets_global():
     from core.parser import pin_workspace_root, get_workspace_root
 
     # Pin to a known path
-    test_root = Path("/tmp/test_workspace")
+    test_root = Path(os.path.join(tempfile.gettempdir(), "test_workspace"))
     pin_workspace_root(test_root)
     assert get_workspace_root() == test_root.resolve()
 

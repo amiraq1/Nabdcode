@@ -76,7 +76,7 @@ def test_map_empty():
 def test_collapsed_count():
     c = collapsed(14)
     assert "+14 lines" in c
-    assert "ctrl+o to expand" in c
+    assert "ctrl+o to expand" not in c
 
 
 def test_collapsed_zero():
@@ -124,7 +124,7 @@ def test_render_diff_collapsed():
     lines = ["--- a/f\n+++ b/f\n@@ -1 +1,100 @@"] + [f"-old{i}" for i in range(20)]
     diff = "\n".join(lines)
     rendered = render_diff(diff, max_lines=12)
-    assert "ctrl+o" in rendered  # collapsed marker
+    assert "ctrl+o" not in rendered  # no legacy hint
 
 
 def test_render_diff_empty():
@@ -135,15 +135,15 @@ def test_render_diff_empty():
 
 def test_think_line_with_duration():
     line = think_line(2.7)
-    assert "Thought" in line
+    assert "Thinking" in line
     assert "3" in line  # rounded up
     assert "seconds" in line
 
 
 def test_think_line_no_duration():
     line = think_line(None)
-    assert "Thought" in line
-    assert "ctrl+o" in line
+    assert "Thinking" in line
+    assert "ctrl+o" not in line
 
 
 # ── badge ───────────────────────────────────────────────────────────────

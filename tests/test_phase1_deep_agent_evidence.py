@@ -18,13 +18,16 @@ from engine.dispatcher import Dispatcher
 from core.evidence import EvidenceLog
 from tools.models import ToolResult
 
-# Bootstrap the tool registry so execute_node's validate_tool_call can resolve
-# tool names (e.g. "execute_shell"). The production app always builds AppContext
-# first; tests must do the same or extract_command() returns None and 0 dispatches
-# are recorded. Imported lazily to avoid importing the full app graph at module top.
-import core.app_context as _app_context  # noqa: E402
-_app_context.AppContext.build()
+import pytest
 
+@pytest.fixture(autouse=True)
+def _register_tools_for_deep_agent():
+    from engine.tool_registry import registry
+    from tools import ShellTool, FileSystemTool, SearchMemoryTool, PythonREPLTool
+    registry.register(ShellTool())
+    registry.register(FileSystemTool())
+    registry.register(SearchMemoryTool())
+    registry.register(PythonREPLTool())
 
 def _stub_dispatcher(result: ToolResult | None = None) -> Dispatcher:
     """Return a Dispatcher whose dispatch() always returns the given result."""

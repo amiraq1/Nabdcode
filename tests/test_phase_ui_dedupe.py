@@ -1,8 +1,9 @@
 """Phase UI Dedupe — Verifies suppression of duplicate and raw tool/final_answer outputs.
 
 Verifies:
-  1. main.py wire_events (_on_llm_token) buffers and suppresses raw final_answer / tool JSON streams.
-  2. main.py wire_events (_on_llm_token) streams normal conversational prose directly.
+  1. main.py wire_events (_on_llm_token) buffers and suppresses ALL intermediate
+     tokens (including conversational prose) — only the final answer reaches stdout.
+  2. main.py wire_events (_on_llm_token) does NOT stream final_answer JSON raw.
   3. ui.repl_termux.TerminalVisualizer dedupes tool completion / final-answer rendering
      (sets _on_tool_completed_active and _final_answer_rendered flags).
   4. Tool-name event contract: handlers resolve the tool name from both the
@@ -55,7 +56,13 @@ def test_main_on_llm_token_suppresses_raw_final_answer():
 
 
 def test_main_on_llm_token_streams_conversational_prose():
-    """Verify that wire_events (_on_llm_token) streams regular prose tokens."""
+    """Verify that wire_events (_on_llm_token) does NOT stream intermediate prose tokens.
+
+    In the fixed pipeline, intermediate tokens (including conversational prose)
+    are buffered and discarded — never streamed to stdout via stream_chunk.
+    Only the final answer (rendered separately after engine.run() returns)
+    reaches stdout. This guarantees no reasoning or intermediate text leaks.
+    """
     import main
 
     ctx, mock_renderer = _make_ctx()
@@ -65,10 +72,8 @@ def test_main_on_llm_token_streams_conversational_prose():
     for t in tokens:
         bus.emit("llm_token", {"token": t})
 
-    assert mock_renderer.stream_chunk.call_count > 0
-    # The accumulated stream calls should contain "Hello World"
-    streamed_text = "".join(call.args[0] for call in mock_renderer.stream_chunk.call_args_list)
-    assert "Hello World" in streamed_text
+    # stream_chunk must NOT be called for intermediate tokens
+    mock_renderer.stream_chunk.assert_not_called()
 
 
 def test_tool_result_not_printed_twice():

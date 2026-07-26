@@ -1,8 +1,21 @@
+import tempfile
 """tests/test_phase_fallback_restrictions.py — Verify emergency fallback restrictions."""
 
 import pytest
 from engine.loop import ExecutionLoop
 from engine.state import RuntimeState
+
+@pytest.fixture(autouse=True)
+def _register_fallback_tools():
+    from engine.tool_registry import registry
+    from tools import SearchMemoryTool, TodoWriteTool, ShellTool, BrowserTool
+    from core.todo import TodoManager
+    from core.storage import UnifiedStorage
+    
+    registry.register(SearchMemoryTool())
+    registry.register(TodoWriteTool(todo_manager=TodoManager(None)))
+    registry.register(ShellTool())
+    registry.register(BrowserTool(workspace_dir=tempfile.gettempdir()))
 
 
 def test_fallback_mode_activates_after_two_failures():

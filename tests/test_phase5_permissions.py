@@ -11,6 +11,7 @@ Plus pattern matching (exact / glob / regex) and the RuntimeState hookup.
 
 import sys
 import os
+import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.permissions import (

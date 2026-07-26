@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from pathlib import Path
+import tempfile
 
 from core.snapshot import SnapshotEngine
 
@@ -26,7 +27,7 @@ def test_save_and_undo_roundtrip() -> None:
 
 def test_new_file_noop() -> None:
     """save() on a non-existent path is a silent no-op (no crash, no snapshot)."""
-    snap = SnapshotEngine(workspace_root=Path("/tmp"))
+    snap = SnapshotEngine(workspace_root=Path(tempfile.gettempdir()))
     snap.save("does_not_exist.py")  # must not raise
     assert snap.undo("does_not_exist.py") == "No snapshot for 'does_not_exist.py'"
 

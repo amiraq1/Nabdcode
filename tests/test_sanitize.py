@@ -8,6 +8,7 @@ Verifies:
   5. Integration with Subprocess safe_execute_command output.
   6. Integration with Renderer (agent_text, stream_chunk, tool_end).
   7. Deterministic O(n) linear performance on large payloads.
+  8. RTL/BiDi discipline: fix_arabic_reversal preserves original Unicode order.
 """
 
 import sys
@@ -48,7 +49,6 @@ class TestSanitizeCore(unittest.TestCase):
         self.assertEqual(clean, "Line 1\nLine 2\tTabbed Green")
 
     def test_linear_performance(self):
-        # Build a 100k character payload with repeated escape sequences
         dirty = ("Payload \x1b[31mDATA\x1b[0m \x00\x07" * 5000)
         start = time.perf_counter()
         clean = sanitize(dirty)
@@ -66,7 +66,6 @@ class TestSubsystemIntegration(unittest.TestCase):
 
     def test_parser_validate_tool_call_with_ansi_payload(self):
         dirty_json = '{"tool": "file_system", "args": {"path": "test.txt", "action": "\x1b[31mread\x1b[0m"}}'
-        # Use a simple mock registry with an accepting mock tool
         class _MockTool:
             name = "file_system"
             def validate_and_parse(self, args):
@@ -126,11 +125,26 @@ class TestSubsystemIntegration(unittest.TestCase):
         self.assertEqual(cleaned, "All tasks completed.")
         self.assertNotIn("<goal-complete/>", cleaned)
 
-    def test_fix_arabic_reversal(self):
+    def test_fix_arabic_reversal_preserves_unicode_order(self):
+        """fix_arabic_reversal must NOT reverse token order — it is a no-op
+        that preserves the original Unicode code-point order. Display-only
+        bidi processing is handled by core.text_utils.safe_display, not here.
+
+        The old test expected token reversal (violating the RTL/BiDi contract:
+        'preserve Arabic text internally in original Unicode order'). This
+        test verifies the corrected contract behavior.
+        """
         from core.sanitize import fix_arabic_reversal
-        self.assertEqual(fix_arabic_reversal("ي ع د و ت س م م ح ف"), "فحص مستودعي")
+        # No-op: text returned unchanged
+        self.assertEqual(fix_arabic_reversal("ي ع د و ت س م م ح ف"), "ي ع د و ت س م م ح ف")
         self.assertEqual(fix_arabic_reversal("فحص مستودعي"), "فحص مستودعي")
         self.assertEqual(fix_arabic_reversal("/goal check"), "/goal check")
+        # Mixed Arabic/English must not be broken
+        self.assertEqual(fix_arabic_reversal("Hello فحص مستودعي"), "Hello فحص مستودعي")
+        self.assertEqual(fix_arabic_reversal("افتح main.py ثم core/utils.py"), "افتح main.py ثم core/utils.py")
+        # None / empty
+        self.assertEqual(fix_arabic_reversal(None), "")
+        self.assertEqual(fix_arabic_reversal(""), "")
 
 
 if __name__ == "__main__":

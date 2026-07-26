@@ -41,7 +41,7 @@ class TestMultiAgentGraphifyParallel(unittest.TestCase):
         self.assertIn("nodes", data)
         self.assertIn("edges", data)
 
-    @patch("concurrent.futures.ThreadPoolExecutor")
+    @patch("core.multi_agent_orchestrator.ThreadPoolExecutor")
     def test_graceful_serial_fallback_on_oom_or_exception(self, mock_executor):
         # Simulate ThreadPoolExecutor throwing MemoryError or Resource Exhaustion
         mock_executor.side_effect = MemoryError("Simulated OOM inside Termux")

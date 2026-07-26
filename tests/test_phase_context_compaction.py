@@ -3,14 +3,14 @@ from engine.state import RuntimeState, GoalSpec
 from core.context_compactor import ContextCompactor, _ToolInteraction
 
 
-def test_compactor_triggers_at_8kb():
-    """Compaction triggers when context exceeds 8KB"""
+def test_compactor_triggers_at_16kb():
+    """Compaction triggers when context exceeds 16KB"""
     compactor = ContextCompactor()
 
-    # Generate large messages (>8KB)
+    # Generate large messages (>16KB)
     messages = [
-        {"role": "system", "content": "x" * 5000},
-        {"role": "user", "content": "y" * 5000},
+        {"role": "system", "content": "x" * 10000},
+        {"role": "user", "content": "y" * 10000},
     ]
     assert compactor.should_compact(messages) is True
 

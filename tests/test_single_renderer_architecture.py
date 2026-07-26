@@ -105,7 +105,9 @@ def test_wire_events_renders_when_visualizer_inactive():
 
     mock_renderer.tool_start.assert_called_once_with("shell", {"command": "ls"})
     mock_renderer.tool_end.assert_called_once()
-    mock_renderer.stream_chunk.assert_called_once_with("hello")
+    # stream_chunk must NOT be called for intermediate tokens — only the
+    # final answer (rendered separately after engine.run()) reaches stdout.
+    mock_renderer.stream_chunk.assert_not_called()
 
 
 def test_basetool_forward_suppresses_bridge_emits_during_dispatch():

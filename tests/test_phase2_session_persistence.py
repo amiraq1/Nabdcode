@@ -56,7 +56,7 @@ def test_todo_empty_restore():
 def test_evidence_log_serialization_roundtrip():
     log = EvidenceLog()
     log.record(tool="execute_shell", command_or_path="echo hello", success=True, output_snippet="hello")
-    log.record(tool="file_system", command_or_path="/tmp/test.txt", success=True, output_snippet="content")
+    log.record(tool="file_system", command_or_path=os.path.join(tempfile.gettempdir(), "test.txt"), success=True, output_snippet="content")
     log.record(tool="web_search", command_or_path="python 3.13", success=False, output_snippet="timeout")
 
     serialized = log.to_serializable()

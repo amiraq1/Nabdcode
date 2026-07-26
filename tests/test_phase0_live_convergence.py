@@ -60,8 +60,8 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
         # Terminate quickly — the spin is intercepted, not dispatched.
         self.assertLessEqual(llm.call_count, 3)
         self.assertEqual(loop.state.status, "COMPLETED")
-        # No Partial-answer banner in the output.
-        self.assertNotIn("Partial answer", result or "")
+        # No Partial-answer banner in the outcome.
+        self.assertNotIn("Partial answer", result.safe_message or "")
 
     def test_wider_scope_relist_blocked_after_read(self):
         """After reading pyproject.toml, a 'list' / path='.' call must be blocked."""
@@ -75,7 +75,7 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
         list_calls = [c for c in loop._dispatch_log if c[0] == "file_system" and str(c[1].get("action")).lower() == "list"]
         self.assertEqual(list_calls, [], "wider-scope list must be blocked by Guard 4")
         self.assertEqual(loop.state.status, "COMPLETED")
-        self.assertNotIn("Partial answer", result or "")
+        self.assertNotIn("Partial answer", result.safe_message or "")
 
     def test_first_whole_tree_scan_blocked_without_prior_read(self):
         """A bare recursive list of '.' (the 801-entry tree wipe) must be blocked
@@ -95,7 +95,7 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
         ]
         self.assertEqual(scan_calls, [], "first whole-tree scan must be blocked by Guard 4")
         self.assertEqual(loop.state.status, "COMPLETED")
-        self.assertNotIn("Partial answer", result or "")
+        self.assertNotIn("Partial answer", result.safe_message or "")
 
     def test_reread_same_path_blocked(self):
         """Re-reading the exact same file path must be blocked."""
@@ -110,7 +110,7 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
         # Only the first read reaches the dispatcher; the re-read is intercepted.
         self.assertEqual(len(read_calls), 1, "re-read of same path must be blocked by Guard 4")
         self.assertEqual(loop.state.status, "COMPLETED")
-        self.assertNotIn("Partial answer", result or "")
+        self.assertNotIn("Partial answer", result.safe_message or "")
 
 
 if __name__ == "__main__":

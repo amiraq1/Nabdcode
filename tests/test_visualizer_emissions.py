@@ -57,8 +57,8 @@ class TestAgentHandoffEmission(unittest.TestCase):
         orch._persist_lesson_if_any = lambda *a, **k: None
         # Stub the local sandbox smoke test so the clean payload reaches the
         # Verifier branch (where the Coder -> Auditor handoff is emitted).
-        import core.multi_agent_orchestrator as _mod
-        _mod.SafeExecutionSandbox.smoke_test_code = staticmethod(
+        import core.self_refinement as _sr_mod
+        _sr_mod.SafeExecutionSandbox.smoke_test_code = staticmethod(
             lambda code: {"passed": True, "error": ""}
         )
 

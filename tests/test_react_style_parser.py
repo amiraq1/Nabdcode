@@ -12,13 +12,17 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import core.app_context as _app_context
-_app_context.AppContext.build()
-
 from core.parser import extract_command  # noqa: E402
-
+from engine.tool_registry import registry
+from tools import WebSearchTool, FileSystemTool, ShellTool, PythonREPLTool
 
 class TestReactStyleParser(unittest.TestCase):
+    def setUp(self):
+        registry.register(WebSearchTool())
+        registry.register(FileSystemTool())
+        registry.register(ShellTool())
+        registry.register(PythonREPLTool())
+
     def test_search_with_quotes(self):
         tc = extract_command('SEARCH "python 3.12 new feature"')
         self.assertIsNotNone(tc)

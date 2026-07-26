@@ -10,6 +10,7 @@ Verifies:
 
 import sys
 import os
+import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.constants import CHITCHAT_SET, is_chitchat
