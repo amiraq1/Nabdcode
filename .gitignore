@@ -78,3 +78,22 @@ scratch_*.py
 
 # Auto-generated forensics reports (transient DNA analysis outputs)
 forensics_report*.md
+*.log
+/CORE_FILE_DNA_DISSECTION.md
+/CORE_FILE_DNA_DISSECTION_REPORT.md
+/NABD_OS_Local_Beta_Status.md
+/ast_out.json
+/loop_v3_unauthorized_change_incident.md
+/post_rc_finalization_report.md
+/session_c1_commit_plan_audit.md
+/session_c2_commit_order_final.md
+/session_c2_rc_checklist.md
+/session_c3_rc_verification.md
+/session_c_commit_plan.md
+/session_c_inventory.md
+/session_c_release_candidate_checklist.md
+/stability_code_review_report.md
+/test_script.py
+/tests_collection.txt
+/tool_routing_remediation_report.md
+/update_l1_ast.py
