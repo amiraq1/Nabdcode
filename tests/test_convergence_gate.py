@@ -299,7 +299,10 @@ class TestTodoAndEventViewCannotDiverge(unittest.TestCase):
         self.assertEqual(serialized[0]["evidence_ids"], list(item.evidence_ids))
 
     def test_todo_deleted_before_finalize_is_treated_as_unknown(self):
-        mgr = TodoManager()
+        elog = EvidenceLog()
+        elog.record(tool="execute_shell", command_or_path="run_tests", success=True,
+                     output_snippet="15 passed in 2.3s on file_b.py")
+        mgr = TodoManager(evidence_log=elog)
         mgr.set_plan(["Task A", "Task B", "Task C"])
         mgr.mark_in_progress(1)
         mgr.mark_done(2, "15 passed in 2.3s on file_b.py")

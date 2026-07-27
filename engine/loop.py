@@ -133,6 +133,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         logger: Any = None,
         model_identifier: str | None = None,
         no_stream: bool = False,
+        exact_action_mode: bool = False,
     ) -> None:
 
         self.state = state
@@ -180,6 +181,11 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # be injected here, or set earlier on state.active_goal via ``/goal``.
         # The verifier enforces it before any "Success" termination.
         self._goal = state.active_goal if isinstance(state.active_goal, GoalSpec) else None
+        # Phase 2.C: exact-action mode — when True, only execute_shell is
+        # allowed, max_tool_calls=1, TODOs disabled, consent required.
+        self._exact_action_mode: bool = exact_action_mode
+        # Phase 2.C: tool dispatch counter for max_tool_calls enforcement.
+        self._exact_action_tool_count: int = 0
         # Phase5 (Workspace Context): project-specific instructions (AGENTS.md /
         # .agents/config.md), loaded per run and injected into the system anchor.
         # Defaults to ""; set in run() before the loop starts. Fail-safe empty.
@@ -240,7 +246,24 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         return any(keyword in ident for keyword in _SMALL_FALLBACK_MODEL_KEYWORDS)
 
     def get_available_tools(self) -> dict:
-        """Filter tools based on fallback mode"""
+        """Filter tools based on fallback mode and exact-action mode.
+
+        Phase 2.C (Exact-Action Mode):
+          When ``_exact_action_mode`` is True, the model may ONLY call
+          ``execute_shell`` (per ``EXACT_ACTION_ALLOWED_TOOLS`` in
+          ``core/_exact_action_contract.py``). All other tools (including
+          ``final_answer``) are hidden from the available set so the model
+          never attempts to call them. ``final_answer`` is handled as a
+          system-level control message by the Convergence Gate.
+        """
+        if getattr(self, "_exact_action_mode", False):
+            from core._exact_action_contract import EXACT_ACTION_ALLOWED_TOOLS
+            return {
+                name: self.all_tools[name]
+                for name in EXACT_ACTION_ALLOWED_TOOLS
+                if name in self.all_tools
+            }
+
         if getattr(self.state, "is_fallback_mode_active", False):
             filtered = {
                 name: schema
@@ -511,10 +534,22 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                     from core.fc_schemas import build_openai_tools
                     from engine.tool_registry import registry as _fc_registry
 
-                    # The Orchestrator is forbidden from calling execute_shell
-                    # (security gate blocks it); exclude it from the FC schema so
-                    # the model can never emit a blocked call via native FC.
-                    _fc_tools = build_openai_tools(_fc_registry, exclude={"execute_shell"})
+                    # In exact-action mode, execute_shell MUST be in the FC
+                    # schema (it is the ONLY allowed tool) and final_answer
+                    # is deliberately excluded (it is injected as a system-level
+                    # control message by the Convergence Gate instead).
+                    if getattr(self, "_exact_action_mode", False):
+                        _exclude: set[str] = {"final_answer"}
+                    else:
+                        # Normal/fallback: the Orchestrator is forbidden from
+                        # calling execute_shell (security gate blocks it);
+                        # exclude it from the FC schema so the model can never
+                        # emit a blocked call via native FC.
+                        _exclude = {"execute_shell"}
+                    _fc_tools = build_openai_tools(
+                        _fc_registry, exclude=_exclude,
+                        allowed=list(self.get_available_tools().keys()),
+                    )
                 except Exception:
                     _fc_tools = None
                 if _fc_tools:
@@ -1367,10 +1402,37 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 )
         return None
 
+    def _guard_exact_action(
+        self, tool_name: str, tool_args: object
+    ) -> "ToolResult | None":
+        """Guard 5: Phase 2.C exact-action mode — block non-execute_shell tools.
+
+        When exact-action mode is active, only execute_shell is allowed.
+        Any other tool is blocked pre-dispatch with a typed error.
+        This runs BEFORE the other guards.
+        """
+        if getattr(self, "_exact_action_mode", False) and tool_name != "execute_shell":
+            return ToolResult(
+                success=False,
+                stderr=(
+                    f"[EXACT_ACTION_BLOCKED] Tool '{tool_name}' is not allowed in "
+                    "exact-action mode. Only execute_shell is permitted."
+                ),
+                returncode=-1,
+                status="blocked",
+            )
+        # Phase 2.C: in exact-action mode, force consent prompt by NOT
+        # caching shell approvals. Clear approved_shell at start of each
+        # run so every command goes through the interactive consent gate.
+        # This prevents a previously-approved command from authorizing a
+        # different command in a later turn.
+        return None
+
     def _pre_dispatch_guard(self, tool_call: ToolCall) -> "ToolResult | None":
         """Phase 4.5 cheap pre-checks that short-circuit a real tool dispatch.
 
-        Chains 4 independent guards; the first non-None result wins.
+        Chains 5 independent guards; the first non-None result wins.
+        Guard 5 (exact-action) runs first for priority.
         Returns ``None`` when the call should proceed to the normal dispatcher.
         """
         ctx = self._ctx
@@ -1379,6 +1441,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         tool_args = tool_call.args
 
         for guard in (
+            self._guard_exact_action,
             self._guard_path_jail,
             self._guard_web_dedup,
             self._guard_answer_in_hand,
@@ -1563,6 +1626,61 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             bridge.emit("edit_proposed", file=tool_call.args.get("path") or tool_call.args.get("file", ""), diff=tool_call.args.get("content") or tool_call.args.get("diff", ""))
         self._dispatch_and_record_evidence(tool_call)
         bridge.emit("status_update", message=f"Cycle completed. Step: {self.state.step_count}")
+
+        # ── Phase 2.4: Early exit after exact-action tool success ──────────
+        # After a single execute_shell dispatch in exact_action_mode, use the
+        # tool output as the final answer and terminate. This avoids 7-8
+        # additional LLM calls (thought-only loop + investigation gate rejections)
+        # that previously exhausted the budget and produced a partial answer.
+        # The claim gate (test/commit spoofing) remains active via _emit_final;
+        # only investigation gates (verify_fresh, read-count) are bypassed since
+        # the user asked for exactly one command, not analysis.
+        # Uses a dedicated post-tool reasoning counter so standard investigation
+        # prompts are unaffected.
+        if getattr(self, "_exact_action_mode", False):
+            # Terminate directly after tool success — avoid extra LLM calls.
+            # Keep ONLY the claim gate active (test/commit spoofing check).
+            # Skip convergence gate (can_finalize), verify_fresh, and read-count
+            # gates — the user asked for exactly one command, not analysis.
+            self._post_tool_reasoning_rounds = 0
+            recs = self.evidence_log.get_records()
+            tool_output = ""
+            if recs and recs[-1].success:
+                tool_output = (recs[-1].output_snippet or "").strip()
+            if tool_output:
+                self._last_response = tool_output
+
+            # Run the claim gate directly (bypasses convergence gate, verify_fresh,
+            # read-count gates, but checks test/commit spoofing).
+            from core.verifier import check_final_answer_claim_gate
+            _gate_result = check_final_answer_claim_gate(
+                tool_output, self.evidence_log
+            )
+            if _gate_result.passed:
+                self.state.update_status("COMPLETED")
+                bus.emit("loop_completed", {
+                    "reason": "exact_action_complete",
+                    "output": tool_output,
+                })
+            else:
+                # Claim gate rejected — apply cap on retries
+                self._post_tool_reasoning_rounds = getattr(
+                    self, "_post_tool_reasoning_rounds", 0
+                ) + 1
+                if self._post_tool_reasoning_rounds >= 3:
+                    # Hard cap: emit with [UNVERIFIED] markers
+                    for u in _gate_result.unsupported_claims:
+                        _tok = u.split(":")[-1].strip()
+                        if _tok and _tok in tool_output:
+                            tool_output = tool_output.replace(
+                                _tok, f"[UNVERIFIED] {_tok}"
+                            )
+                    self._last_response = tool_output
+                    self.state.update_status("COMPLETED")
+                    bus.emit("loop_completed", {
+                        "reason": "exact_action_gate_capped",
+                        "output": tool_output,
+                    })
 
     def _run_once(self) -> None:
         """Execute a single loop iteration, delegating to the extracted helpers."""

@@ -1,13 +1,15 @@
 """Automated verification suite for TodoWriteTool (tools/todo.py)."""
 
 import unittest
+from core.evidence import EvidenceLog
 from core.todo import TodoManager, TodoStatus
 from tools.todo import TodoWriteTool
 
 
 class TestTodoWriteTool(unittest.TestCase):
     def setUp(self):
-        self.manager = TodoManager()
+        self.evidence_log = EvidenceLog()
+        self.manager = TodoManager(evidence_log=self.evidence_log)
         self.tool = TodoWriteTool(self.manager)
 
     def test_plan_action_success(self):
@@ -34,6 +36,10 @@ class TestTodoWriteTool(unittest.TestCase):
 
     def test_update_action_done_success(self):
         self.tool.execute(action="plan", items=["Task 1"])
+        self.evidence_log.record(
+            tool="execute_shell", command_or_path="py_compile",
+            success=True, output_snippet="py_compile clean, 0 errors",
+        )
         res = self.tool.execute(
             action="update", item_id=1, status="done", verification_note="py_compile clean"
         )

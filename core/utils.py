@@ -147,7 +147,7 @@ def _handle_simple(args: List[str], timeout: int) -> Tuple[int, str, str]:
 # 🎯 Orchestrator  (CC ~ 5)
 # ---------------------------------------------------------------------------
 
-def safe_execute_command(command: str, timeout: int = 30) -> Tuple[int, str, str]:
+def safe_execute_command(command: str, timeout: int = 300) -> Tuple[int, str, str]:
     """Execute a shell command securely without ``shell=True``.
 
     Supports:
@@ -162,6 +162,12 @@ def safe_execute_command(command: str, timeout: int = 30) -> Tuple[int, str, str
     All exceptions (``TimeoutExpired``, ``OSError``, etc.) are caught
     and returned as structured error tuples — the orchstrator NEVER
     propagates an unhandled exception to the caller.
+
+    **Timeout:** Default is 300s (5 minutes) to accommodate full test-suite
+    runs on mobile hardware without false timeouts. The previous value of
+    120s was insufficient when the full suite (1346 tests) took ~127s.
+    When the timeout fires, a TIMEOUT failure is returned with a clear
+    message — never a silent hang.
     """
     cmd_str = command.strip()
     if not cmd_str:

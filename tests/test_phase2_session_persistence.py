@@ -25,7 +25,10 @@ from core.storage import SessionManager
 # ── TodoManager serialization ──────────────────────────────────────────────
 
 def test_todo_serialization_roundtrip():
-    mgr = TodoManager()
+    elog = EvidenceLog()
+    elog.record(tool="execute_shell", command_or_path="py_compile", success=True,
+                output_snippet="py_compile: 0 errors across 3 files")
+    mgr = TodoManager(evidence_log=elog)
     mgr.set_plan(["step one", "step two", "step three"])
     mgr.mark_in_progress(1)
     mgr.mark_done(1, verification_note="py_compile: 0 errors across 3 files")
@@ -170,7 +173,7 @@ def test_full_session_save_and_restore():
         elog.record(tool="file_system", command_or_path="main.py", success=True, output_snippet="def main():")
 
         # Simulate TodoManager with 3 items
-        tman = TodoManager()
+        tman = TodoManager(evidence_log=elog)
         tman.set_plan(["list files", "read main", "summarize"])
         tman.mark_done(1, verification_note="ls -la: found 3 files")
 

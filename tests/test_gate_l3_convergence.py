@@ -7,12 +7,13 @@ from engine._loop_types import _LoopSignal
 class TestGateL3Convergence(unittest.TestCase):
     
     def setUp(self):
+        from core.evidence import EvidenceLog
         self.state = MagicMock()
         self.state.step_count = 1
         self.state.session_id = "test-sess"
         self.engine = ExecutionLoop(state=self.state, max_output_len=2000)
         self.engine._logger = MagicMock()
-        self.engine.evidence_log = MagicMock()
+        self.engine.evidence_log = EvidenceLog()  # real log, not mock
         self.engine._ctx = MagicMock()
         self.engine.POLL_DELAY = 0
 
@@ -53,14 +54,28 @@ class TestGateL3Convergence(unittest.TestCase):
     @patch('engine._loop_helpers._prompt_requires_investigation', return_value=True)
     @patch('engine._loop_helpers._has_active_goal', return_value=True)
     @patch('core.convergence_gate.can_finalize')
-    def test_documented_exceptions_are_exhaustive_and_listed(self, mock_can, mock_goal, mock_inv):
+    @patch('core.evidence.EvidenceLog.verify_fresh')
+    def test_documented_exceptions_are_exhaustive_and_listed(
+        self, mock_vf, mock_can, mock_goal, mock_inv
+    ):
         # Single file exemption (exactly 1 read, no echo, no tool call) -> returns True (SYNTHESIS_FORCED)
-        self.engine._real_reads = MagicMock(return_value=1)
+        mock_vf.return_value = MagicMock()
+        mock_vf.return_value.ok = True
+        self.engine.evidence_log.record(
+            tool="file_system", command_or_path="core/file.py",
+            success=True, output_snippet="class File: pass", action="read",
+        )
         mock_can.return_value.allowed = True
-        
-        result = self.engine._emit_final("Regular prose", "natural_completion")
+        # Realistic context
+        self.engine._ctx.user_prompt = "analyze project structure"
+        # Make state.append_message work (it's a MagicMock otherwise)
+        self.engine.state.messages = []
+
+        result = self.engine._emit_final(
+            "I read core/file.py and found a class File.", "natural_completion"
+        )
         self.assertTrue(result)
-        # Verify it synthesized
+        # Verify it synthesized (single-file path triggers synthesis)
         self.assertIn("Synthesized answer", self.engine._last_response)
 
     def test_failed_before_read_can_finalize_failed(self):
@@ -91,25 +106,20 @@ class TestGateL3Convergence(unittest.TestCase):
     def test_read_count_resets_at_single_documented_site(self):
         # _real_reads dynamically counts from evidence_log.get_records().
         # Clearing the log resets it deterministically.
-        self.engine.evidence_log.get_records.return_value = []
+        self.engine.evidence_log.clear()
         self.assertEqual(self.engine._real_reads(), 0)
 
     def test_repeated_same_file_reads_do_not_fake_threshold(self):
-        mock_rec1 = MagicMock()
-        mock_rec1.success = True
-        mock_rec1.tool = "file_system"
-        mock_rec1.action = "read"
-        mock_rec1.command_or_path = "FILE.py"
-
-        mock_rec2 = MagicMock()
-        mock_rec2.success = True
-        mock_rec2.tool = "file_system"
-        mock_rec2.action = "read"
-        mock_rec2.command_or_path = "file.py"
-        
-        self.engine.evidence_log.get_records.return_value = [mock_rec1, mock_rec2]
-        
-        # Should count as 1 because of lowering and set() behavior
+        self.engine.evidence_log.clear()
+        self.engine.evidence_log.record(
+            tool="file_system", command_or_path="FILE.py",
+            success=True, output_snippet="content", action="read",
+        )
+        # Same path lowered — should count as 1
+        self.engine.evidence_log.record(
+            tool="file_system", command_or_path="file.py",
+            success=True, output_snippet="content", action="read",
+        )
         self.assertEqual(self.engine._real_reads(), 1)
 
     def test_interrupt_mid_convergence_leaves_no_partial_side_effect(self):

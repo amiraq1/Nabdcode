@@ -1,0 +1,301 @@
+{
+  "EvidenceRecord": {
+    "module": "core.evidence",
+    "fields": {
+      "evidence_id": {
+        "type": "str",
+        "default": "'E-0'"
+      },
+      "evidence_type": {
+        "type": "str",
+        "default": "'other'"
+      },
+      "tool": {
+        "type": "str",
+        "default": "'unknown'"
+      },
+      "command_or_path": {
+        "type": "str",
+        "default": "''"
+      },
+      "action": {
+        "type": "str",
+        "default": "''"
+      },
+      "success": {
+        "type": "bool",
+        "default": "True"
+      },
+      "output_snippet": {
+        "type": "str",
+        "default": "''"
+      },
+      "covered_subjects": {
+        "type": "FrozenSet[str]",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "critical": {
+        "type": "bool",
+        "default": "False"
+      },
+      "timestamp": {
+        "type": "float",
+        "default": "0.0"
+      }
+    }
+  },
+  "VerificationResult": {
+    "module": "core.evidence",
+    "fields": {
+      "ok": {
+        "type": "bool",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "findings": {
+        "type": "List[str]",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "level": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "scores": {
+        "type": "Dict[str, float]",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      }
+    }
+  },
+  "TodoItem": {
+    "module": "core.todo",
+    "fields": {
+      "id": {
+        "type": "int",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "text": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "status": {
+        "type": "TodoStatus",
+        "default": "<TodoStatus.PENDING: 'pending'>"
+      },
+      "verification_note": {
+        "type": "str",
+        "default": "''"
+      },
+      "evidence_ids": {
+        "type": "List",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "completed_at": {
+        "type": "Union",
+        "default": "None"
+      },
+      "completion_source": {
+        "type": "Union",
+        "default": "None"
+      },
+      "failure_reason": {
+        "type": "Union",
+        "default": "None"
+      }
+    }
+  },
+  "FinalizationDecision": {
+    "module": "core.convergence_gate",
+    "fields": {
+      "allowed": {
+        "type": "bool",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "blocking_todos": {
+        "type": "list[TodoEvidenceLink]",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "blocked_reason": {
+        "type": "str",
+        "default": "''"
+      },
+      "evidence_summary": {
+        "type": "str",
+        "default": "''"
+      },
+      "todo_links": {
+        "type": "list[TodoEvidenceLink]",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "partial": {
+        "type": "bool",
+        "default": "False"
+      }
+    }
+  },
+  "TodoEvidenceLink": {
+    "module": "core.convergence_gate",
+    "fields": {
+      "todo_id": {
+        "type": "int",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "todo_text": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "status": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "evidence_ids": {
+        "type": "list[str]",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "completed_at": {
+        "type": "Optional[float]",
+        "default": "None"
+      },
+      "completion_source": {
+        "type": "Optional[str]",
+        "default": "None"
+      },
+      "failure_reason": {
+        "type": "Optional[str]",
+        "default": "None"
+      },
+      "has_matching_evidence": {
+        "type": "bool",
+        "default": "False"
+      }
+    }
+  },
+  "TurnOutcome": {
+    "module": "core.turn_outcome",
+    "fields": {
+      "turn_id": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "status": {
+        "type": "TurnStatus",
+        "default": "<TurnStatus.COMPLETED: 'COMPLETED'>"
+      },
+      "safe_message": {
+        "type": "str",
+        "default": "''"
+      },
+      "final_answer": {
+        "type": "str",
+        "default": "''"
+      },
+      "failure_stage": {
+        "type": "str",
+        "default": "''"
+      },
+      "retryable": {
+        "type": "bool",
+        "default": "False"
+      },
+      "requires_review": {
+        "type": "bool",
+        "default": "False"
+      },
+      "started_at": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "finished_at": {
+        "type": "str",
+        "default": "''"
+      }
+    }
+  },
+  "WalRecord": {
+    "module": "core.accept_edits_state",
+    "fields": {
+      "record_id": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "workspace_id": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "workspace_root_fingerprint": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "operation_id": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "sequence": {
+        "type": "int",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "event_type": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "edit_id": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "operation_type": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "target_path_relative": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "expected_original_digest": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "intended_result_digest": {
+        "type": "str",
+        "default": "<dataclasses._MISSING_TYPE object at 0x7c39609e80>"
+      },
+      "schema_version": {
+        "type": "int",
+        "default": "1"
+      },
+      "observed_result_digest": {
+        "type": "str | None",
+        "default": "None"
+      },
+      "snapshot_reference": {
+        "type": "str | None",
+        "default": "None"
+      },
+      "failure_stage": {
+        "type": "str | None",
+        "default": "None"
+      },
+      "side_effect_applied": {
+        "type": "bool",
+        "default": "False"
+      },
+      "durability_confirmed": {
+        "type": "bool",
+        "default": "False"
+      },
+      "cleanup_succeeded": {
+        "type": "bool",
+        "default": "True"
+      },
+      "recovery_status": {
+        "type": "str",
+        "default": "''"
+      },
+      "created_at": {
+        "type": "str",
+        "default": "''"
+      },
+      "checksum": {
+        "type": "str",
+        "default": "''"
+      }
+    }
+  }
+}

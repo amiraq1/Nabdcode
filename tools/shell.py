@@ -86,7 +86,7 @@ class _LazyCommandExecutor:
     def __init__(self, fn) -> None:
         self._fn = fn
 
-    def safe_execute_command(self, command: str, timeout: int = 30) -> tuple[int, str, str]:
+    def safe_execute_command(self, command: str, timeout: int = 300) -> tuple[int, str, str]:
         return self._fn(command, timeout=timeout)
 
 

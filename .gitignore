@@ -34,8 +34,7 @@ sessions/
 !.env.example
 
 # Scratch / debug / reports
-report.txt
-report.txt23
+report.txt*
 dna_report.json
 debug_agent.py
 test_openai.py
@@ -62,3 +61,20 @@ graphify-out/
 /run_dag_test.py
 /test_dispatcher.py
 STATE.md
+
+# Recovery artifacts — generated, not part of the project
+.recovery_bundle/
+.phase2_backup/
+.phase22a_recovery/
+
+# Gate/evidence artifacts — auto-generated during deferred-prompt-loop verification
+l*_evidence_matrix.md
+l*_regression_report.md
+l*_closure_report.md
+
+# One-off fix/scratch scripts (not for release)
+fix_*.py
+scratch_*.py
+
+# Auto-generated forensics reports (transient DNA analysis outputs)
+forensics_report*.md

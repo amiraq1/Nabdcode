@@ -104,17 +104,23 @@ class TodoItem:
 
 
 class TodoManager:
-    """يحتفظ بقائمة المهام لجلسة العمل الحالية. RAM فقط، بدون persistence حاليًا."""
+    """يحتفظ بقائمة المهام لجلسة العمل الحالية. RAM فقط، بدون persistence حاليًا.
+
+    Task-scoping (Phase 2.D):
+      - Each plan is bound to a task_id/scope.
+      - Switching to a new unrelated task pushes the current plan onto a
+        scope stack where it remains preserved but inactive.
+      - Explicit "continue"/"resume" restores the previous scope.
+      - Old TODOs are NEVER deleted — only scoped out.
+    """
 
     def __init__(self, evidence_log: Any = None) -> None:
         self._items: List[TodoItem] = []
-        # Optional EvidenceLog for cross-referencing TODO completion with
-        # actual tool results. When set, mark_done verifies that a matching
-        # evidence record exists before allowing a 'done' status.
         self._evidence_log = evidence_log
-        # Track TODO IDs that existed in a previous plan but are now absent,
-        # so the convergence gate can detect deletion-cheat attempts.
         self._seen_ids: set = set()
+        # Phase 2.D: scope stack — preserved plans from previous tasks.
+        self._scope_stack: List[List[TodoItem]] = []
+        self._current_task_id: Optional[str] = None
 
     def _emit(self) -> None:
         """Push the current plan to the injected UI bridge (no-op if unset)."""
@@ -125,10 +131,51 @@ class TodoManager:
         self._evidence_log = evidence_log
 
     def clear(self) -> None:
-        """مسح كافة المهام وإعادة التهيئة."""
+        """مسح كافة المهام وإعادة التهيئة.
+
+        Note: This is kept for backward compatibility (/clear command).
+        For task scoping, use push_scope()/pop_scope() instead.
+        """
         self._items.clear()
         self._seen_ids.clear()
         self._emit()
+
+    # ── Phase 2.D: Task scoping ────────────────────────────────────────────
+
+    @property
+    def current_task_id(self) -> Optional[str]:
+        return self._current_task_id
+
+    def push_scope(self, new_task_id: str) -> None:
+        """Save current plan to scope stack and start fresh for a new task.
+
+        The old plan is preserved in the stack; it can be restored later
+        via ``pop_scope()``. Old TODOs are NEVER deleted — only scoped out.
+        """
+        if self._items:
+            self._scope_stack.append(list(self._items))
+        self._items = []
+        self._seen_ids = set()
+        self._current_task_id = new_task_id
+        self._emit()
+
+    def pop_scope(self) -> bool:
+        """Restore the previous scope from the stack.
+
+        Returns True if a scope was restored, False if the stack was empty.
+        """
+        if not self._scope_stack:
+            return False
+        self._items = self._scope_stack.pop()
+        self._seen_ids.update(item.id for item in self._items)
+        self._current_task_id = None
+        self._emit()
+        return True
+
+    @property
+    def has_saved_scope(self) -> bool:
+        """True when there is a saved scope that can be restored."""
+        return len(self._scope_stack) > 0
 
     def set_plan(self, texts: List[str]) -> List[TodoItem]:
         """يستبدل القائمة الحالية بخطة جديدة كاملة."""
@@ -220,12 +267,21 @@ class TodoManager:
                 f"task — not a vague claim. Got: {verification_note!r}"
             )
 
-        # ── Evidence cross-reference ─────────────────────────────────────
-        # For READ/VERIFY/TEST/EDIT TODOs, verify that a matching evidence
-        # record exists in the EvidenceLog. If no evidence_log is set, fall
-        # back to the verification_note check (backward compatible).
+        # ── Evidence cross-reference (REQUIRED, not optional) ────────────
+        # For EVERY TODO (not just READ/VERIFY/TEST/EDIT), verify that a
+        # matching evidence record exists in the EvidenceLog. If no evidence_log
+        # is set, this is a hard failure — the production path must always
+        # provide an evidence_log.
+        if self._evidence_log is None:
+            raise ValueError(
+                f"Cannot mark TODO #{item_id} done: no evidence_log configured. "
+                f"Every mark_done() call requires an evidence_log to cross-reference. "
+                f"Task was: {item.text!r}. "
+                f"Got verification_note: {verification_note!r}"
+            )
+
         matching_evidence = self._find_evidence_for_todo(item)
-        if self._evidence_log is not None and not matching_evidence:
+        if not matching_evidence:
             # No matching evidence found — do NOT mark done.
             item.status = TodoStatus.IN_PROGRESS
             item.completion_source = None
@@ -237,6 +293,24 @@ class TodoManager:
                 f"execute_shell, etc.) whose path or output matches the task. "
                 f"Got verification_note: {verification_note!r}"
             )
+
+        # ── Test-specific evidence requirement ──────────────────────────
+        # If the TODO targets a test/pytest/verify task, the verification_note
+        # MUST contain "passed" or "failed" or an explicit exit code.
+        _todo_lower = item.text.lower()
+        _is_test_task = any(k in _todo_lower for k in ("test", "pytest", "verify", "check"))
+        if _is_test_task:
+            _note_lower = verification_note.lower()
+            if not any(k in _note_lower for k in ("passed", "fail", "error", "exit ")):
+                item.status = TodoStatus.IN_PROGRESS
+                item.completion_source = None
+                self._emit()
+                raise ValueError(
+                    f"Cannot mark TODO #{item_id} done: test task requires "
+                    f"'passed'/'failed'/'error' in verification_note to confirm "
+                    f"the test actually ran. Task was: {item.text!r}. "
+                    f"Got: {verification_note!r}"
+                )
 
         item.status = TodoStatus.DONE
         item.verification_note = verification_note

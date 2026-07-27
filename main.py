@@ -33,11 +33,18 @@ def echo_user_input(text: str) -> None:
 
 # ── Tool output summariser ─────────────────────────────────────────────────
 
+from core._exact_action_contract import EXACT_ACTION_PATTERNS
+
+
 def _summarise_tool(tool: str, args: dict, result) -> tuple[str, str, str]:
     """Return (badge, message, color) for a completed tool call.
 
     Used only as fallback; UI theme methods (tool_start/tool_end) are
     the primary rendering path.
+
+    Phase 2.E: For shell commands, render the actual bounded stdout for
+    short outputs (<= 5 lines). Longer outputs keep compact line-count
+    summary. Failed commands always show error snippet.
     """
     if tool == "execute_shell":
         cmd = (args.get("command") or "")[:60]
@@ -45,6 +52,12 @@ def _summarise_tool(tool: str, args: dict, result) -> tuple[str, str, str]:
         err = safe_strip(getattr(result, "stderr", ""))
         if getattr(result, "success", False):
             lines = len(out.splitlines()) if out else 0
+            if lines > 0 and lines <= 5 and out:
+                # Short output: show actual content (bounded to 300 chars)
+                display = out[:300].strip()
+                if len(out) > 300:
+                    display += "..."
+                return ("EXEC", f"{cmd}\n{display}", "cyan")
             return ("EXEC", f"{cmd} ({lines} lines)", "cyan")
         else:
             snippet = (err or out).splitlines()[0][:80] if (err or out) else "unknown error"
@@ -366,6 +379,18 @@ def _handle_one_shot_query(
 ) -> None:
     one_shot_query = " ".join(positional_queries)
     state.reset_step_count()
+
+    # ── Phase 2.C: Exact-action mode detection ──
+    _exact_action_mode = any(p in one_shot_query.lower() for p in EXACT_ACTION_PATTERNS)
+    if _exact_action_mode:
+        _exact_inst = (
+            "[EXACT ACTION CONSTRAINT] The user specified exactly one shell command. "
+            "You MUST use execute_shell only. Do NOT call any other tool. "
+            "Execute the single command and return its output."
+        )
+        if hasattr(state, "append_message"):
+            state.append_message({"role": "system", "content": _exact_inst})
+
     engine = ExecutionLoop(
         state=state,
         max_output_len=ctx.config.max_output,
@@ -373,6 +398,7 @@ def _handle_one_shot_query(
         todo_manager=ctx.todo_manager,
         logger=ctx.logger,
         no_stream=os.getenv("NABD_NO_STREAM", "").lower() in ("1", "true", "yes"),
+        exact_action_mode=_exact_action_mode,
     )
     try:
         outcome = engine.run(one_shot_query)
@@ -585,6 +611,41 @@ def _run_interactive_turn(
 
     clean_prompt = normalize(user_input)[:10000]
 
+    # ── Phase 2.D: TODO isolation — scope TODOs on new unrelated task ──
+    # A new user request that does NOT explicitly reference or continue the
+    # prior task starts a new scope (old TODOs preserved but inactive).
+    # Only explicit continuation signals (user says "continue", "resume")
+    # restore the previous scope. Per protocol 2.D: "Do NOT invent additional
+    # heuristics beyond this explicit-signal rule."
+    # Old TODOs are NEVER deleted — only scoped out.
+    _user_input_lower = user_input.lower().strip()
+    _is_continuation = _user_input_lower.startswith(("continue", "resume")) or \
+        any(_user_input_lower.startswith(s) for s in ("continue ", "resume ",
+            "continue:", "resume:", "continue the", "resume the",
+            "continue my", "resume my", "continue prior", "resume prior"))
+    if _is_continuation:
+        # Explicit continuation: restore previous scope if available.
+        if hasattr(ctx.todo_manager, "pop_scope"):
+            ctx.todo_manager.pop_scope()
+    else:
+        # New unrelated task: push current scope (preserve old TODOs).
+        if hasattr(ctx.todo_manager, "push_scope"):
+            _task_id = f"task_{_user_input_lower[:20]}"
+            ctx.todo_manager.push_scope(_task_id)
+
+    # ── Phase 2.C: Exact-action contract enforcement ──────────────────────
+    # Phase 2.C: detect exact-action mode for engine-level enforcement.
+    _exact_action_mode = False
+    if any(p in user_input.lower() for p in EXACT_ACTION_PATTERNS):
+        _exact_action_mode = True
+        _exact_inst = (
+            "[EXACT ACTION CONSTRAINT] The user specified exactly one shell command. "
+            "You MUST use execute_shell only. Do NOT call file_system, web_search, "
+            "or any other tool. Execute the single command and return its output."
+        )
+        if hasattr(state, "append_message"):
+            state.append_message({"role": "system", "content": _exact_inst})
+
     if hasattr(visualizer, "_final_answer_rendered"):
         visualizer._final_answer_rendered = False
 
@@ -596,6 +657,7 @@ def _run_interactive_turn(
         todo_manager=ctx.todo_manager,
         logger=ctx.logger,
         no_stream=os.getenv("NABD_NO_STREAM", "").lower() in ("1", "true", "yes"),
+        exact_action_mode=_exact_action_mode,
     )
 
     fd = sys.stdin.fileno()

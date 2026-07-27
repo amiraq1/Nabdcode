@@ -4,34 +4,34 @@ from unittest import TestCase
 
 class TestGateL1TruthTableSemantics(TestCase):
     MANIFEST_AST_SITES = [
-        ('engine/loop.py', 365, 'CONTINUE'),
-        ('engine/loop.py', 773, 'PROCEED'),
-        ('engine/loop.py', 862, 'PROCEED'),
-        ('engine/loop.py', 903, 'PROCEED'),
-        ('engine/loop.py', 962, 'PROCEED'),
-        ('engine/loop.py', 995, 'PROCEED'),
-        ('engine/loop.py', 1517, 'CONTINUE'),
-        ('engine/loop.py', 364, 'TERMINATE'),
-        ('engine/loop.py', 753, 'TERMINATE'),
-        ('engine/loop.py', 855, 'CONTINUE'),
-        ('engine/loop.py', 860, 'CONTINUE'),
-        ('engine/loop.py', 1496, 'TERMINATE'),
-        ('engine/loop.py', 1499, 'TERMINATE'),
-        ('engine/loop.py', 769, 'TERMINATE'),
-        ('engine/loop.py', 897, 'CONTINUE'),
-        ('engine/loop.py', 937, 'CONTINUE'),
-        ('engine/loop.py', 959, 'CONTINUE'),
-        ('engine/_budget.py', 82, 'PROCEED'),
-        ('engine/_budget.py', 81, 'TERMINATE'),
         ('engine/_budget.py', 80, 'CONTINUE'),
-        ('engine/_convergence.py', 310, 'TERMINATE'),
-        ('engine/_convergence.py', 244, 'CONTINUE'),
-        ('engine/_convergence.py', 309, 'CONTINUE'),
-        ('engine/_convergence.py', 296, 'TERMINATE'),
-        ('engine/_convergence.py', 287, 'CONTINUE'),
-        ('engine/_tool_runner.py', 144, 'PROCEED'),
+        ('engine/_budget.py', 81, 'TERMINATE'),
+        ('engine/_budget.py', 82, 'PROCEED'),
+        ('engine/_convergence.py', 245, 'CONTINUE'),
+        ('engine/_convergence.py', 288, 'CONTINUE'),
+        ('engine/_convergence.py', 297, 'TERMINATE'),
+        ('engine/_convergence.py', 310, 'CONTINUE'),
+        ('engine/_convergence.py', 311, 'TERMINATE'),
         ('engine/_tool_runner.py', 62, 'FINAL_ANSWER'),
         ('engine/_tool_runner.py', 132, 'CONTINUE'),
+        ('engine/_tool_runner.py', 144, 'PROCEED'),
+        ('engine/loop.py', 387, 'TERMINATE'),
+        ('engine/loop.py', 388, 'CONTINUE'),
+        ('engine/loop.py', 788, 'TERMINATE'),
+        ('engine/loop.py', 804, 'TERMINATE'),
+        ('engine/loop.py', 808, 'PROCEED'),
+        ('engine/loop.py', 890, 'CONTINUE'),
+        ('engine/loop.py', 895, 'CONTINUE'),
+        ('engine/loop.py', 897, 'PROCEED'),
+        ('engine/loop.py', 932, 'CONTINUE'),
+        ('engine/loop.py', 938, 'PROCEED'),
+        ('engine/loop.py', 972, 'CONTINUE'),
+        ('engine/loop.py', 994, 'CONTINUE'),
+        ('engine/loop.py', 997, 'PROCEED'),
+        ('engine/loop.py', 1030, 'PROCEED'),
+        ('engine/loop.py', 1559, 'TERMINATE'),
+        ('engine/loop.py', 1562, 'TERMINATE'),
+        ('engine/loop.py', 1580, 'CONTINUE'),
     ]
 
     def test_truth_table_every_return_site_enumerated(self):
@@ -73,7 +73,7 @@ class TestGateL1TruthTableSemantics(TestCase):
 
     def test_no_security_gate_skip_per_signal(self):
         """Security checks correctly return CONTINUE to block tools or PROCEED to evaluate further."""
-        sec_guards = [s for s in self.MANIFEST_AST_SITES if s[0] == "engine/loop.py" and s[1] in (937, 959, 962, 995)]
+        sec_guards = [s for s in self.MANIFEST_AST_SITES if s[0] == "engine/loop.py" and s[1] in (972, 994, 997, 1030)]
         self.assertTrue(any(s[2] == "CONTINUE" for s in sec_guards))
         self.assertTrue(any(s[2] == "PROCEED" for s in sec_guards))
         self.assertTrue(all(s[2] in ("CONTINUE", "PROCEED") for s in sec_guards))
@@ -88,8 +88,10 @@ class TestGateL1TruthTableSemantics(TestCase):
         """Retry decrements happen strictly around CONTINUE paths like _note_provider_failure."""
         with open("engine/loop.py") as f:
             lines = f.read().splitlines()
-        line_365 = lines[364]
-        self.assertIn("CONTINUE", line_365)
+        line_387 = lines[386]  # loop.py line 387 returns TERMINATE from _note_provider_failure
+        self.assertIn("TERMINATE", line_387)
+        line_388 = lines[387]  # loop.py line 388 returns CONTINUE from _note_provider_failure
+        self.assertIn("CONTINUE", line_388)
     
     def test_no_dual_terminal_outcome(self):
         """TERMINATE and FINAL_ANSWER are distinct, terminal, and single-outcome paths."""

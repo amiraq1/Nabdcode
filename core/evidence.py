@@ -7,6 +7,7 @@ EvidenceRecord is frozen — once created, never mutated.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Set
 
@@ -52,6 +53,9 @@ class EvidenceRecord:
     # Phase4: when True, this record is frozen and protected from context
     # compaction — it stays in the LLM context even outside the sliding window.
     critical: bool = False
+    # Timestamp of record creation (seconds since epoch). Set automatically
+    # by EvidenceLog.record() or by caller.
+    timestamp: float = 0.0
 
     def __init__(
         self,
@@ -81,6 +85,7 @@ class EvidenceRecord:
         object.__setattr__(self, "output_snippet", raw_output if raw_output is not None else output_snippet)
         object.__setattr__(self, "covered_subjects", covered_subjects)
         object.__setattr__(self, "critical", critical)
+        object.__setattr__(self, "timestamp", timestamp)
 
     @property
     def tool_name(self) -> str:
@@ -111,6 +116,7 @@ class EvidenceRecord:
             "output_snippet": self.output_snippet,
             "covered_subjects": sorted(self.covered_subjects),
             "critical": self.critical,
+            "timestamp": self.timestamp,
         }
 
     @staticmethod
@@ -125,6 +131,7 @@ class EvidenceRecord:
             covered_subjects=frozenset(d.get("covered_subjects", [])),
             critical=d.get("critical", False),
             action=d.get("action", ""),
+            timestamp=d.get("timestamp", 0.0),
         )
 
 
@@ -454,14 +461,44 @@ class StructuralVerifier:
 # ── L2 — SemanticVerifier (optional, LLM-gated) ──────────────────────────
 
 class SemanticVerifier:
-    """L2 verification: semantic check of claim vs evidence (optional).
+    """L2 verification: semantic check of claim vs evidence.
 
-    Off by default. Requires an LLM callable and a flag to activate.
-
-    If active and L1 returned uncertain, calls the LLM for a short
-    support|partial|contradict judgment. If no LLM callable is available,
-    defaults to fail-closed (reject).
+    Provides two modes:
+      1. **Deterministic numeric check** (default, no LLM required):
+         Extracts numbers from the claim and cross-references against
+         evidence output snippets. Any claimed number that does NOT appear
+         in evidence output fails verification.
+      2. **LLM-gated semantic check** (optional): calls the LLM for a
+         support|partial|contradict judgment. Off by default.
     """
+
+    @staticmethod
+    def _extract_arabic_numbers(text: str) -> list[tuple[int, str]]:
+        """Extract (number, context) from Arabic test-count claims."""
+        results: list[tuple[int, str]] = []
+        _n = text.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+        for m in re.finditer(r"(?:عدد|تم تشغيل)\s*(\d+)\s*اختبار", _n):
+            results.append((int(m.group(1)), m.group(0).strip()))
+        for m in re.finditer(r"\b(\d{3,})\b", _n):
+            num = int(m.group(1))
+            ctx = _n[max(0, m.start()-20):m.end()+20].strip()
+            results.append((num, ctx))
+        return results
+
+    @staticmethod
+    def _extract_numeric_claims(claim: str) -> list[tuple[int, str]]:
+        """Extract (number, context) pairs from a claim."""
+        results: list[tuple[int, str]] = []
+        # "all N tests passed" / "Ran N tests"
+        for m in re.finditer(r"(?:all\s+)?(\d+)\s+tests?\s+(?:passed|failed|ran)?",
+                             claim, re.IGNORECASE):
+            results.append((int(m.group(1)), m.group(0).strip()))
+        # Standalone large numbers (>= 3 digits) that look like counts
+        for m in re.finditer(r"\b(\d{3,})\b", claim):
+            num = int(m.group(1))
+            ctx = claim[max(0, m.start()-20):m.end()+20].strip()
+            results.append((num, ctx))
+        return results
 
     @staticmethod
     def verify(
@@ -471,14 +508,83 @@ class SemanticVerifier:
     ) -> VerificationResult:
         """Run semantic verification.
 
-        Currently a stub: returns uncertain (which callers treat as reject
-        unless overridden by config).
+        Phase 2.3: deterministic numeric cross-reference. Every extracted
+        number is checked against ALL evidence output snippets. If any
+        number is absent from ALL evidence outputs, verification fails.
+
+        When an LLM callable is provided AND the numeric check passes,
+        the LLM may still reject on semantic grounds.
         """
+        # ── Numeric cross-reference (deterministic, always on) ─────────
+        if not claim:
+            return VerificationResult(
+                ok=True, findings=["No claim to verify"], level="L2", scores={},
+            )
+        # Merge English and Arabic numeric claims
+        numeric_results = (
+            SemanticVerifier._extract_numeric_claims(claim)
+            + SemanticVerifier._extract_arabic_numbers(claim)
+        )
+        # Deduplicate by number (keep first context)
+        seen: set[int] = set()
+        deduped: list[tuple[int, str]] = []
+        for num, ctx in numeric_results:
+            if num not in seen:
+                seen.add(num)
+                deduped.append((num, ctx))
+        numeric_results = deduped
+
+        if not numeric_results:
+            return VerificationResult(
+                ok=True, findings=["No numeric claims to verify"], level="L2", scores={},
+            )
+
+        # Build evidence corpus from all successful records
+        evidence_text = ""
+        for rec in records.values():
+            if rec.success:
+                snippet = (rec.output_snippet or "") + " " + (rec.command_or_path or "")
+                evidence_text += snippet.lower() + " "
+        # Normalize Arabic-Indic digits in evidence corpus to match Arabic claims
+        evidence_text = evidence_text.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+
+        unmatched: list[str] = []
+        for num, ctx in numeric_results:
+            num_str = str(num)
+            if num_str not in evidence_text:
+                unmatched.append(
+                    f"Numeric claim '{num}' in context '{ctx[:60]}' "
+                    f"not found in any evidence output"
+                )
+
+        if unmatched:
+            return VerificationResult(
+                ok=False,
+                findings=[f"L2 deterministic: {len(unmatched)} unmatched claim(s)"]
+                         + unmatched,
+                level="L2",
+                scores={"unmatched": len(unmatched), "total": len(numeric_results)},
+            )
+
+        # ── Optional LLM gate (off by default) ──────────────────────────
+        if llm_callable is not None:
+            try:
+                raw = llm_callable(claim, evidence_text)
+                if "reject" in (raw or "").lower():
+                    return VerificationResult(
+                        ok=False,
+                        findings=["L2 LLM gate rejected the claim"],
+                        level="L2",
+                        scores={},
+                    )
+            except Exception:
+                pass  # fall back to numeric-only result
+
         return VerificationResult(
-            ok=False,
-            findings=["SemanticVerifier is not configured — defaulting to reject"],
+            ok=True,
+            findings=[f"L2 deterministic: {len(numeric_results)} claim(s) matched"],
             level="L2",
-            scores={},
+            scores={"matched": len(numeric_results), "total": len(numeric_results)},
         )
 
 
@@ -572,7 +678,8 @@ class EvidenceLog:
         return f"E-{self._counter}"
 
     def record(self, tool: str, command_or_path: str, success: bool,
-               output_snippet: str, critical: bool = False, action: str = "") -> EvidenceRecord:
+               output_snippet: str, critical: bool = False, action: str = "",
+               timestamp: float = 0.0) -> EvidenceRecord:
         eid = self.next_id()
         rec = EvidenceRecord(
             evidence_id=eid,
@@ -584,6 +691,7 @@ class EvidenceLog:
             covered_subjects=_extract_subjects(tool, command_or_path),
             critical=critical,
             action=action,
+            timestamp=timestamp or time.time(),
         )
         self._records[eid] = rec
         return rec
@@ -745,18 +853,34 @@ class EvidenceLog:
         }
 
     def restore(self, data: dict) -> None:
-        """Replace all records from previously serialized data."""
+        """Replace all records from previously serialized data.
+
+        Raises ``VerifierError`` on any structural corruption
+        (missing fields, malformed records, bad counter data).
+        Fail-closed: a partial / corrupt payload is never silently accepted.
+        """
         records_list = data.get("records", [])
         self._records = {}
         if not records_list:
             self._counter = 0
             return
-        for item in records_list:
-            rec = EvidenceRecord.from_dict(item)
-            self._records[rec.evidence_id] = rec
-        # Restore counter to avoid ID collision with existing records
-        ids = [int(k.split("-")[1]) for k in self._records if k.startswith("E-")]
-        self._counter = max(ids) if ids else 0
+        try:
+            for item in records_list:
+                if not isinstance(item, dict):
+                    raise TypeError(f"Record item must be a dict, got {type(item).__name__}: {item!r}")
+                rec = EvidenceRecord.from_dict(item)
+                self._records[rec.evidence_id] = rec
+            # Restore counter to avoid ID collision with existing records
+            ids = [int(k.split("-")[1]) for k in self._records if k.startswith("E-")]
+            self._counter = max(ids) if ids else 0
+        except (KeyError, TypeError, ValueError) as exc:
+            # Any structural failure → VerifierError (fail-closed).
+            self._records = {}
+            self._counter = 0
+            raise VerifierError(
+                f"EvidenceLog restore rejected: corrupt or incomplete data "
+                f"— {exc}"
+            ) from exc
 
     @property
     def counter(self) -> int:

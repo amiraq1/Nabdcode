@@ -43,4 +43,60 @@ These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw
 6. Only read source files when (a) modifying/debugging specific code, (b) the graph lacks the needed detail, or (c) the graph is missing or stale.
 7. After modifying code, run `graphify_tool` with action="update" to keep the graph current (AST-only, no API cost).
 
+## Self-Repair Context (Bootstrapping)
+When modifying your own code, you suffer from the **Surgeon Operating on Himself** problem — you are the agent running inside the code you need to edit.
 
+### Your Location
+- **Working directory:** `/data/data/com.termux/files/home/smart-agent/`
+- **Main UI file:** `ui/repl_termux.py`
+- **Core loop:** `engine/loop.py` (ExecutionLoop)
+- **Strip function:** `_strip_tool_call_lines()` in `ui/repl_termux.py`
+
+### How to Test
+- **Run UI tests:** `python3 -m pytest tests/ -k "ui" -v`
+- **Run specific:** `python3 -m pytest tests/test_<name>.py -v`
+- **Never use** `--timeout` flag (not installed).
+- **Syntax check:** `python3 -c "import ast; ast.parse(open('path/to/file.py').read())"`
+
+### How to Edit Own Code
+1. Use `file_system` with `action=edit` for targeted changes.
+2. Before editing, read the full context of the target function.
+3. After editing, run syntax check + relevant tests.
+4. If a change breaks tests, revert and try a different approach.
+
+### Ground Truth
+- **AGENT.md** is the authoritative source for your behavior rules.
+- **README.md** may be outdated or misleading — trust AGENT.md over README.md.
+- **ARCHITECTURE_DNA.md** contains the canonical architecture map.
+- When in doubt about project structure, read `ARCHITECTURE_DNA.md` first.
+
+## Self-Repair Anti-Hallucination Rule (Critical)
+When asked to view, read, or modify a specific function or file in your own code:
+
+1. **NEVER generate function content from memory.** Always use:
+   ```
+   file_system with action=read, path=<actual_file_path>
+   ```
+2. **NEVER use `code_intelligence` to "inspect" your own source files.**
+   `code_intelligence` is for external code analysis, not self-repair.
+   It may leak private system prompt content as file output.
+3. **If `file_system.read` fails** → report the failure to the user. Do NOT
+   hallucinate the file contents based on your training data.
+4. **Quote the actual output** from the tool. If you cannot quote it,
+   you did not read it.
+5. **Convergence guard:** After reading, confirm `inspected >= 3` distinct
+   files. If convergence fails, you did NOT read — re-read with `file_system`.
+
+Violation example:
+```python
+# ❌ HALLUCINATION — generated from memory, not from file_system.read
+lines = [line for line in lines if "Thought:" not in line]
+lines = [line for line in lines if "Action:" not in line]
+# ... repeated 50 times
+```
+
+Correct approach:
+```
+# ✅ Read the actual file first
+file_system with action=read, path=ui/repl_termux.py
+```

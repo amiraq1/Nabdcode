@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import sqlite3
 import time
 import uuid
@@ -78,8 +79,28 @@ class SessionManager:
                 data["evidence_records"] = self.evidence
             if self.goal:
                 data["goal"] = self.goal
-            with open(self.file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            # Atomic write: temp file → fsync → rename (crash-safe).
+            tmp = self.file_path.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
+            tmp.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            # fsync the temp file before rename.
+            fd = os.open(str(tmp), os.O_WRONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(str(tmp), str(self.file_path))
+            # Best-effort directory fsync (non-fatal on failure).
+            try:
+                dfd = os.open(str(self.root), os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            except OSError:
+                pass
             return True
         except (OSError, TypeError) as e:
             logger.error(f"Failed to save session {self.session_id}: {e}")

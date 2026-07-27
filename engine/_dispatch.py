@@ -44,7 +44,11 @@ class _ToolDispatchMixin:
         """
         # ── Consent Loop (Phase 2 Public Release Protocol) ──────────────────
         if ConsentManager().requires_confirmation(tool_name, tool_args):
-            blocked = ConsentManager().confirm(tool_name, tool_args)
+            blocked = ConsentManager().confirm(
+                tool_name, tool_args,
+                evidence_log=self.evidence_log,
+                step=getattr(self.state, "step_count", 0),
+            )
             if blocked is not None:
                 blocked_rec = self.evidence_log.record(
                     tool=tool_name,
@@ -312,6 +316,17 @@ class _ToolDispatchMixin:
         if ctx is not None:
             ctx.consecutive_no_tool_rounds = 0
 
+        # ── Phase 2.C: max_tool_calls=1 enforcement in exact-action mode ──
+        if getattr(self, "_exact_action_mode", False):
+            self._exact_action_tool_count = getattr(self, "_exact_action_tool_count", 0) + 1
+            if self._exact_action_tool_count >= 1:
+                self._force_final = True
+            # Clear approved_shell after each dispatch so each command
+            # requires fresh consent (no session-wide caching).
+            ctx = self._ctx
+            if ctx is not None:
+                ctx.approved_shell.clear()
+
         self.state.increment_step()
         self.state.prune_history()
         time.sleep(self.POLL_DELAY)
@@ -323,6 +338,13 @@ class _ToolDispatchMixin:
           1. Consent + Edit Gate  → may return early (blocked/rejected)
           2. Execute + Record     → dispatches tool, records evidence
           3. Finalize             → builds feedback, updates state, sleeps
+
+        Phase 2.A — WRONG_TOOL re-selection:
+        If the tool result has status="wrong_tool", attempt ONE re-selection
+        within the same turn using suggested_tool and suggested_args from the
+        result metadata. The re-selected tool goes through the normal consent
+        gate. If consent is denied or re-selection fails, the denial/failure
+        result is returned without looping.
         """
         tool_name = tool_call.tool
         tool_args = tool_call.args
@@ -333,6 +355,20 @@ class _ToolDispatchMixin:
 
         # Stage 2 — dispatch + evidence
         result, output, rec = self._execute_and_record(tool_name, tool_args)
+
+        # ── Phase 2.A: WRONG_TOOL re-selection (one attempt only) ─────────
+        _wrong_tool_meta = (getattr(result, "metadata", None) or {})
+        if getattr(result, "status", "") == "wrong_tool" and _wrong_tool_meta.get("wrong_tool"):
+            _suggested_tool = _wrong_tool_meta.get("suggested_tool", "")
+            _suggested_args = _wrong_tool_meta.get("suggested_args", {})
+            if _suggested_tool and _suggested_args:
+                # Re-dispatched tool goes through normal gates.
+                if self._handle_consent_and_edit_gate(_suggested_tool, _suggested_args):
+                    return  # Consent denied — no loop
+                result, output, rec = self._execute_and_record(_suggested_tool, _suggested_args)
+                # Update tool_name/tool_args for correct feedback.
+                tool_name = _suggested_tool
+                tool_args = _suggested_args
 
         # Stage 3 — feedback + state
         self._finalize_tool_dispatch(tool_name, tool_args, result, output, rec)

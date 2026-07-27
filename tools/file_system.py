@@ -100,6 +100,50 @@ class FileSystemTool(BaseTool):
 
         action = action.lower().strip()
 
+        # ── Phase 2.A: Command-shaped path detection ───────────────────────
+        # When the model routes a bare shell command (no file extension, no
+        # path separators) to file_system for a path that does NOT exist
+        # anywhere in the workspace, fail with a typed error instead of
+        # attempting to read a nonexistent file. This catches inputs like
+        # 'pwd', 'ls', 'git status' mistakenly sent to file_system, while
+        # still allowing reading/writing real files that happen to have no
+        # extension (e.g. 'Makefile', 'README').
+        if action in ("read", "edit", "write", "append", "replace"):
+            _path_stripped = path.strip()
+            # Check if the path resolves to an existing file or directory
+            # in the workspace. If it exists, it's a valid path, not a command.
+            try:
+                _resolved = (self.workspace / _path_stripped).resolve()
+                _exists = _resolved.exists()
+            except Exception:
+                _exists = False
+            if not _exists:
+                # A command-shaped path has NO file extension and NO path
+                # separators. Commands with spaces are also detected.
+                _has_extension = ("." in _path_stripped and not _path_stripped.startswith("."))
+                _has_separator = "/" in _path_stripped or "\\" in _path_stripped
+                _is_multi_token = " " in _path_stripped
+                _looks_like_command = (
+                    (not _has_extension and not _has_separator and not _path_stripped.startswith("."))
+                    or (_is_multi_token and not _has_extension and not _has_separator)
+                )
+                if _looks_like_command:
+                    return ToolResult(
+                        success=False,
+                        stderr=(
+                            f"[WRONG_TOOL] The input '{path}' appears to be a shell "
+                            f"command, not a file path. Use execute_shell with "
+                            f'{{"command": "{path}"}} instead of file_system.'
+                        ),
+                        returncode=-1,
+                        status="wrong_tool",
+                        metadata={
+                            "wrong_tool": True,
+                            "suggested_tool": "execute_shell",
+                            "suggested_args": {"command": path},
+                        },
+                    )
+
         try:
             action = FileAction(action)
         except ValueError:

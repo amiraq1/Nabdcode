@@ -141,13 +141,29 @@ def test_l1_no_records_skips():
 # ── L2 — SemanticVerifier stub ───────────────────────────────────────────
 
 def test_l2_stub_fail_closed():
-    """SemanticVerifier.verify() without an LLM callable must return fail-closed."""
+    """SemanticVerifier.verify() without an LLM callable must reject numeric spoofing.
+
+    Phase 2.3: L2 now has a deterministic numeric cross-reference mode.
+    Claims with numbers that don't appear in evidence are rejected.
+    Claims without numeric content pass (no trigger).
+    """
+    # A claim with a spoofed number → reject (fail-closed on unmatched count)
     result = SemanticVerifier.verify(
-        claim="test claim",
+        claim="all 99999 tests passed",
         records={},
     )
-    assert not result.ok
+    assert not result.ok, (
+        f"L2 must reject spoofed count: got ok=True with {result.findings}"
+    )
     assert result.level == "L2"
+    # A claim without numeric content → pass (no trigger)
+    result2 = SemanticVerifier.verify(
+        claim="the code looks clean",
+        records={},
+    )
+    assert result2.ok, (
+        "L2 must pass claims without numeric content"
+    )
 
 
 # ── Integration: EvidenceLog.verify(claim=...) ──────────────────────────

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.kernel.events import bus
 from core.utils import safe_strip
+from core.evidence import VerifierError
 
 from engine._loop_types import _LoopSignal, _LoopCtx
 from engine._loop_helpers import _resolve_default_verifier
@@ -437,13 +438,72 @@ class _ConvergenceMixin:
             output = self._synthesize_from_evidence(reason)
             self._last_response = output
 
-        # ── Phase 0 verify_fresh gate (single choke point) ────────────────
-        if ctx is not None:
-            # Gate discriminator: casual chat ("hi") → pass immediately.
-            # Investigation / active-goal prompts → require real reads.
-            needs_verify = _prompt_requires_investigation(
+        # ── EvidenceLog.verify_fresh (restored historical choke point) ────
+        # Historical runtime behavior: every final answer passes through
+        # EvidenceLog.verify_fresh() for L0 (structural integrity via
+        # Verifier.verify + check_investigation_gates) and L1 (technical
+        # token matching via StructuralVerifier.verify) verification against
+        # the evidence log. This was lost during the step5-d refactor
+        # (commit 46fcf50) when the inline read-count gate replaced the
+        # verify_fresh call without preserving L0 + L1 structural checks.
+        # Restored here as a mandatory gate before the Phase 0 gate.
+        # Phase 2.4: exact-action mode is exempt from verify_fresh and
+        # read-count gates since the user asked for exactly one command,
+        # not multi-file analysis. The claim gate (test/commit spoofing)
+        # remains active below.
+        if getattr(self, "_exact_action_mode", False):
+            _needs_verify_vf = False
+        elif ctx is not None:
+            _needs_verify_vf = _prompt_requires_investigation(
                 ctx.user_prompt, has_active_goal=has_active_goal
             )
+            if _needs_verify_vf and self.evidence_log is not None:
+                try:
+                    self.evidence_log.verify_fresh(
+                        claim=output,
+                        require_tools=True,
+                        user_prompt=ctx.user_prompt,
+                    )
+                except VerifierError:
+                    # Route through the existing evidence rejection lifecycle.
+                    self._evidence_rejection_count += 1
+                    if self._evidence_rejection_count > self.MAX_EVIDENCE_RETRIES:
+                        # Hard cap exceeded: emit explicit failure message.
+                        self._force_tool = False
+                        output = (
+                            f"[Convergence failed — evidence verification rejected "
+                            f"the answer after {self.MAX_EVIDENCE_RETRIES + 1} "
+                            f"attempts.]"
+                        )
+                        self._last_response = output
+                    else:
+                        # Reject: force tool call, inject concise directive.
+                        self._force_tool = True
+                        _rejection_msg = (
+                            "[CONTROL] verify_fresh structural evidence verification "
+                            "failed. Your final answer must cite specific, verifiable "
+                            "technical identifiers from the files you read. Do NOT emit "
+                            "final_answer until the response is grounded in actual "
+                            "source evidence."
+                        )
+                        self.state.append_message(
+                            {"role": "user", "content": _rejection_msg}
+                        )
+                        self.state.increment_step()
+                        return False
+
+        # ── Phase 0 verify_fresh gate (single choke point) ────────────────
+        if ctx is not None:
+            # Phase 2.4: exact-action mode bypasses verify_fresh and read-count
+            # gates. The user asked for exactly one command, not analysis.
+            if getattr(self, "_exact_action_mode", False):
+                needs_verify = False
+            else:
+                # Gate discriminator: casual chat ("hi") → pass immediately.
+                # Investigation / active-goal prompts → require real reads.
+                needs_verify = _prompt_requires_investigation(
+                    ctx.user_prompt, has_active_goal=has_active_goal
+                )
             if needs_verify:
                 # Phase D: unified read counter from _real_reads().
                 real_reads = self._real_reads()
@@ -523,7 +583,7 @@ class _ConvergenceMixin:
                 # No investigation needed (chitchat): reset force_tool.
                 self._force_tool = False
 
-        # ── Path-Claim Disk Backstop (P0 fix: close the hallucinated-path bypass) ──
+        # ── Path-Claim Disk Backstop (P0 fix) ──────────────────────────────
         # Deterministic, non-LLM. Catches fabricated file/symbol claims like
         # "engine/personas.py" or "tools/handoff.py" that pass the read-count
         # gate because the agent read >=3 unrelated files. Runs for EVERY final
@@ -554,6 +614,43 @@ class _ConvergenceMixin:
                 _tok = u.replace("Unsupported path (not on disk): ", "")
                 if _tok in output:
                     output = output.replace(_tok, f"[UNVERIFIED] {_tok}")
+
+        # ── Final-Answer Claim Gate (Phase 2.3: catch spoofed test/commit claims) ──
+        # Runs AFTER the path-claim backstop (which is a separate gate). This gate
+        # handles test/pytest/commit claims only — no path overlap.
+        # Never produces a dual terminal outcome: returns False for caller to
+        # continue, and only emits via hard-cap fallback after MAX_EVIDENCE_RETRIES.
+        from core.verifier import check_final_answer_claim_gate
+
+        _gate_result = check_final_answer_claim_gate(
+            output or "", self.evidence_log
+        )
+        if not _gate_result.passed:
+            self._evidence_rejection_count = getattr(
+                self, "_evidence_rejection_count", 0
+            ) + 1
+            if self._evidence_rejection_count > self.MAX_EVIDENCE_RETRIES:
+                # Hard cap: emit with visible [UNVERIFIED] markers.
+                for u in _gate_result.unsupported_claims:
+                    _tok = u.split(":")[-1].strip()
+                    if _tok and _tok in (output or ""):
+                        output = output.replace(_tok, f"[UNVERIFIED] {_tok}")
+            else:
+                self._force_tool = True
+                _blocked_reasons = "\n".join(
+                    f"  • {u}" for u in _gate_result.unsupported_claims
+                )
+                control_msg = (
+                    "[CONTROL] FINAL ANSWER rejected by claim gate — "
+                    "unsupported claims detected:\n"
+                    f"{_blocked_reasons}\n"
+                    "Remove these claims or gather matching evidence before retrying."
+                )
+                self.state.append_message(
+                    {"role": "user", "content": control_msg}
+                )
+                self.state.increment_step()
+                return False
 
         # ── Graphify telemetry (P4, optional) ─────────────────────────────
         # AGENT.md policy: when graphify-out/graph.json exists, architecture-class
