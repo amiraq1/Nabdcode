@@ -323,7 +323,9 @@ def check_final_answer_claim_gate(report_text: str, evidence_log: Any) -> Verifi
     # ── Pattern A1: Arabic "all tests passed" (جميع/كل الاختبارات نجحت) ─────
     _ar_all_passed_re = re.compile(
         r"(?:جميع|كل)\s+(?:ال)?اختبارات?\s+(?:نجحت|نجح|تمت|اجتيزت|مرت)"
-        r"|(?:ال)?اختبارات?\s+(?:جميع|كل)\s+(?:نجحت|نجح|تمت|اجتيزت|مرت)",
+        r"|(?:ال)?اختبارات?\s+(?:جميع|كل)\s+(?:نجحت|نجح|تمت|اجتيزت|مرت)"
+        r"|نجحت\s+(?:جميع|كل)\s+(?:ال)?اختبارات?"
+        r"|(?:نجح|نجحت|تمت)\s+(?:ال)?اختبارات?\s+(?:جميعها|كلها)",
     )
     _ar_all_passed_match = _ar_all_passed_re.search(_norm)
     if _ar_all_passed_match:
@@ -360,11 +362,12 @@ def check_final_answer_claim_gate(report_text: str, evidence_log: Any) -> Verifi
     # ── Pattern A2: Arabic count claims (عدد الاختبارات N / تم تشغيل N اختبار) ──
     _ar_count_re = re.compile(
         r"(?:عدد\s*(?:ال)?اختبارات?\s*(?::)?\s*(\d+))"
+        r"|(?:عددها\s*(?::)?\s*(\d+))"
         r"|(?:تم\s+تشغيل\s+(\d+)\s+اختبار)",
     )
     _ar_count_match = _ar_count_re.search(_norm)
     if _ar_count_match:
-        claimed_count = int((_ar_count_match.group(1) or _ar_count_match.group(2)))
+        claimed_count = int((_ar_count_match.group(1) or _ar_count_match.group(2) or _ar_count_match.group(3)))
         records = _exec_evidence()
         if not records:
             all_unsupported.append(
@@ -377,12 +380,12 @@ def check_final_answer_claim_gate(report_text: str, evidence_log: Any) -> Verifi
             )
             # Check both English and Arabic count patterns in normalized evidence
             _actual_en = re.search(r"Ran\s+(\d+)\s+tests?", last_out, re.IGNORECASE)
-            _actual_ar = re.search(r"(?:عدد\s*(?:ال)?اختبارات?\s*(?::)?\s*(\d+))|(?:تم\s+تشغيل\s+(\d+)\s*اختبار)", last_out)
+            _actual_ar = re.search(r"(?:عدد\s*(?:ال)?اختبارات?\s*(?::)?\s*(\d+))|(?:عددها\s*(?::)?\s*(\d+))|(?:تم\s+تشغيل\s+(\d+)\s*اختبار)", last_out)
             actual_count = -1
             if _actual_en:
                 actual_count = int(_actual_en.group(1))
             elif _actual_ar:
-                actual_count = int(_actual_ar.group(1) or _actual_ar.group(2))
+                actual_count = int(_actual_ar.group(1) or _actual_ar.group(2) or _actual_ar.group(3))
             if actual_count != -1 and actual_count != claimed_count:
                 all_unsupported.append(
                     f"Claimed '{claimed_count} tests' (Arabic) but evidence "
