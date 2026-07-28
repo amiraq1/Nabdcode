@@ -1,0 +1,7 @@
+{
+  "patch_file": "d11.candidate.patch",
+  "files": [
+    "core/dag/nodes/executor.py",
+    "tests/test_dag_executor_path_containment.py"
+  ]
+}
