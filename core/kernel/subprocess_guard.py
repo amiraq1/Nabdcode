@@ -52,11 +52,13 @@ import os
 import re
 import shlex
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple
 
 from core.kernel.security import (
     get_workspace_root,
+    split_pipe_segments,
     validate,
 )
 from core.kernel.events import bus
@@ -164,6 +166,24 @@ def _args_safe_for_execution(args: List[str], context: str = "infra") -> Tuple[b
     return True, ""
 
 
+def _drain_stderr_into(idx: int, pipe, parts: List[List[str]]) -> None:
+    """Drain ``pipe`` fully into ``parts[idx]`` (daemon-thread target).
+
+    Prevents pipe-buffer deadlock when multiple pipeline segments write to
+    stderr concurrently. Never raises.
+    """
+    try:
+        for line in pipe:
+            parts[idx].append(line)
+    except ValueError:
+        pass
+    finally:
+        try:
+            pipe.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class SubprocessGuard:
     """Single choke-point for subprocess execution across the whole OS.
 
@@ -214,6 +234,178 @@ class SubprocessGuard:
             "returncode": result[0],
         })
         return result
+
+    def run_agent_pipeline(self, command: str, timeout: int = 300) -> ExecResult:
+        """Execute a validated AGENT pipeline (``a | b | c``), shell=False.
+
+        Applies the identical trust chain as ``run_agent_command`` (full
+        ``validate()`` → consent seam → per-segment arg scan), then chains each
+        segment as an independent ``subprocess.Popen`` with stdout piped into
+        the next segment's stdin. stderr is drained on daemon threads to avoid
+        pipe-buffer deadlock; hung intermediates are killed once the last
+        segment exits. Returns ``(returncode_of_last_segment, stdout, stderr)``
+        or ``(-1, "", "<reason>")`` — never raises.
+        """
+        ok, reason = validate(command)
+        if not ok:
+            bus.emit("subprocess_blocked", {
+                "policy": Policy.AGENT_SHELL.value,
+                "command": command,
+                "reason": reason,
+            })
+            return -1, "", f"Security Violation: {reason}"
+
+        if self._consent is not None and not self._consent("execute_shell", {"command": command}):
+            bus.emit("subprocess_blocked", {
+                "policy": Policy.AGENT_SHELL.value,
+                "command": command,
+                "reason": "user_declined",
+            })
+            return -1, "", "Execution blocked by user."
+
+        ok_p, segments, parse_err = split_pipe_segments(command)
+        if not ok_p or len(segments) < 2:
+            return -1, "", parse_err or "Not a pipeline."
+
+        for seg in segments:
+            safe, scan_reason = _args_safe_for_execution(seg, context="pipeline")
+            if not safe:
+                bus.emit("subprocess_blocked", {
+                    "policy": Policy.AGENT_SHELL.value,
+                    "command": command,
+                    "reason": scan_reason,
+                })
+                return -1, "", f"Security Violation: {scan_reason}"
+
+        procs: List[subprocess.Popen] = []
+        # stderr of every segment EXCEPT the last is drained on daemon threads;
+        # the last segment's stderr is read by ``communicate()`` itself —
+        # draining it concurrently would race/EBADF against communicate's own
+        # selector on the same pipe.
+        stderr_parts: List[List[str]] = [[] for _ in segments[:-1]]
+        try:
+            prev_stdout = None
+            for i, seg_tokens in enumerate(segments):
+                is_last = i == len(segments) - 1
+                proc = subprocess.Popen(
+                    seg_tokens,
+                    stdin=prev_stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                if prev_stdout is not None:
+                    prev_stdout.close()
+                prev_stdout = proc.stdout
+                procs.append(proc)
+                if not is_last:
+                    t = threading.Thread(
+                        target=_drain_stderr_into,
+                        args=(i, proc.stderr, stderr_parts),
+                        daemon=True,
+                    )
+                    t.start()
+
+            stdout_data, stderr_data = procs[-1].communicate(timeout=timeout)
+
+            for p in procs[:-1]:
+                p.poll()
+                if p.returncode is None:
+                    p.kill()
+                    p.wait()
+
+            combined_err = "".join("".join(part) for part in stderr_parts) + (stderr_data or "")
+            result = (
+                (procs[-1].returncode or 0),
+                stdout_data or "",
+                combined_err,
+            )
+            bus.emit("subprocess_executed", {
+                "policy": Policy.AGENT_SHELL.value,
+                "command": command,
+                "returncode": result[0],
+            })
+            return result
+        except subprocess.TimeoutExpired:
+            for p in procs:
+                try:
+                    p.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+            return -1, "", f"Command execution timed out after {timeout} seconds."
+        except Exception as exc:  # noqa: BLE001
+            for p in procs:
+                try:
+                    p.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+            return -1, "", f"Execution failure: {type(exc).__name__}: {str(exc)}"
+
+    def spawn_agent_background(self, command: str) -> ExecResult:
+        """Launch a validated ``command &`` detached from the agent loop.
+
+        Same validation/consent/arg-scan trust chain as ``run_agent_command``.
+        The child runs with stdio routed to DEVNULL and
+        ``start_new_session=True`` so it never blocks the loop; the PID is
+        reported in stdout and audited via ``subprocess_spawned``.
+        Returns ``(0, "...(PID: N).", "")`` or ``(-1, "", "<reason>")``.
+        """
+        bg_cmd = command.rstrip()
+        if bg_cmd.endswith("&"):
+            bg_cmd = bg_cmd[:-1].strip()
+        for redir in ("> /dev/null 2>&1", ">/dev/null 2>&1", "> /dev/null", ">/dev/null"):
+            if bg_cmd.endswith(redir):
+                bg_cmd = bg_cmd[: -len(redir)].strip()
+
+        ok, reason = validate(bg_cmd)
+        if not ok:
+            bus.emit("subprocess_blocked", {
+                "policy": Policy.AGENT_SHELL.value,
+                "command": bg_cmd,
+                "reason": reason,
+            })
+            return -1, "", f"Security Violation: {reason}"
+
+        if self._consent is not None and not self._consent("execute_shell", {"command": bg_cmd}):
+            bus.emit("subprocess_blocked", {
+                "policy": Policy.AGENT_SHELL.value,
+                "command": bg_cmd,
+                "reason": "user_declined",
+            })
+            return -1, "", "Execution blocked by user."
+
+        try:
+            args = shlex.split(bg_cmd)
+        except ValueError as exc:
+            return -1, "", f"Command tokenization error: {exc}"
+        if not args:
+            return -1, "", "Empty background command."
+
+        safe, scan_reason = _args_safe_for_execution(args, context="background")
+        if not safe:
+            bus.emit("subprocess_blocked", {
+                "policy": Policy.AGENT_SHELL.value,
+                "command": bg_cmd,
+                "reason": scan_reason,
+            })
+            return -1, "", f"Security Violation: {scan_reason}"
+
+        try:
+            proc = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            bus.emit("subprocess_spawned", {
+                "policy": Policy.AGENT_SHELL.value,
+                "command": bg_cmd,
+                "pid": proc.pid,
+            })
+            return 0, f"Background server process started successfully (PID: {proc.pid}).", ""
+        except Exception as exc:  # noqa: BLE001
+            return -1, "", f"Failed to start background process: {exc}"
 
     def run_git(
         self,

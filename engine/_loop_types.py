@@ -19,8 +19,13 @@ MAX_CRITICAL_FULL: Final[int] = 3
 # alongside the other shared loop constants.
 MAX_BUDGET_SECONDS: Final[int] = 180  # سقف الميزانية: 3 دقائق لكل مهمة على Termux
 MAX_BUDGET_TOKENS: Final[int] = 12000  # سقف التوكنات التقريبي
-MAX_CONSECUTIVE_NO_TOOL_ROUNDS: Final[int] = 3
-BUDGET_SOFT_WARN_RATIO: Final[float] = 0.80
+MAX_CONSECUTIVE_NO_TOOL_ROUNDS: Final[int] = 3  # legacy reasoning-count cap (superseded)
+# Loop progress accounting (root fix — no-progress semantics):
+# the loop aborts only after this many consecutive iterations that produced NO
+# substantive new evidence. Genuine stalls (repeated identical calls, TODO-only
+# churn, failed dispatches) still terminate; productive runs reset the counter.
+MAX_NO_PROGRESS_STEPS: Final[int] = 3
+BUDGET_SOFT_WARN_RATIO: Final[float] = 0.80  # final 20% of budget is reserved for synthesis/finalization
 
 # Prompt Leak Markers — shared between streaming and non-streaming paths.
 # Detects structural system markers leaked in model output and triggers
@@ -62,6 +67,21 @@ class _LoopSignal(Enum):
     TERMINATE = "terminate"  # leave the loop entirely (return)
     PROCEED = "proceed"     # keep going through the iteration body
     FINAL_ANSWER = "final_answer"  # smolagents termination convention, handled as a clean stop
+
+
+class _LoopPhase(Enum):
+    """Explicit turn-lifecycle state machine for progress accounting.
+
+    ``PLAN -> COLLECT -> SYNTHESIZE -> FINALIZE``. Transitions are monotone:
+    once SYNTHESIZE begins (budget reserve, no-progress cap, or finalizing
+    guard), the loop never returns to planning/collection; FINALIZE is
+    terminal. string values keep ``_LoopCtx.phase`` JSON/debug friendly.
+    """
+
+    PLAN = "PLAN"
+    COLLECT = "COLLECT"
+    SYNTHESIZE = "SYNTHESIZE"
+    FINALIZE = "FINALIZE"
 
 
 @dataclass
@@ -123,6 +143,8 @@ class _LoopCtx:
     last_search_cache: dict[str, str] = field(default_factory=dict)
     #  • Consecutive reasoning rounds that produced NO new (dispatched) tool
     #    call. Reset to 0 whenever a real tool dispatch occurs.
+    #    DEPRECATED (superseded by consecutive_no_progress below); kept for
+    #    external/test compatibility — the engine no longer increments it.
     consecutive_no_tool_rounds: int = 0
     # Phase 8 (RAG Auto-Trigger): guards against re-triggering the forced
     # search_knowledge_base call more than once per run.
@@ -140,7 +162,22 @@ class _LoopCtx:
     # the verifier's "directories explored >= 1" gate without re-scanning.
     root_list_count: int = 0
     # Phase 0 fix B: cumulative no-tool reasoning rounds that NEVER resets on a
-    # transient tool call. The consecutive counter is reset by real dispatches
-    # (which a small model can interleave to dodge the cap), so this cumulative
-    # one is what actually bounds non-converging thought-only loops.
+    # transient tool call. DEPRECATED (superseded by consecutive_no_progress
+    # + the step/budget hard ceilings) — the engine no longer increments it.
     total_no_tool_rounds: int = 0
+    # ── Loop progress accounting (no-progress semantics, root fix) ─────────
+    # Explicit FSM phase: "PLAN" -> "COLLECT" -> "SYNTHESIZE" -> "FINALIZE"
+    # (see _LoopPhase). Monotone — never moves backwards.
+    phase: str = "PLAN"
+    # Separate counters: total steps live in state.step_count; dispatched
+    # tool iterations in tool_call_count; consecutive progress-free
+    # iterations in consecutive_no_progress.
+    tool_call_count: int = 0
+    consecutive_no_progress: int = 0
+    # Fingerprints of (tool, args, output) triples that produced NEW
+    # evidence this run. An identical call+result fingerprint hit is NOT
+    # progress (invariant 5); a miss resets the no-progress counter (6).
+    progress_sigs: set[str] = field(default_factory=set)
+    # Signature of the most recent todo_write payload. An identical repeat
+    # is suppressed BEFORE tool execution (invariant 4).
+    last_todo_sig: str = ""

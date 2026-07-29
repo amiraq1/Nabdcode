@@ -4,6 +4,7 @@ import shlex
 from typing import Optional
 from core.dag.base import BaseNode, Edge
 from core.dag.context import NabdExecutionContext
+from core.kernel.subprocess_guard import default_guard
 
 class TerminalNode(BaseNode):
     """

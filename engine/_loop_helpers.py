@@ -298,6 +298,52 @@ def _derive_read_hint(user_prompt: str) -> str:
     return ""
 
 
+def _canonical_fragment(value: Any, limit: int = 256) -> str:
+    """Deterministic string fragment for fingerprints (JSON-canonical when possible)."""
+    try:
+        blob = json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        blob = repr(value)
+    return blob[:limit]
+
+
+def _todo_update_sig(tool_args: Any) -> str:
+    """Stable signature of a ``todo_write`` payload (whole-argument canonical).
+
+    Two todo calls with the same (action + payload) are *identical* updates —
+    the second one is a planning duplicate, not new progress (invariant 4).
+    """
+    return "todo|" + _canonical_fragment(tool_args, 400)
+
+
+def _dispatch_progress_sig(tool_name: str, tool_args: Any, output: str) -> str:
+    """Fingerprint of a (tool, args, result-output) triple.
+
+    Used as the "have we seen substantive new evidence?" signature: an identical
+    call producing identical output hashes to the same value and therefore does
+    NOT reset the no-progress counter (invariant 5); ANY divergence (new file,
+    new command, new result) produces a new fingerprint (invariant 6).
+    """
+    import hashlib
+
+    blob = f"{tool_name}|{_canonical_fragment(tool_args, 300)}|{(output or '')[:512]}"
+    return hashlib.sha1(blob.encode("utf-8", "replace")).hexdigest()
+
+
+def _is_substantive_evidence(tool_name: str, success: bool, output: str) -> bool:
+    """Gate for the progress counter.
+
+    Hard rules (invariants 2-3): TODO updates are NEVER substantive progress;
+    failed dispatches are never progress; only results carrying actual content
+    count. The caller separately checks the fingerprint for novelty.
+    """
+    if tool_name == "todo_write":
+        return False
+    if not success:
+        return False
+    return bool((output or "").strip())
+
+
 def _type_name(t: Any) -> str:
     """Map a Python type annotation to a short human-readable name."""
     if t is str:

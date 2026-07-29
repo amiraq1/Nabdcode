@@ -53,6 +53,16 @@ SAFE_BINARIES: Final[Set[str]] = {
     "sleep", "lsof", "pytest",
 }
 
+# D-06: reader and embedded-execution hardening. Path-reading binaries must
+# not resolve files outside the pinned workspace, and whitelisted tools with
+# embedded execution features must remain validation-only.
+_PATH_READING_BINARIES: Final[Set[str]] = {
+    "awk", "cat", "df", "du", "find", "grep", "head", "ls", "lsof",
+    "sort", "tail", "top", "wc",
+}
+_EMBEDDED_EXEC_FIND_FLAGS: Final[Set[str]] = {"-exec", "-execdir", "-ok", "-okdir"}
+_AWK_SYSTEM_CALL = re.compile(r"\bsystem\s*\(")
+
 
 # ── Installation-command interception ────────────────────────────────────────
 
@@ -272,6 +282,16 @@ def _validate_segment_args(tokens: List[str]) -> Tuple[bool, str]:
     for arg in tokens[1:]:
         if arg in DANGEROUS_FLAGS:
             return False, f"Dangerous argument '{arg}' is not allowed for binary '{bin_name}'."
+        if bin_name == "find" and arg in _EMBEDDED_EXEC_FIND_FLAGS:
+            return False, f"Embedded execution flag '{arg}' is not allowed for binary 'find'."
+        if bin_name == "awk" and _AWK_SYSTEM_CALL.search(arg):
+            return False, "Embedded system() is not allowed for binary 'awk'."
+    if bin_name in _PATH_READING_BINARIES:
+        for arg in tokens[1:]:
+            if not arg or arg.startswith("-"):
+                continue
+            if not _validate_path(arg):
+                return False, f"Path '{arg}' outside workspace is not allowed for '{bin_name}'."
     if bin_name in INTERPRETERS:
         for idx, arg in enumerate(tokens[1:]):
             if arg == "-m" and idx + 1 < len(tokens[1:]):

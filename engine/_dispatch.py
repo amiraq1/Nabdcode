@@ -10,7 +10,12 @@ import time
 from typing import Any
 
 from engine.consent import ConsentManager
-from engine._loop_helpers import _extract_cmd_or_path
+from engine._loop_helpers import (
+    _extract_cmd_or_path,
+    _todo_update_sig,
+    _dispatch_progress_sig,
+    _is_substantive_evidence,
+)
 from engine._loop_types import _ToolInteraction
 from tools.models import ToolResult
 from core.utils import truncate
@@ -19,6 +24,11 @@ from core.ui_bridge import get_bridge
 
 class _ToolDispatchMixin:
     """Mixin for ExecutionLoop holding consent, edit-gate, dispatch, and recording.
+
+    Loop progress accounting (root fix): ``_finalize_tool_dispatch`` owns the
+    ONLY progress-decision point for dispatched iterations — TODO updates never
+    count, identical call+result fingerprint hits don't count, substantive new
+    evidence resets ``ctx.consecutive_no_progress`` and moves PLAN→COLLECT.
 
     Relies on these instance members (set by ExecutionLoop.__init__):
       - self.evidence_log
@@ -137,7 +147,6 @@ class _ToolDispatchMixin:
                     success=True,
                     stdout="USER REJECTED THE EDIT. Manual override. Please revise your approach.",
                     stderr="",
-                    output="USER REJECTED THE EDIT. Manual override. Please revise your approach.",
                 )
                 self.evidence_log.record(
                     tool=tool_name,
@@ -174,8 +183,30 @@ class _ToolDispatchMixin:
         Returns ``(result, output, rec)`` — the raw ToolResult, truncated output
         string, and the evidence record.
         """
+        # ── todo_write duplicate suppression (invariant 4) ───────────────────
+        # An identical TODO update is suppressed BEFORE tool execution: it
+        # never reaches the dispatcher, never mutates the plan, and (because
+        # TODO updates are never substantive progress — invariant 3) never
+        # resets the no-progress counter.
+        _todo_sig = _todo_update_sig(tool_args) if tool_name == "todo_write" else ""
+        _todo_suppressed = bool(
+            _todo_sig
+            and self._ctx is not None
+            and _todo_sig == getattr(self._ctx, "last_todo_sig", "")
+        )
+
         # ── todo_write special case ──────────────────────────────────────────
-        if (
+        if _todo_suppressed:
+            result = ToolResult(
+                success=True,
+                stdout=(
+                    "[CONTROL] Identical todo_write suppressed: the plan is "
+                    "unchanged and no tool execution was performed. Continue "
+                    "with the existing plan or provide NEW information."
+                ),
+                stderr="",
+            )
+        elif (
             tool_name == "todo_write"
             and isinstance(tool_args, dict)
             and tool_args.get("action") == "update"
@@ -200,8 +231,12 @@ class _ToolDispatchMixin:
                 )
             else:
                 result = self.dispatcher.dispatch(tool_name, tool_args)
+                if _todo_sig and self._ctx is not None:
+                    self._ctx.last_todo_sig = _todo_sig
         else:
             result = self.dispatcher.dispatch(tool_name, tool_args)
+            if _todo_sig and self._ctx is not None:
+                self._ctx.last_todo_sig = _todo_sig
 
         # ── Evidence Recording ───────────────────────────────────────────────
         cmd_summary = _extract_cmd_or_path(tool_args)
@@ -311,10 +346,30 @@ class _ToolDispatchMixin:
                     if getattr(result, "success", False):
                         ctx.last_search_cache[norm] = output
 
-        # Phase 4.5 — reset no-tool counter after a real dispatch
+        # ── Loop progress accounting (root fix — no-progress semantics) ─────
+        # tool_call_count tracks real dispatch iterations. The no-progress
+        # counter resets ONLY on substantive NEW evidence: TODO updates never
+        # count (invariant 3), an identical call+result fingerprint hit does
+        # not count (invariant 5), a miss — new file/result/evidence — resets
+        # (invariant 6).
         ctx = self._ctx
         if ctx is not None:
-            ctx.consecutive_no_tool_rounds = 0
+            ctx.tool_call_count += 1
+            _sig_out = (
+                getattr(result, "output", "") or getattr(result, "stderr", "") or ""
+            )
+            _ok = bool(getattr(result, "success", False))
+            if _is_substantive_evidence(tool_name, _ok, _sig_out):
+                _fp = _dispatch_progress_sig(tool_name, tool_args, _sig_out)
+                if _fp not in ctx.progress_sigs:
+                    ctx.progress_sigs.add(_fp)
+                    ctx.consecutive_no_progress = 0
+                    if ctx.phase == "PLAN":
+                        ctx.phase = "COLLECT"
+                else:
+                    ctx.consecutive_no_progress += 1
+            else:
+                ctx.consecutive_no_progress += 1
 
         # ── Phase 2.C: max_tool_calls=1 enforcement in exact-action mode ──
         if getattr(self, "_exact_action_mode", False):

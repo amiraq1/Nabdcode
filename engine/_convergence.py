@@ -328,7 +328,7 @@ class _ConvergenceMixin:
             if len(lines) >= 5:
                 break
         summary = "\n".join(lines) if lines else "(no successful tool output captured yet)"
-        if reason in ("answer_in_hand", "goal_satisfied", "no_tool_cap", "consecutive_reasoning_limit") and lines:
+        if reason in ("answer_in_hand", "goal_satisfied", "no_tool_cap", "no_progress_cap", "consecutive_reasoning_limit") and lines:
             return f"Based on the gathered evidence:\n\n{summary}"
         task = ctx.user_prompt if ctx else ""
         return (
@@ -675,6 +675,11 @@ class _ConvergenceMixin:
             pass
 
         # ── Normal emit path ──────────────────────────────────────────────
+        # Loop progress accounting (root fix): emission is FINALIZE — the
+        # terminal FSM state. Once FINALIZE begins the run never returns to
+        # planning (invariant 8).
+        if self._ctx is not None:
+            self._ctx.phase = "FINALIZE"
         self.state.update_status("COMPLETED")
         bus.emit("loop_completed", {"reason": reason, "output": output})
         bus.emit("show_final_answer", {"output": output})

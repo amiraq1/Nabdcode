@@ -453,9 +453,14 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # Phase F: when reads >= 3, inject one-time synthesis directive.
         self._force_tool = False
         if self._ctx is not None:
-            _needs = _prompt_requires_investigation(
-                self._ctx.user_prompt, has_active_goal=_has_active_goal(self)
-            )
+            # Invariant 8 — once SYNTHESIZE/FINALIZE begins, never return to
+            # planning/collection: skip the read-forcing machinery entirely.
+            if self._ctx.phase not in ("SYNTHESIZE", "FINALIZE"):
+                _needs = _prompt_requires_investigation(
+                    self._ctx.user_prompt, has_active_goal=_has_active_goal(self)
+                )
+            else:
+                _needs = False
             if _needs:
                 if self._real_reads() < 3:
                     self._force_tool = True
@@ -1143,7 +1148,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             if self._goal and getattr(self._goal, "is_met", False):
                 return True
             try:
-                from core.evidence import evaluate_goal_exit
+                # Uses the module-level engine.goal_verifier import (line 25);
+                # core.evidence has no `evaluate_goal_exit` symbol (D-07).
                 res = evaluate_goal_exit(self._goal, self.evidence_log, require_tools=True)
                 if getattr(res, "ok", False):
                     if self._goal:
@@ -1421,6 +1427,37 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 returncode=-1,
                 status="blocked",
             )
+        if getattr(self, "_exact_action_mode", False) and tool_name == "execute_shell":
+            from core.canonicalize import canonicalize
+            from core._exact_action_contract import EXACT_ACTION_PATTERNS
+            
+            prompt = self._ctx.user_prompt if self._ctx else ""
+            if not prompt:
+                return None
+            
+            requested = prompt
+            lower_prompt = prompt.lower()
+            for p in EXACT_ACTION_PATTERNS:
+                if p in lower_prompt:
+                    idx = lower_prompt.find(p)
+                    requested = prompt[idx + len(p):].strip()
+                    if requested.startswith(":"):
+                        requested = requested[1:].strip()
+                    break
+            
+            emitted = tool_args.get("command", "")
+            if canonicalize(requested) != canonicalize(emitted):
+                return ToolResult(
+                    success=False,
+                    stderr=(
+                        f"[COMMAND_FIDELITY_DIVERGENCE] Emitted command diverges from requested command.\n"
+                        f"Requested (canonical): {canonicalize(requested)}\n"
+                        f"Emitted (canonical): {canonicalize(emitted)}"
+                    ),
+                    returncode=-1,
+                    status="blocked",
+                )
+
         # Phase 2.C: in exact-action mode, force consent prompt by NOT
         # caching shell approvals. Clear approved_shell at start of each
         # run so every command goes through the interactive consent gate.
@@ -1472,22 +1509,12 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 "content": f"[CONTROL] {directive}",
             })
 
-    def _dispatch_and_record_evidence(self, tool_call: ToolCall) -> None:
-        """Dispatch the validated tool and log the outcome to the EvidenceLog.
-
-        Delegates to 3 focused stages in ``_ToolDispatchMixin``:
-          1. Consent + Edit Gate  → may return early
-          2. Execute + Record     → dispatch + evidence + telemetry
-          3. Finalize             → feedback + state + sleep
-        """
-        tool_name = tool_call.tool
-        tool_args = tool_call.args
-
-        if self._handle_consent_and_edit_gate(tool_name, tool_args):
-            return
-
-        result, output, rec = self._execute_and_record(tool_name, tool_args)
-        self._finalize_tool_dispatch(tool_name, tool_args, result, output, rec)
+    # NOTE: ``_dispatch_and_record_evidence`` is intentionally NOT redefined
+    # in this class body. It resolves via MRO to
+    # ``_ToolDispatchMixin._dispatch_and_record_evidence`` (engine/_dispatch.py),
+    # which orchestrates the same 3 stages *plus* the Phase-2.A WRONG_TOOL
+    # one-shot re-selection. A previous class-level copy shadowed the mixin
+    # and made that re-selection branch permanently unreachable (D-08).
 
     def run(self, user_prompt: str) -> TurnOutcome:
         """Start the autonomous execution loop (thin orchestrator).
@@ -1581,10 +1608,10 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
 
     def _handle_tool_signal(self, tool_call: Any, signal: _LoopSignal) -> bool:
         if signal is _LoopSignal.CONTINUE or tool_call is None:
+            # Reasoning-only iteration (no dispatch): never progress.
             ctx = self._ctx
             if ctx is not None:
-                ctx.consecutive_no_tool_rounds += 1
-                ctx.total_no_tool_rounds += 1
+                ctx.consecutive_no_progress += 1
             if signal is not _LoopSignal.CONTINUE and self._verify_claim_or_self_correct() is _LoopSignal.TERMINATE:
                 return True
             if self._maybe_force_partial_answer():
@@ -1603,10 +1630,10 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
     def _execute_tool_iteration(self, tool_call: Any, bridge: Any) -> None:
         sig = self._handle_cycle_and_security(tool_call)
         if sig is _LoopSignal.CONTINUE:
+            # Guard-blocked iteration (no dispatch): never progress.
             ctx = self._ctx
             if ctx is not None:
-                ctx.consecutive_no_tool_rounds += 1
-                ctx.total_no_tool_rounds += 1
+                ctx.consecutive_no_progress += 1
                 if self._maybe_force_partial_answer():
                     return
             return

@@ -15,7 +15,7 @@ from engine._loop_types import (
     _LoopCtx,
     MAX_BUDGET_SECONDS,
     MAX_BUDGET_TOKENS,
-    MAX_CONSECUTIVE_NO_TOOL_ROUNDS,
+    MAX_NO_PROGRESS_STEPS,
     BUDGET_SOFT_WARN_RATIO,
 )
 
@@ -47,10 +47,12 @@ class _BudgetMixin:
         token_est = sum(
             len(str(m.get("content", ""))) // 4 for m in self.state.get_messages()
         )
-        # Phase 0 Fix B: cumulative no-tool reasoning cap. The total counter
-        # NEVER resets on transient tool calls, so it bounds non-converging
-        # thought-only loops even when a small model interleaves tool calls to
-        # dodge the consecutive cap.
+        # Loop progress accounting (root fix): the no-progress hard ceiling
+        # replaces the old cumulative reasoning-round cap. A run only dies when
+        # ``MAX_NO_PROGRESS_STEPS`` consecutive iterations produced NO
+        # substantive new evidence — genuine stalls (repeated identical calls,
+        # TODO-only churn, failed dispatches) still terminate, while broad
+        # productive runs reset the counter on every finding.
         # Phase D: step-based hard ceiling for investigation prompts (10 cycles absolute max).
         # This is an absolute safety net — never loops forever even on small models.
         _step_hard_cap = False
@@ -63,15 +65,21 @@ class _BudgetMixin:
             elapsed_total > MAX_BUDGET_SECONDS
             or token_est > MAX_BUDGET_TOKENS
             or not self.state.is_loop_safe()
-            or (ctx.total_no_tool_rounds > MAX_CONSECUTIVE_NO_TOOL_ROUNDS * 2 and getattr(self.state, "active_goal", None) is None)
+            or (ctx.consecutive_no_progress >= MAX_NO_PROGRESS_STEPS and getattr(self.state, "active_goal", None) is None)
             or _step_hard_cap
         )
         if hard_ceiling:
             if not self._maybe_force_partial_answer(force_cap=True):
                 self.state.update_status("COMPLETED")
+                from engine._loop_helpers import _looks_like_tool_call
+
+                # Invariant 10 — never emit raw tool-call JSON merely because
+                # the budget was exhausted: a tool-call payload left in
+                # ``_last_response`` is discarded and replaced with a
+                # structured synthesis built from collected evidence.
                 last_resp = getattr(self, "_last_response", "")
-                if not last_resp or not safe_strip(last_resp):
-                    safe_msg = self._get_fallback_reason(
+                if not last_resp or not safe_strip(last_resp) or _looks_like_tool_call(last_resp):
+                    safe_msg = self._synthesize_from_evidence("budget_exhausted") or self._get_fallback_reason(
                         ctx.user_prompt,
                         f"Budget Ceiling: time={int(elapsed_total)}s tokens~{token_est}",
                     )
@@ -111,7 +119,12 @@ class _BudgetMixin:
         token_ratio = token_est / MAX_BUDGET_TOKENS if MAX_BUDGET_TOKENS else 0
         step_ratio = self.state.step_count / self.state.max_steps if getattr(self.state, "max_steps", 0) else 0
         is_budget = max(time_ratio, token_ratio, step_ratio) >= BUDGET_SOFT_WARN_RATIO
-        # The consecutive-no-tool cap is the authoritative terminator for
+        # Invariant 7/8 — reserve the final 20% of the turn budget for
+        # synthesis/finalization: crossing the reserve moves the FSM into
+        # SYNTHESIZE; the transition is monotone (no return to planning).
+        if is_budget and ctx.phase in ("PLAN", "COLLECT"):
+            ctx.phase = "SYNTHESIZE"
+        # The consecutive-no-progress cap is the authoritative terminator for
         # casual (no active GoalSpec) reasoning loops. When a verifiable goal
         # IS active, the GoalSpec exit gate owns termination (emitting
         # 'goal_not_met'), so the cap must yield to it instead of forcing a
@@ -127,8 +140,7 @@ class _BudgetMixin:
         )
         self._last_read_count = self._real_reads()
         is_cap = (
-            (ctx.consecutive_no_tool_rounds > MAX_CONSECUTIVE_NO_TOOL_ROUNDS
-             or ctx.total_no_tool_rounds > MAX_CONSECUTIVE_NO_TOOL_ROUNDS * 2)
+            ctx.consecutive_no_progress >= MAX_NO_PROGRESS_STEPS
             and getattr(self.state, "active_goal", None) is None
             and not _is_making_progress
         )
@@ -196,7 +208,7 @@ class _BudgetMixin:
             if len(lines) >= 5:
                 break
         summary = "\n".join(lines) if lines else "(no successful tool output captured yet)"
-        reason_label = "budget threshold reached" if is_budget else "consecutive reasoning limit reached"
+        reason_label = "budget threshold reached" if is_budget else "no-progress limit reached"
         partial = (
             f"[Partial answer — {reason_label}]\n"
             f"Task: {ctx.user_prompt}\n"

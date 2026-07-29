@@ -218,6 +218,13 @@ def _extract_technical_tokens(text: str) -> set[str]:
     for m in re.finditer(r"\b[a-z_][a-z0-9_]*\.[a-z][a-z0-9_./]*\b", text):
         tokens.add(m.group().lower())
 
+    # Bare filenames with common code/doc extensions (a.py, config.json).
+    for m in re.finditer(
+        r"\b([a-zA-Z0-9_\-]+\.(?:py|js|ts|rs|go|java|rb|php|yaml|yml|json|md|txt|cfg|ini|toml))\b",
+        text,
+    ):
+        tokens.add(m.group().lower())
+
     # File paths (starting with / or ./ or ../) — use lookbehind for start/space
     for m in re.finditer(r"(?:^|\s)((?:[.]{0,2}/[a-zA-Z0-9_.\-/]+))", text):
         tokens.add(m.group(1).lower())
@@ -280,13 +287,21 @@ class StructuralVerifier:
                 )
             return selected
 
-        # Last N successful records
+        # Last N successful records from evidence-producing tools only.
+        # todo_write records are excluded — their output_snippet carries
+        # JSON-encoded plan args, not substantive evidence, and would
+        # pollute the corpus (degrading the token-overlap ratio against
+        # the final answer's claim).
+        _EVIDENCE_CORPUS_TOOLS: frozenset = frozenset(
+            {"file_system", "execute_shell", "web_search", "search_memory"}
+        )
+
         def _numeric_eid(r: EvidenceRecord) -> int:
             m = re.search(r"(\d+)", r.evidence_id)
             return int(m.group(1)) if m else -1
 
         successful = sorted(
-            [r for r in records.values() if r.success],
+            [r for r in records.values() if r.success and r.tool in _EVIDENCE_CORPUS_TOOLS],
             key=_numeric_eid,
             reverse=True,
         )
