@@ -214,7 +214,7 @@ class _ConvergenceMixin:
         loop (or terminates with reason ``goal_not_met``) if its criteria are
         not proven against live evidence.
         """
-        from engine._loop_helpers import _has_active_goal, _prompt_requires_investigation
+        from engine._loop_helpers import _has_active_goal
 
         ctx = self._ctx
         assert ctx is not None
@@ -375,13 +375,14 @@ class _ConvergenceMixin:
         """
         from engine._loop_helpers import (
             _looks_like_tool_call,
-            _prompt_requires_investigation,
             _has_active_goal,
             _derive_read_hint,
         )
 
         # Resolve context early so both the convergence gate and the verify_fresh
         # gate below can use the same ctx.user_prompt / has_active_goal signal.
+        # PATCH-R4.2: _prompt_requires_investigation removed — using
+        # ctx.intent_policy.needs_investigation instead (single source of truth).
         ctx = self._ctx
         has_active_goal = _has_active_goal(self)
 
@@ -445,6 +446,41 @@ class _ConvergenceMixin:
             })
             return False
 
+        # ── PATCH-R4.2: Trusted Evidence Target Comparison ──────────────────
+        # Before verify_fresh, check that a required target was actually read
+        # via trusted tool metadata (file_system read, success=True). This is
+        # a SEPARATE gate from verify_fresh — it uses trusted metadata, not
+        # LLM output parsing.
+        if ctx is not None and ctx.intent_policy and ctx.intent_policy.required_target:
+            from engine._loop_helpers import _check_required_target_in_evidence
+            _target_ok, _target_reason = _check_required_target_in_evidence(
+                ctx.intent_policy.required_target,
+                self.evidence_log,
+            )
+            if not _target_ok:
+                self._evidence_rejection_count += 1
+                if self._evidence_rejection_count > self.MAX_EVIDENCE_RETRIES:
+                    output = (
+                        f"[Convergence failed — required target file "
+                        f"'{ctx.intent_policy.required_target}' not found in "
+                        f"trusted evidence after {self.MAX_EVIDENCE_RETRIES + 1} "
+                        f"attempts.]"
+                    )
+                    self._last_response = output
+                else:
+                    self._force_tool = True
+                    _rejection_msg = (
+                        "[CONTROL] FINAL ANSWER rejected — the required target "
+                        f"'{ctx.intent_policy.required_target}' was not found in "
+                        "trusted tool metadata. You MUST use file_system with "
+                        "action='read' on this file to satisfy the requirement."
+                    )
+                    self.state.append_message(
+                        {"role": "user", "content": _rejection_msg}
+                    )
+                    self.state.increment_step()
+                    return False
+
         if _looks_like_tool_call(output) or not safe_strip(output or ""):
             output = self._synthesize_from_evidence(reason)
             self._last_response = output
@@ -475,6 +511,9 @@ class _ConvergenceMixin:
                     _vf_min_reads = ctx.intent_policy.minimum_reads if ctx.intent_policy else 0
                     _vf_root_list = ctx.intent_policy.requires_root_listing if ctx.intent_policy else False
                     _vf_target = ctx.intent_policy.required_target if ctx.intent_policy else ""
+                    # PATCH-R4.2: Pass pre-classified intent from ctx.intent
+                    # instead of letting check_investigation_gates re-classify.
+                    _vf_intent = ctx.intent if ctx is not None else None
                     self.evidence_log.verify_fresh(
                         claim=output,
                         require_tools=True,
@@ -482,6 +521,7 @@ class _ConvergenceMixin:
                         minimum_reads=_vf_min_reads,
                         requires_root_listing=_vf_root_list,
                         required_target=_vf_target,
+                        intent=_vf_intent,
                     )
                 except VerifierError:
                     # Route through the existing evidence rejection lifecycle.

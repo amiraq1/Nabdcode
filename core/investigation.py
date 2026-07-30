@@ -308,6 +308,7 @@ def check_investigation_gates(
     minimum_reads: int = 0,
     requires_root_listing: bool = False,
     required_target: str = "",
+    intent: Optional[str] = None,
 ) -> tuple[bool, str]:
     """Check Phase 3, Phase 8, and Phase 9 completion gates.
 
@@ -315,11 +316,19 @@ def check_investigation_gates(
     so the evaluation uses the SAME policy as can_finalize() — no legacy
     classifiers or hardcoded thresholds.
 
+    PATCH-R4.2: Accepts optional pre-classified ``intent`` parameter. When
+    provided, uses it INSTEAD of calling ``classify_intent(user_prompt)``,
+    eliminating dynamic reclassification at choke points. The loop passes
+    ``ctx.intent`` (classified EXACTLY ONCE at run start) through the
+    verify_fresh -> Verifier.verify -> check_investigation_gates chain.
+
     Returns ``(passed, failure_reason_or_details)``.
     If `user_prompt` does not require multi-stage investigation, passes automatically.
     """
-    intent = classify_intent(user_prompt)
-    if not is_multi_stage_investigation(intent):
+    # PATCH-R4.2: Use pre-classified intent when provided (single source of truth).
+    # If not provided (legacy callers), fall back to dynamic classification.
+    _intent = intent if intent is not None else classify_intent(user_prompt)
+    if not is_multi_stage_investigation(_intent):
         return (True, "Not a multi-stage repository investigation request.")
 
     coverage = CoverageMetrics.from_records(records)
@@ -329,7 +338,7 @@ def check_investigation_gates(
     if coverage.files <= 1 and len(records) <= 2:
         return (
             False,
-            f"[ANTI-PREMATURE COMPLETION RULE] You attempted to finish the '{intent}' after only inspecting {coverage.files} file(s) / {len(records)} tool call(s).\n"
+            f"[ANTI-PREMATURE COMPLETION RULE] You attempted to finish the '{_intent}' after only inspecting {coverage.files} file(s) / {len(records)} tool call(s).\n"
             "A single observation or file MUST NEVER satisfy a repository-wide request.\n"
             "You MUST continue exploring the repository systematically across multiple modules before emitting FINAL_ANSWER."
         )
@@ -343,7 +352,7 @@ def check_investigation_gates(
         plan_formatted = "\n".join(f"  {i+1}. {step}" for i, step in enumerate(MANDATORY_INVESTIGATION_PLAN))
         return (
             False,
-            f"[INVESTIGATION COMPLETION GATES FAILED] Request classified as '{intent}'.\n"
+            f"[INVESTIGATION COMPLETION GATES FAILED] Request classified as '{_intent}'.\n"
             f"Current Investigation State: {current_state.value} (Must transition to REPORTING to finish).\n\n"
             f"Missing Mandatory Evidence Requirements:\n{formatted_missing}\n\n"
             f"Current Coverage Metrics:\n"

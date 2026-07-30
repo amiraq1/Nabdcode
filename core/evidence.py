@@ -630,12 +630,18 @@ class Verifier:
         minimum_reads: int = 0,
         requires_root_listing: bool = False,
         required_target: str = "",
+        intent: Optional[str] = None,
     ) -> None:
         """Raise VerifierError if any check fails.
 
         PATCH-R4.1: Accepts IntentPolicy params (minimum_reads,
         requires_root_listing, required_target) and forwards them
         to check_investigation_gates() for unified policy alignment.
+
+        PATCH-R4.2: Accepts pre-classified ``intent`` param. When
+        provided, ``check_investigation_gates`` uses it INSTEAD of
+        calling ``classify_intent(user_prompt)``, eliminating dynamic
+        reclassification at the choke point.
         """
         if require_tools and not records:
             raise VerifierError(
@@ -653,6 +659,7 @@ class Verifier:
                 minimum_reads=minimum_reads,
                 requires_root_listing=requires_root_listing,
                 required_target=required_target,
+                intent=intent,
             )
             if not passed:
                 raise VerifierError(details)
@@ -828,6 +835,7 @@ class EvidenceLog:
         require_tools: bool = True, user_prompt: str = "",
         minimum_reads: int = 0, requires_root_listing: bool = False,
         required_target: str = "",
+        intent: Optional[str] = None,
     ) -> VerificationResult:
         """Run fresh-context verification (L1) without execution history bias.
 
@@ -835,6 +843,11 @@ class EvidenceLog:
         requires_root_listing, required_target) and passes them through
         to Verifier.verify(), which forwards them to
         check_investigation_gates() for unified policy alignment.
+
+        PATCH-R4.2: Accepts pre-classified ``intent`` param. When
+        provided, ``check_investigation_gates`` uses it INSTEAD of
+        calling ``classify_intent(user_prompt)``, eliminating dynamic
+        reclassification at the choke point.
         """
         if not require_tools:
             return VerificationResult(
@@ -873,6 +886,7 @@ class EvidenceLog:
             minimum_reads=minimum_reads,
             requires_root_listing=requires_root_listing,
             required_target=required_target,
+            intent=intent,
         )
         result = StructuralVerifier.verify(
             claim=claim,

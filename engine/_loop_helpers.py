@@ -347,36 +347,119 @@ def _is_substantive_evidence(tool_name: str, success: bool, output: str) -> bool
 def _normalize_path(path: str) -> str:
     """Normalize a relative file path for cross-repository matching.
 
+    PATCH-R4.2: Expanded edge-case coverage:
     - Rejects absolute paths (starting with /)
     - Rejects paths with '..' traversal components
     - Strips leading ``./`` or ``.`` prefixes
+    - Removes all ``.`` (current directory) path components
     - Normalizes backslash separators to forward slashes
+    - Collapses double slashes (//) to single (after UNC check)
+    - Strips NUL characters (\\0)
+    - Rejects UNC paths (//server, \\server)
+    - Rejects home-directory references (~)
     - Returns the canonical relative path
 
-    Raises ``ValueError`` on rejection (absolute or traversal).
+    Raises ``ValueError`` on rejection (absolute or traversal or UNC).
 
     Examples::
-        _normalize_path("src/app.py")        -> "src/app.py"
-        _normalize_path("./src/app.py")       -> "src/app.py"
-        _normalize_path("/etc/passwd")         -> raises ValueError
-        _normalize_path("../secret.txt")       -> raises ValueError
-        _normalize_path("core\\utils\\h.py")  -> "core/utils/h.py"
+        _normalize_path("src/app.py")             -> "src/app.py"
+        _normalize_path("./src/app.py")            -> "src/app.py"
+        _normalize_path("/etc/passwd")              -> raises ValueError
+        _normalize_path("../secret.txt")            -> raises ValueError
+        _normalize_path("core\\\\utils\\\\h.py")   -> "core/utils/h.py"
+        _normalize_path("src//app.py")              -> "src/app.py"
+        _normalize_path("./core/./utils/file.py")   -> "core/utils/file.py"
     """
     if not path:
         return ""
+    # Strip NUL characters
+    normalized = path.replace("\0", "")
     # Normalize backslashes to forward slashes
-    normalized = path.replace("\\", "/")
+    normalized = normalized.replace("\\", "/")
     # Strip leading ./ prefix
     while normalized.startswith("./"):
         normalized = normalized[2:]
+    # Strip leading .
+    if normalized == ".":
+        return ""
+    # Reject UNC paths (starts with //) — must check BEFORE collapsing
+    # double slashes, otherwise //server becomes /server (absolute).
+    if normalized.startswith("//"):
+        raise ValueError(f"UNC-like path rejected: {path}")
     # Reject absolute paths (starting with /)
     if normalized.startswith("/"):
         raise ValueError(f"Absolute path rejected: {path}")
-    # Reject path traversal (.. components)
+    # Reject home-directory references
+    if normalized.startswith("~"):
+        raise ValueError(f"Home-directory path rejected: {path}")
+    # Collapse double slashes to single
+    while "//" in normalized:
+        normalized = normalized.replace("//", "/")
+    # Collapse . path components (current directory) anywhere in the path
     parts = normalized.split("/")
+    parts = [p for p in parts if p != "."]
+    normalized = "/".join(parts)
+    # Reject path traversal (.. components)
     if ".." in parts:
         raise ValueError(f"Path traversal rejected: {path}")
     return normalized
+
+
+def _check_required_target_in_evidence(
+    required_target: str, evidence_log: Any,
+) -> tuple[bool, str]:
+    """Check if a required target file was actually read via trusted tool metadata.
+
+    PATCH-R4.2: Extracts paths from TRUSTED tool metadata (tool=='file_system',
+    action=='read', success==True), NOT from LLM output or raw snippets.
+    Normalizes BOTH the policy target and the evidence path using
+    ``_normalize_path()`` and compares the FULL relative paths (not basenames).
+
+    Args:
+        required_target: The target path from IntentPolicy.required_target.
+        evidence_log: EvidenceLog instance with get_records().
+
+    Returns:
+        (True, "") if the target was found, (False, reason) otherwise.
+    """
+    if not required_target:
+        return (True, "no target required")
+
+    try:
+        normalized_target = _normalize_path(required_target)
+    except ValueError:
+        return (False, f"required_target contains invalid path: {required_target}")
+
+    if not normalized_target:
+        return (True, "no target required")
+
+    records = evidence_log.get_records() if evidence_log else []
+    for rec in records:
+        if not rec.success:
+            continue
+        tool = getattr(rec, "tool", "") or ""
+        action = getattr(rec, "action", "") or ""
+        cmd_path = str(getattr(rec, "command_or_path", "") or "").strip()
+
+        # Only trust file_system read actions with success=True
+        if tool != "file_system" or action not in ("read", "edit", "view"):
+            continue
+
+        try:
+            normalized_evidence = _normalize_path(cmd_path)
+        except ValueError:
+            continue
+
+        # Compare FULL normalized relative paths (not basenames)
+        if normalized_evidence == normalized_target:
+            return (True, f"required target '{required_target}' confirmed in evidence")
+
+    return (
+        False,
+        f"required target '{required_target}' not found in trusted evidence "
+        f"(searched {len(records)} record(s), tool=file_system action=read success=True). "
+        f"Normalized target: '{normalized_target}'.",
+    )
 
 
 def _type_name(t: Any) -> str:
