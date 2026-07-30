@@ -1553,16 +1553,47 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # engine.deep_agent.classify_intent) so the result is an InvestigationIntent
         # enum value that _get_intent_policy can type-check.
         from core.investigation import classify_intent as classify_investigation_intent
-        from engine._loop_helpers import _get_intent_policy
+        from engine._loop_helpers import _get_intent_policy, _commit_terminal_outcome
         investigation_intent = classify_investigation_intent(user_prompt)
-        _policy = _get_intent_policy(investigation_intent)
+        # PATCH-INTENT-ROUTING-R4: Graceful TypeError handling — if an invalid
+        # string/type somehow reaches _get_intent_policy, route to FAILED via
+        # the centralized TurnFinalizer instead of crashing with a traceback.
+        try:
+            _policy = _get_intent_policy(investigation_intent)
+        except TypeError as _r4_err:
+            from engine._loop_types import IntentPolicy
+            _policy = IntentPolicy()  # safest default (all gates off)
+            _commit_terminal_outcome(
+                self,
+                status="FAILED",
+                reason="intent_classification_type_error",
+                output=str(_r4_err),
+                fallback_msg="Intent classification failed: invalid taxonomy type.",
+            )
+            return self._turn_finalizer.outcome
         # PATCH-INTENT-ROUTING-R4: For SINGLE_FILE_LOOKUP, extract the target file
         # from the user prompt and store it on the policy.
         if investigation_intent == "Single File Lookup":
             import re as _re
-            _m = _re.search(r"(?:read|view|show|cat|check|inspect)\s+([\w/\-\.]+\.\w+)", user_prompt, _re.IGNORECASE)
-            if _m:
-                _policy.required_target = _m.group(1)
+            # PATCH-INTENT-ROUTING-R4: Extract target path from the user prompt.
+            # Handle quotes at the Python level before regex (avoids "\" in
+            # raw strings) so inline quoted paths like Read "file.py" work.
+            _verb_match = _re.match(
+                r"(?:read|view|show|cat|check|inspect)\s+", user_prompt, _re.IGNORECASE,
+            )
+            if _verb_match:
+                _after_verb = user_prompt[_verb_match.end():]
+                # Strip one leading quote if present (handles Read "file.py")
+                if _after_verb and _after_verb[0] in ("'", '"'):
+                    _after_verb = _after_verb[1:]
+                _m = _re.search(r"([\w/\-\.]+(?:\.[a-zA-Z]\w+))", _after_verb)
+                if _m:
+                    _raw = _m.group(1)
+                    # Path traversal prevention
+                    if '..' in _raw.split('/') or _raw.startswith('/'):
+                        _policy.required_target = _raw  # store for diagnostics
+                    else:
+                        _policy.required_target = _raw
         self._ctx = _LoopCtx(
             user_prompt=user_prompt,
             intent=investigation_intent,

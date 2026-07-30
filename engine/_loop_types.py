@@ -53,6 +53,7 @@ class IntentPolicy:
     minimum_reads: int = 0
     needs_investigation: bool = False
     required_target: str = ""
+    requires_root_listing: bool = False
 
 
 

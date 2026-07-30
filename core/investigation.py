@@ -78,8 +78,25 @@ def classify_intent(user_prompt: str) -> str:
     # PATCH-INTENT-ROUTING-R4: Remove the trailing $ anchor so prompts like
     # "Read broken_script.py and identify the syntax error only." are correctly
     # classified as SINGLE_FILE_LOOKUP instead of falling through to TOOL_EXECUTION.
-    if re.search(r"^(?:read|view|show|cat|check|inspect)\s+[\w/\-\.]+\.\w+", lower):
-        return InvestigationIntent.SINGLE_FILE_LOOKUP
+    # HARDENING: Before returning SINGLE_FILE_LOOKUP, check if the rest of the
+    # prompt after the file path contains repo-scope keywords. If it does, fall
+    # through so multi-stage classification takes priority.
+    _s1_match = re.search(r"^(?:read|view|show|cat|check|inspect)\s+([\w/\-\.]+\.\w+)", lower)
+    if _s1_match:
+        _rest_of_prompt = lower[_s1_match.end():].strip()
+        _repo_keywords = (
+            "repo", "repository", "codebase", "project", "workspace",
+            "architecture", "system design", "entire", "all files",
+            "analyze the", "review the", "explore the",
+            "مستودع", "الكود", "المشروع", "الشيفرة", "الريبو",
+        )
+        # If the remainder of the prompt contains repo-scope keywords,
+        # reject SINGLE_FILE_LOOKUP — this is a multi-stage request.
+        if any(kw in _rest_of_prompt for kw in _repo_keywords):
+            # Fall through; do NOT return SINGLE_FILE_LOOKUP.
+            pass
+        else:
+            return InvestigationIntent.SINGLE_FILE_LOOKUP
 
     # Tool Execution / Specific target actions
     if any(lower.startswith(act) or f" {act} " in lower for act in ("run ", "execute ", "test ", "compile ", "build ", "pytest ", "git ")):

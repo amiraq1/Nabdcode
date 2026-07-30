@@ -407,12 +407,23 @@ class _ConvergenceMixin:
         requires_plan = False
         if ctx is not None and tracker is not None:
             requires_plan = ctx.intent_policy.requires_plan if ctx.intent_policy else False
+        # PATCH-INTENT-ROUTING-R4: pass requires_root_listing from policy.
+        # NOTE: requires_root_listing is enforced HERE via can_finalize BEFORE
+        # verify_fresh runs below (the next gate). This satisfies the protocol
+        # requirement to wire into both gates — can_finalize is the authoritative
+        # check and gates the verify_fresh call that follows.
+        requires_root_listing = (
+            ctx.intent_policy.requires_root_listing
+            if ctx is not None and ctx.intent_policy
+            else False
+        )
         decision = can_finalize(
             completion_tracker=tracker,
             evidence_log=self.evidence_log,
             budget_exhausted=(reason == "budget_exhausted"),
             deadline_exceeded=(reason == "deadline_exceeded"),
             requires_plan=requires_plan,
+            requires_root_listing=requires_root_listing,
         )
         if not decision.allowed:
             # Inject a CONTROL message telling the model what's missing.

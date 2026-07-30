@@ -242,6 +242,7 @@ def can_finalize(
     deadline_exceeded: bool = False,
     completion_tracker: "CompletionTracker | None" = None,
     requires_plan: bool = False,
+    requires_root_listing: bool = False,
 ) -> FinalizationDecision:
     """Determine whether a final answer may be emitted.
 
@@ -262,11 +263,41 @@ def can_finalize(
             items are available. This prevents the agent from bypassing the
             convergence gate by simply not having a tracker. For chitchat /
             non-investigation prompts, leave False.
+        requires_root_listing: When True, fail closed if no ``file_system``
+            ``list`` action exists in the evidence log. This enforces that
+            architecture/repository reviews must explore the directory
+            structure before finalizing.
 
     Returns:
         FinalizationDecision with allowed=True only if every completion item
         is in an allowed status and (for 'done') has matching evidence.
     """
+    # ── Root listing enforcement ───────────────────────────────────────
+    # When requires_root_listing is True, at least one successful
+    # file_system list action must exist in the evidence log.
+    if requires_root_listing and evidence_log is not None:
+        try:
+            records = evidence_log.get_records()
+        except Exception:
+            records = []
+        _has_listing = any(
+            getattr(r, "success", False)
+            and getattr(r, "tool", "") == "file_system"
+            and getattr(r, "action", "") == "list"
+            for r in records
+        )
+        if not _has_listing:
+            return FinalizationDecision(
+                allowed=False,
+                blocking_todos=[],
+                blocked_reason=(
+                    "Root listing required but no file_system list action "
+                    "found in evidence (fail-closed)."
+                ),
+                evidence_summary="(no directory listing captured)",
+                todo_links=[],
+                partial=False,
+            )
     # ── Resolve completion items from tracker or todo_manager ────────────
     completion_items: list[CompletionItem] = []
     if completion_tracker is not None:

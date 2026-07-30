@@ -400,10 +400,17 @@ def _get_intent_policy(intent: str) -> "IntentPolicy":
         is_multi_stage_investigation = lambda x: False
 
     if is_multi_stage_investigation(intent):
+        # PATCH-INTENT-ROUTING-R4: requires_root_listing=True for ARCHITECTURE_REVIEW
+        # and REPOSITORY_INVESTIGATION. Other multi-stage intents also need it.
+        _root_listing = intent in (
+            InvestigationIntent.ARCHITECTURE_REVIEW,
+            InvestigationIntent.REPOSITORY_INVESTIGATION,
+        )
         return IntentPolicy(
             requires_plan=True,
             minimum_reads=3,
             needs_investigation=True,
+            requires_root_listing=_root_listing,
         )
 
     if intent == InvestigationIntent.SINGLE_FILE_LOOKUP:
@@ -411,6 +418,7 @@ def _get_intent_policy(intent: str) -> "IntentPolicy":
             requires_plan=False,
             minimum_reads=1,
             needs_investigation=True,
+            requires_root_listing=False,
         )
 
     # Chat, Tool Execution, or unknown → no gate.
@@ -418,6 +426,7 @@ def _get_intent_policy(intent: str) -> "IntentPolicy":
         requires_plan=False,
         minimum_reads=0,
         needs_investigation=False,
+        requires_root_listing=False,
     )
 
 
