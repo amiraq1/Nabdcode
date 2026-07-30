@@ -438,17 +438,16 @@ class FileSystemTool(BaseTool):
         if n_err:
             summary += f" ({n_err} error(s))"
 
-        # PATCH-R4.4: Include workspace_relative_path from the first successful read.
-        _first_success = next((p for p, v in results.items() if not v.startswith("Error")), None)
-        _md: dict[str, Any] = {}
-        if _first_success:
-            _md["workspace_relative_path"] = _first_success
-
+        # PATCH-R4.5: Batch read isolation — action="read_many", path="".
+        # The `_check_required_target_in_evidence` gate requires action in
+        # {"read", "view"}, so "read_many" inherently fails to satisfy the target
+        # gate. This is the intended fail-closed behavior.
+        # NOTE: ToolResult does NOT accept a `summary` keyword argument.
+        # The summary string is embedded in stdout via header lines above.
         return ToolResult(
             success=n_ok > 0,
             stdout=combined,
-            summary=summary,
-            metadata=_md,
+            metadata={"action": "read_many"},
         )
 
     def _handle_edit(self, path_str: str, target: Path, kwargs: dict[str, Any]) -> ToolResult:
