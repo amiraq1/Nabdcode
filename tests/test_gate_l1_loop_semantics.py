@@ -4,9 +4,8 @@ from unittest import TestCase
 
 class TestGateL1TruthTableSemantics(TestCase):
     MANIFEST_AST_SITES = [
-        ('engine/_budget.py', 80, 'CONTINUE'),
-        ('engine/_budget.py', 81, 'TERMINATE'),
-        ('engine/_budget.py', 82, 'PROCEED'),
+        ('engine/_budget.py', 95, 'TERMINATE'),
+        ('engine/_budget.py', 96, 'PROCEED'),
         ('engine/_convergence.py', 245, 'CONTINUE'),
         ('engine/_convergence.py', 288, 'CONTINUE'),
         ('engine/_convergence.py', 297, 'TERMINATE'),
@@ -17,26 +16,26 @@ class TestGateL1TruthTableSemantics(TestCase):
         ('engine/_tool_runner.py', 144, 'PROCEED'),
         ('engine/loop.py', 387, 'TERMINATE'),
         ('engine/loop.py', 388, 'CONTINUE'),
-        ('engine/loop.py', 788, 'TERMINATE'),
-        ('engine/loop.py', 804, 'TERMINATE'),
-        ('engine/loop.py', 808, 'PROCEED'),
-        ('engine/loop.py', 890, 'CONTINUE'),
-        ('engine/loop.py', 895, 'CONTINUE'),
-        ('engine/loop.py', 897, 'PROCEED'),
-        ('engine/loop.py', 932, 'CONTINUE'),
-        ('engine/loop.py', 938, 'PROCEED'),
-        ('engine/loop.py', 972, 'CONTINUE'),
+        ('engine/loop.py', 805, 'TERMINATE'),
+        ('engine/loop.py', 826, 'TERMINATE'),
+        ('engine/loop.py', 830, 'PROCEED'),
+        ('engine/loop.py', 912, 'CONTINUE'),
+        ('engine/loop.py', 917, 'CONTINUE'),
+        ('engine/loop.py', 919, 'PROCEED'),
+        ('engine/loop.py', 954, 'CONTINUE'),
+        ('engine/loop.py', 960, 'PROCEED'),
         ('engine/loop.py', 994, 'CONTINUE'),
-        ('engine/loop.py', 997, 'PROCEED'),
-        ('engine/loop.py', 1030, 'PROCEED'),
-        ('engine/loop.py', 1559, 'TERMINATE'),
-        ('engine/loop.py', 1562, 'TERMINATE'),
-        ('engine/loop.py', 1580, 'CONTINUE'),
+        ('engine/loop.py', 1016, 'CONTINUE'),
+        ('engine/loop.py', 1019, 'PROCEED'),
+        ('engine/loop.py', 1052, 'PROCEED'),
+        ('engine/loop.py', 1657, 'TERMINATE'),
+        ('engine/loop.py', 1660, 'TERMINATE'),
+        ('engine/loop.py', 1678, 'CONTINUE'),
     ]
 
     def test_truth_table_every_return_site_enumerated(self):
-        """Must list exactly the 28 required AST sites."""
-        self.assertEqual(len(self.MANIFEST_AST_SITES), 28)
+        """Must list exactly the 27 required AST sites."""
+        self.assertEqual(len(self.MANIFEST_AST_SITES), 27)
 
     def test_truth_table_manifest_matches_ast(self):
         """Parses the actual AST of loop.py to ensure the manifest matches identically."""
@@ -73,7 +72,7 @@ class TestGateL1TruthTableSemantics(TestCase):
 
     def test_no_security_gate_skip_per_signal(self):
         """Security checks correctly return CONTINUE to block tools or PROCEED to evaluate further."""
-        sec_guards = [s for s in self.MANIFEST_AST_SITES if s[0] == "engine/loop.py" and s[1] in (972, 994, 997, 1030)]
+        sec_guards = [s for s in self.MANIFEST_AST_SITES if s[0] == "engine/loop.py" and s[1] in (994, 1016, 1019, 1052)]
         self.assertTrue(any(s[2] == "CONTINUE" for s in sec_guards))
         self.assertTrue(any(s[2] == "PROCEED" for s in sec_guards))
         self.assertTrue(all(s[2] in ("CONTINUE", "PROCEED") for s in sec_guards))
