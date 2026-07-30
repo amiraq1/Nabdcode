@@ -36,6 +36,11 @@ BUDGET_SOFT_WARN_RATIO: Final[float] = 0.80  # final 20% of budget is reserved f
 class IntentPolicy:
     """Convergence policy derived from a single ``classify_intent()`` call.
 
+    PATCH-R4.3: Added ``required_evidence_actions`` — set of tool actions that
+    satisfy the evidence gate for this intent. ``SINGLE_FILE_LOOKUP`` requires
+    ``{"read", "view"}`` only (NOT ``edit`` or ``write``). Multi-stage intents
+    leave it empty (the read-count gate applies instead).
+
     Attributes:
         requires_plan:  When True, a CompletionTracker must be present before
                         finalization is allowed (fail-closed).
@@ -47,6 +52,9 @@ class IntentPolicy:
         required_target: For SINGLE_FILE_LOOKUP, the specific file path that
                         should be read (e.g. "broken_script.py"). Empty string
                         for other intents.
+        required_evidence_actions: Set of tool ``action`` values that satisfy
+                        the evidence gate. ``SINGLE_FILE_LOOKUP`` uses
+                        ``{"read", "view"}``. Empty set means no action filter.
     """
 
     requires_plan: bool = False
@@ -54,6 +62,7 @@ class IntentPolicy:
     needs_investigation: bool = False
     required_target: str = ""
     requires_root_listing: bool = False
+    required_evidence_actions: frozenset[str] = field(default_factory=frozenset)
 
 
 

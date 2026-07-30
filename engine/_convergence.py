@@ -453,9 +453,13 @@ class _ConvergenceMixin:
         # LLM output parsing.
         if ctx is not None and ctx.intent_policy and ctx.intent_policy.required_target:
             from engine._loop_helpers import _check_required_target_in_evidence
+            # PATCH-R4.3: Pass required_evidence_actions from policy so
+            # edit/write actions do NOT satisfy a read-intent target check.
+            _target_actions = ctx.intent_policy.required_evidence_actions if ctx.intent_policy else frozenset()
             _target_ok, _target_reason = _check_required_target_in_evidence(
                 ctx.intent_policy.required_target,
                 self.evidence_log,
+                required_evidence_actions=_target_actions,
             )
             if not _target_ok:
                 self._evidence_rejection_count += 1

@@ -354,12 +354,12 @@ def _normalize_path(path: str) -> str:
     - Removes all ``.`` (current directory) path components
     - Normalizes backslash separators to forward slashes
     - Collapses double slashes (//) to single (after UNC check)
-    - Strips NUL characters (\\0)
     - Rejects UNC paths (//server, \\server)
     - Rejects home-directory references (~)
+    - HARD-REJECTS NUL bytes (\\0) — raises ValueError, no stripping
     - Returns the canonical relative path
 
-    Raises ``ValueError`` on rejection (absolute or traversal or UNC).
+    Raises ``ValueError`` on rejection (absolute, traversal, UNC, NUL).
 
     Examples::
         _normalize_path("src/app.py")             -> "src/app.py"
@@ -369,11 +369,14 @@ def _normalize_path(path: str) -> str:
         _normalize_path("core\\\\utils\\\\h.py")   -> "core/utils/h.py"
         _normalize_path("src//app.py")              -> "src/app.py"
         _normalize_path("./core/./utils/file.py")   -> "core/utils/file.py"
+        _normalize_path("src\x00/app.py")         -> raises ValueError(TARGET_PATH_INVALID_NUL)
     """
     if not path:
         return ""
-    # Strip NUL characters
-    normalized = path.replace("\0", "")
+    # PATCH-R4.3: Hard NUL rejection — do NOT strip.
+    if "\0" in path:
+        raise ValueError(f"TARGET_PATH_INVALID_NUL: {path}")
+    normalized = str(path)
     # Normalize backslashes to forward slashes
     normalized = normalized.replace("\\", "/")
     # Strip leading ./ prefix
@@ -407,6 +410,7 @@ def _normalize_path(path: str) -> str:
 
 def _check_required_target_in_evidence(
     required_target: str, evidence_log: Any,
+    required_evidence_actions: frozenset[str] = frozenset(),
 ) -> tuple[bool, str]:
     """Check if a required target file was actually read via trusted tool metadata.
 
@@ -415,9 +419,18 @@ def _check_required_target_in_evidence(
     Normalizes BOTH the policy target and the evidence path using
     ``_normalize_path()`` and compares the FULL relative paths (not basenames).
 
+    PATCH-R4.3: Accepts ``required_evidence_actions`` parameter (from
+    IntentPolicy) that defines which tool ``action`` values are acceptable.
+    ``edit`` is NOT a valid read action unless explicitly permitted.
+    Extracts the canonical path from trusted metadata ``workspace_relative_path``
+    (when available on the record) or ``command_or_path`` — NEVER from raw
+    LLM output snippets.
+
     Args:
         required_target: The target path from IntentPolicy.required_target.
         evidence_log: EvidenceLog instance with get_records().
+        required_evidence_actions: Set of acceptable tool actions.
+            If empty, defaults to {"read", "view"} (read-intent semantics).
 
     Returns:
         (True, "") if the target was found, (False, reason) otherwise.
@@ -427,11 +440,14 @@ def _check_required_target_in_evidence(
 
     try:
         normalized_target = _normalize_path(required_target)
-    except ValueError:
-        return (False, f"required_target contains invalid path: {required_target}")
+    except ValueError as exc:
+        return (False, f"required_target contains invalid path: {required_target} ({exc})")
 
     if not normalized_target:
         return (True, "no target required")
+
+    # Determine acceptable actions. Default to read/view for backward compat.
+    _allowed_actions = required_evidence_actions if required_evidence_actions else frozenset({"read", "view"})
 
     records = evidence_log.get_records() if evidence_log else []
     for rec in records:
@@ -439,10 +455,19 @@ def _check_required_target_in_evidence(
             continue
         tool = getattr(rec, "tool", "") or ""
         action = getattr(rec, "action", "") or ""
-        cmd_path = str(getattr(rec, "command_or_path", "") or "").strip()
 
-        # Only trust file_system read actions with success=True
-        if tool != "file_system" or action not in ("read", "edit", "view"):
+        # Only trust file_system actions with the allowed actions
+        if tool != "file_system" or action not in _allowed_actions:
+            continue
+
+        # PATCH-R4.3: Extract path from trusted metadata. Prefer
+        # workspace_relative_path (post-execution metadata from the tool itself)
+        # over command_or_path (which comes from LLM tool arguments).
+        # If neither is available, skip this record.
+        cmd_path = str(getattr(rec, "workspace_relative_path", "") or "").strip()
+        if not cmd_path:
+            cmd_path = str(getattr(rec, "command_or_path", "") or "").strip()
+        if not cmd_path:
             continue
 
         try:
@@ -457,7 +482,8 @@ def _check_required_target_in_evidence(
     return (
         False,
         f"required target '{required_target}' not found in trusted evidence "
-        f"(searched {len(records)} record(s), tool=file_system action=read success=True). "
+        f"(searched {len(records)} record(s), tool=file_system "
+        f"action in {sorted(_allowed_actions)} success=True). "
         f"Normalized target: '{normalized_target}'.",
     )
 
@@ -532,11 +558,14 @@ def _get_intent_policy(intent: str) -> "IntentPolicy":
         )
 
     if intent == InvestigationIntent.SINGLE_FILE_LOOKUP:
+        # PATCH-R4.3: SINGLE_FILE_LOOKUP strictly requires read/view actions.
+        # A simple edit/write MUST NOT satisfy a read intent.
         return IntentPolicy(
             requires_plan=False,
             minimum_reads=1,
             needs_investigation=True,
             requires_root_listing=False,
+            required_evidence_actions=frozenset({"read", "view"}),
         )
 
     # Chat, Tool Execution, or unknown → no gate.
@@ -545,6 +574,7 @@ def _get_intent_policy(intent: str) -> "IntentPolicy":
         minimum_reads=0,
         needs_investigation=False,
         requires_root_listing=False,
+        required_evidence_actions=frozenset(),
     )
 
 

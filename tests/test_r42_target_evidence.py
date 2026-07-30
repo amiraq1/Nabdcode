@@ -79,12 +79,16 @@ class TestNormalizePathExtreme(unittest.TestCase):
             _normalize_path("~/projects/file.py")
 
     def test_nul_character_in_path(self):
-        """NUL characters are stripped"""
-        self.assertEqual(_normalize_path("src\0/app.py"), "src/app.py")
+        """PATCH-R4.3: NUL characters are HARD-REJECTED."""
+        with self.assertRaises(ValueError) as ctx:
+            _normalize_path("src\0/app.py")
+        self.assertIn("NUL", str(ctx.exception))
 
     def test_nul_only_path(self):
-        """Path with only NUL returns empty"""
-        self.assertEqual(_normalize_path("\0\0\0"), "")
+        """PATCH-R4.3: Path with only NUL is HARD-REJECTED."""
+        with self.assertRaises(ValueError) as ctx:
+            _normalize_path("\0\0\0")
+        self.assertIn("NUL", str(ctx.exception))
 
     def test_empty_string(self):
         self.assertEqual(_normalize_path(""), "")

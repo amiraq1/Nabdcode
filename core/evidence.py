@@ -53,6 +53,11 @@ class EvidenceRecord:
     # Phase4: when True, this record is frozen and protected from context
     # compaction — it stays in the LLM context even outside the sliding window.
     critical: bool = False
+    # PATCH-R4.3: Workspace-relative path from tool post-execution metadata.
+    # Set by tool-execution infrastructure when available. Preferred over
+    # ``command_or_path`` for trusted path matching because it comes from the
+    # tool's own resolution logic (not raw LLM tool-arguments).
+    workspace_relative_path: str = ""
     # Timestamp of record creation (seconds since epoch). Set automatically
     # by EvidenceLog.record() or by caller.
     timestamp: float = 0.0
@@ -75,6 +80,7 @@ class EvidenceRecord:
         timestamp: float = 0.0,
         call_id: str = "",
         action: str = "",
+        workspace_relative_path: str = "",
     ) -> None:
         object.__setattr__(self, "evidence_id", evidence_id if evidence_id != "E-0" else (call_id or "E-0"))
         object.__setattr__(self, "evidence_type", evidence_type)
@@ -85,6 +91,7 @@ class EvidenceRecord:
         object.__setattr__(self, "output_snippet", raw_output if raw_output is not None else output_snippet)
         object.__setattr__(self, "covered_subjects", covered_subjects)
         object.__setattr__(self, "critical", critical)
+        object.__setattr__(self, "workspace_relative_path", workspace_relative_path)
         object.__setattr__(self, "timestamp", timestamp)
 
     @property
@@ -116,6 +123,7 @@ class EvidenceRecord:
             "output_snippet": self.output_snippet,
             "covered_subjects": sorted(self.covered_subjects),
             "critical": self.critical,
+            "workspace_relative_path": self.workspace_relative_path,
             "timestamp": self.timestamp,
         }
 
@@ -131,6 +139,7 @@ class EvidenceRecord:
             covered_subjects=frozenset(d.get("covered_subjects", [])),
             critical=d.get("critical", False),
             action=d.get("action", ""),
+            workspace_relative_path=d.get("workspace_relative_path", ""),
             timestamp=d.get("timestamp", 0.0),
         )
 
