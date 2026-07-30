@@ -130,13 +130,19 @@ class TestNormalizePathExtreme(unittest.TestCase):
 # Mock helpers
 # =========================================================================
 
-def make_record(tool: str, action: str, command_or_path: str, success: bool = True):
-    """Create a minimal record-like object."""
+def make_record(tool: str, action: str, command_or_path: str, success: bool = True,
+                 workspace_relative_path: str = ""):
+    """Create a minimal record-like object.
+
+    PATCH-R4.4: workspace_relative_path is REQUIRED for file_system read actions
+    to pass the target evidence gate. Default is empty (will be rejected).
+    """
     return SimpleNamespace(
         tool=tool,
         action=action,
         command_or_path=command_or_path,
         success=success,
+        workspace_relative_path=workspace_relative_path,
     )
 
 
@@ -155,67 +161,81 @@ class MockEvidenceLog:
 class TestCheckRequiredTargetInEvidence(unittest.TestCase):
     """Step 1: Trusted Evidence Target Comparison + Step 4: 10 tests."""
 
-    # Test 1: Correct target passes
+    # Test 1: Correct target passes (needs workspace_relative_path per R4.4)
     def test_01_correct_target_passes(self):
         log = MockEvidenceLog([
-            make_record("file_system", "read", "src/app.py", success=True),
+            make_record("file_system", "read", "src/app.py", success=True,
+                       workspace_relative_path="src/app.py"),
         ])
-        ok, reason = _check_required_target_in_evidence("src/app.py", log)
+        ok, reason = _check_required_target_in_evidence("src/app.py", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertTrue(ok, f"Expected pass, got: {reason}")
 
     # Test 2: Unrelated target rejects
     def test_02_unrelated_target_rejects(self):
         log = MockEvidenceLog([
-            make_record("file_system", "read", "src/app.py", success=True),
+            make_record("file_system", "read", "src/app.py", success=True,
+                       workspace_relative_path="src/app.py"),
         ])
-        ok, reason = _check_required_target_in_evidence("other/file.txt", log)
+        ok, reason = _check_required_target_in_evidence("other/file.txt", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertFalse(ok, f"Expected reject, got: {reason}")
 
     # Test 3: Same basename in wrong dir rejects
     def test_03_same_basename_wrong_dir_rejects(self):
         log = MockEvidenceLog([
-            make_record("file_system", "read", "tests/config.py", success=True),
+            make_record("file_system", "read", "tests/config.py", success=True,
+                       workspace_relative_path="tests/config.py"),
         ])
-        ok, reason = _check_required_target_in_evidence("src/config.py", log)
+        ok, reason = _check_required_target_in_evidence("src/config.py", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertFalse(ok, "Expected reject (src/config.py != tests/config.py)")
-        self.assertIn("not found", reason.lower())
 
     # Test 4: Failed read evidence rejects
     def test_04_failed_read_rejects(self):
         log = MockEvidenceLog([
-            make_record("file_system", "read", "src/app.py", success=False),
+            make_record("file_system", "read", "src/app.py", success=False,
+                       workspace_relative_path="src/app.py"),
         ])
-        ok, reason = _check_required_target_in_evidence("src/app.py", log)
+        ok, reason = _check_required_target_in_evidence("src/app.py", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertFalse(ok, f"Expected reject (failed read), got: {reason}")
 
     # Test 5: Directory list does not satisfy file read
     def test_05_directory_list_does_not_satisfy(self):
         log = MockEvidenceLog([
-            make_record("file_system", "list", "src", success=True),
+            make_record("file_system", "list", "src", success=True,
+                       workspace_relative_path="src"),
         ])
-        ok, reason = _check_required_target_in_evidence("src/app.py", log)
+        ok, reason = _check_required_target_in_evidence("src/app.py", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertFalse(ok, f"Expected reject (list != read), got: {reason}")
 
     # Test 6: LLM claiming without trusted metadata rejects
     def test_06_llm_claim_without_metadata_rejects(self):
         log = MockEvidenceLog([
-            make_record("execute_shell", "run", "cat src/app.py", success=True),
+            make_record("execute_shell", "run", "cat src/app.py", success=True,
+                       workspace_relative_path="src/app.py"),
         ])
-        ok, reason = _check_required_target_in_evidence("src/app.py", log)
+        ok, reason = _check_required_target_in_evidence("src/app.py", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertFalse(ok, "Expected reject (shell cat != file_system read)")
 
     # Test 7: Missing target rejects
     def test_07_missing_target_rejects(self):
         log = MockEvidenceLog([])
-        ok, reason = _check_required_target_in_evidence("src/app.py", log)
+        ok, reason = _check_required_target_in_evidence("src/app.py", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertFalse(ok, f"Expected reject (empty evidence), got: {reason}")
 
     # Test 8: Normalized matching (./ prefix)
     def test_08_normalized_matching_dot_slash(self):
         log = MockEvidenceLog([
-            make_record("file_system", "read", "./src/app.py", success=True),
+            make_record("file_system", "read", "./src/app.py", success=True,
+                       workspace_relative_path="src/app.py"),
         ])
-        ok, reason = _check_required_target_in_evidence("src/app.py", log)
+        ok, reason = _check_required_target_in_evidence("src/app.py", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertTrue(ok, f"Expected pass (normalized), got: {reason}")
 
     # Test 9: No target required passes
@@ -227,9 +247,11 @@ class TestCheckRequiredTargetInEvidence(unittest.TestCase):
     # Test 10: Backslash path matches
     def test_10_backslash_path_matches(self):
         log = MockEvidenceLog([
-            make_record("file_system", "read", "src\\app.py", success=True),
+            make_record("file_system", "read", "src\\app.py", success=True,
+                       workspace_relative_path="src/app.py"),
         ])
-        ok, reason = _check_required_target_in_evidence("src/app.py", log)
+        ok, reason = _check_required_target_in_evidence("src/app.py", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertTrue(ok, f"Expected pass (backslash norm), got: {reason}")
 
 
@@ -360,18 +382,21 @@ class TestNativeLiveSmoke(unittest.TestCase):
 
     def test_target_match_normalized(self):
         log = MockEvidenceLog([
-            make_record("file_system", "read", "core/loop.py", success=True),
+            make_record("file_system", "read", "core/loop.py", success=True,
+                       workspace_relative_path="core/loop.py"),
         ])
-        ok, reason = _check_required_target_in_evidence("core/loop.py", log)
+        ok, reason = _check_required_target_in_evidence("core/loop.py", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertTrue(ok, f"Expected pass, got: {reason}")
 
     def test_target_mismatch_same_basename(self):
         log = MockEvidenceLog([
-            make_record("file_system", "read", "src/config.py", success=True),
+            make_record("file_system", "read", "src/config.py", success=True,
+                       workspace_relative_path="src/config.py"),
         ])
-        ok, reason = _check_required_target_in_evidence("tests/config.py", log)
+        ok, reason = _check_required_target_in_evidence("tests/config.py", log,
+            required_evidence_actions=frozenset({"read", "view"}))
         self.assertFalse(ok, "Should reject: tests/config.py != src/config.py")
-        self.assertIn("not found", reason.lower())
 
 
 if __name__ == "__main__":

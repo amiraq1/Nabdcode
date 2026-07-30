@@ -32,7 +32,7 @@
       },
       "covered_subjects": {
         "type": "FrozenSet[str]",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "critical": {
         "type": "bool",
@@ -53,19 +53,19 @@
     "fields": {
       "ok": {
         "type": "bool",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "findings": {
         "type": "List[str]",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "level": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "scores": {
         "type": "Dict[str, float]",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       }
     }
   },
@@ -74,11 +74,11 @@
     "fields": {
       "id": {
         "type": "int",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "text": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "status": {
         "type": "TodoStatus",
@@ -90,7 +90,7 @@
       },
       "evidence_ids": {
         "type": "List",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "completed_at": {
         "type": "Union",
@@ -111,11 +111,11 @@
     "fields": {
       "allowed": {
         "type": "bool",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "blocking_todos": {
         "type": "list[TodoEvidenceLink]",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "blocked_reason": {
         "type": "str",
@@ -127,7 +127,7 @@
       },
       "todo_links": {
         "type": "list[TodoEvidenceLink]",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "partial": {
         "type": "bool",
@@ -140,19 +140,19 @@
     "fields": {
       "todo_id": {
         "type": "int",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "todo_text": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "status": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "evidence_ids": {
         "type": "list[str]",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "completed_at": {
         "type": "Optional[float]",
@@ -177,7 +177,7 @@
     "fields": {
       "turn_id": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "status": {
         "type": "TurnStatus",
@@ -205,7 +205,7 @@
       },
       "started_at": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "finished_at": {
         "type": "str",
@@ -218,47 +218,47 @@
     "fields": {
       "record_id": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "workspace_id": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "workspace_root_fingerprint": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "operation_id": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "sequence": {
         "type": "int",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "event_type": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "edit_id": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "operation_type": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "target_path_relative": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "expected_original_digest": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "intended_result_digest": {
         "type": "str",
-        "default": "<dataclasses._MISSING_TYPE object at 0x6f9779de80>"
+        "default": "<dataclasses._MISSING_TYPE object at 0x74657d5e80>"
       },
       "schema_version": {
         "type": "int",

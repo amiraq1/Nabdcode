@@ -723,7 +723,15 @@ class EvidenceLog:
 
     def record(self, tool: str, command_or_path: str, success: bool,
                output_snippet: str, critical: bool = False, action: str = "",
-               timestamp: float = 0.0) -> EvidenceRecord:
+               timestamp: float = 0.0,
+               workspace_relative_path: str = "") -> EvidenceRecord:
+        """Record a completed tool call.
+
+        PATCH-R4.4: Accepts ``workspace_relative_path`` — the canonical
+        workspace-relative path from the tool's post-execution metadata.
+        Used for trusted target verification instead of ``command_or_path``
+        (which comes from LLM tool arguments and can be forged).
+        """
         eid = self.next_id()
         rec = EvidenceRecord(
             evidence_id=eid,
@@ -735,13 +743,16 @@ class EvidenceLog:
             covered_subjects=_extract_subjects(tool, command_or_path),
             critical=critical,
             action=action,
+            workspace_relative_path=workspace_relative_path,
             timestamp=timestamp or time.time(),
         )
         self._records[eid] = rec
         return rec
 
     def flag_critical(self, evidence_id: str) -> None:
-        """Mark an existing record as Critical Evidence (frozen from compaction)."""
+        """Mark an existing record as Critical Evidence (frozen from compaction).
+        PATCH-R4.4: Preserves ``workspace_relative_path`` in the new record.
+        """
         rec = self._records.get(evidence_id)
         if rec is not None and not rec.critical:
             self._records[evidence_id] = EvidenceRecord(
@@ -753,6 +764,7 @@ class EvidenceLog:
                 output_snippet=rec.output_snippet,
                 covered_subjects=rec.covered_subjects,
                 critical=True,
+                workspace_relative_path=rec.workspace_relative_path,
             )
 
     def add(self, rec: EvidenceRecord) -> EvidenceRecord:

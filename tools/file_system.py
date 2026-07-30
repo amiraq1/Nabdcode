@@ -331,10 +331,24 @@ class FileSystemTool(BaseTool):
         return sanitize(text, preserve_tabs=True, preserve_newlines=True)
 
     def _read(self, path: Path) -> ToolResult:
-        """Single-file read, returning a ToolResult."""
+        """Single-file read, returning a ToolResult.
+
+        PATCH-R4.4: Includes ``workspace_relative_path`` in metadata for
+        trusted target verification. The path is resolved by the tool itself
+        (not from LLM arguments), so it is the authoritative source of truth.
+        """
         try:
             content = self._read_raw(path)
-            return ToolResult(success=True, stdout=content)
+            # Compute workspace-relative path for trusted evidence metadata.
+            try:
+                _rel = str(path.relative_to(self.workspace))
+            except (ValueError, AttributeError):
+                _rel = path.name
+            return ToolResult(
+                success=True,
+                stdout=content,
+                metadata={"workspace_relative_path": _rel},
+            )
         except (FileNotFoundError, IsADirectoryError, ValueError) as exc:
             return ToolResult(success=False, stderr=str(exc))
 
@@ -424,10 +438,17 @@ class FileSystemTool(BaseTool):
         if n_err:
             summary += f" ({n_err} error(s))"
 
+        # PATCH-R4.4: Include workspace_relative_path from the first successful read.
+        _first_success = next((p for p, v in results.items() if not v.startswith("Error")), None)
+        _md: dict[str, Any] = {}
+        if _first_success:
+            _md["workspace_relative_path"] = _first_success
+
         return ToolResult(
             success=n_ok > 0,
             stdout=combined,
             summary=summary,
+            metadata=_md,
         )
 
     def _handle_edit(self, path_str: str, target: Path, kwargs: dict[str, Any]) -> ToolResult:

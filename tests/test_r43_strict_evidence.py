@@ -83,10 +83,11 @@ class MockEvidenceLog:
 class TestStrictEvidenceActions(unittest.TestCase):
     """Step 2: evidence action must match policy.required_evidence_actions."""
 
-    def test_read_action_satisfies_single_file(self):
-        """read action must satisfy SINGLE_FILE_LOOKUP (requires read/view)."""
+    def test_read_action_satisfies_single_file_with_workspace_path(self):
+        """read action with workspace_relative_path set must satisfy SINGLE_FILE_LOOKUP."""
         log = MockEvidenceLog([
-            make_record("file_system", "read", "src/app.py", success=True),
+            make_record("file_system", "read", "src/app.py", success=True,
+                       workspace_relative_path="src/app.py"),
         ])
         actions = frozenset({"read", "view"})
         ok, reason = _check_required_target_in_evidence(
@@ -117,15 +118,16 @@ class TestStrictEvidenceActions(unittest.TestCase):
         )
         self.assertFalse(ok, f"Expected write to be rejected, got: {reason}")
 
-    def test_empty_actions_defaults_to_read_view(self):
-        """Empty required_evidence_actions defaults to read/view (backward compat)."""
+    def test_empty_actions_does_not_default(self):
+        """PATCH-R4.4: Empty required_evidence_actions now rejects (fail-closed)."""
         log = MockEvidenceLog([
             make_record("file_system", "read", "src/app.py", success=True),
         ])
         ok, reason = _check_required_target_in_evidence(
             "src/app.py", log, required_evidence_actions=frozenset(),
         )
-        self.assertTrue(ok, f"Expected empty actions to default to read, got: {reason}")
+        self.assertFalse(ok, f"Expected empty actions to reject, got: {reason}")
+        self.assertIn("INVALID_INTENT_POLICY", reason)
 
     def test_intent_policy_has_required_evidence_actions(self):
         """IntentPolicy must have required_evidence_actions field."""
@@ -143,7 +145,7 @@ class TestTrustedMetadataProvenance(unittest.TestCase):
     """Step 3: workspace_relative_path preferred over command_or_path."""
 
     def test_workspace_relative_path_used_when_present(self):
-        """When workspace_relative_path is set, it should be used."""
+        """When workspace_relative_path is set, it should be used for matching."""
         log = MockEvidenceLog([
             make_record(
                 tool="file_system", action="read", cmd="legacy/path.py",
@@ -153,11 +155,12 @@ class TestTrustedMetadataProvenance(unittest.TestCase):
         ])
         ok, reason = _check_required_target_in_evidence(
             "workspace/real/path.py", log,
+            required_evidence_actions=frozenset({"read", "view"}),
         )
         self.assertTrue(ok, f"Expected workspace_relative_path to match, got: {reason}")
 
-    def test_command_or_path_fallback_when_no_workspace_path(self):
-        """When workspace_relative_path is empty, command_or_path should be used."""
+    def test_command_or_path_fallback_rejected_when_no_workspace_path(self):
+        """PATCH-R4.4: command_or_path fallback is REMOVED — reject if no workspace_relative_path."""
         log = MockEvidenceLog([
             make_record(
                 tool="file_system", action="read", cmd="src/app.py",
@@ -165,8 +168,12 @@ class TestTrustedMetadataProvenance(unittest.TestCase):
                 workspace_relative_path="",
             ),
         ])
-        ok, reason = _check_required_target_in_evidence("src/app.py", log)
-        self.assertTrue(ok, f"Expected command_or_path fallback to match, got: {reason}")
+        ok, reason = _check_required_target_in_evidence(
+            "src/app.py", log,
+            required_evidence_actions=frozenset({"read", "view"}),
+        )
+        self.assertFalse(ok, f"Expected reject (no workspace_relative_path), got: {reason}")
+        self.assertIn("TRUSTED_TARGET_METADATA_MISSING", reason)
 
     def test_evidence_record_has_workspace_relative_path_field(self):
         """EvidenceRecord must have workspace_relative_path field."""

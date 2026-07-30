@@ -240,6 +240,12 @@ class _ToolDispatchMixin:
 
         # ── Evidence Recording ───────────────────────────────────────────────
         cmd_summary = _extract_cmd_or_path(tool_args)
+        # PATCH-R4.4: Extract workspace_relative_path from tool post-execution
+        # metadata. This is the canonical trusted path (resolved by the tool
+        # itself, NOT from LLM tool arguments). If not present, the field
+        # will be empty and the target evidence gate will reject accordingly.
+        _result_metadata = getattr(result, "metadata", None) or {}
+        _wrp = str(_result_metadata.get("workspace_relative_path", "") or "")
         rec = self.evidence_log.record(
             tool=tool_name,
             command_or_path=cmd_summary,
@@ -255,6 +261,7 @@ class _ToolDispatchMixin:
                 if isinstance(tool_args, dict)
                 else ""
             ),
+            workspace_relative_path=_wrp,
         )
 
         # ── Safe Telemetry Injection ─────────────────────────────────────────
