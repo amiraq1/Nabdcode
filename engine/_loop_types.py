@@ -27,6 +27,30 @@ MAX_CONSECUTIVE_NO_TOOL_ROUNDS: Final[int] = 3  # legacy reasoning-count cap (su
 MAX_NO_PROGRESS_STEPS: Final[int] = 3
 BUDGET_SOFT_WARN_RATIO: Final[float] = 0.80  # final 20% of budget is reserved for synthesis/finalization
 
+# ── IntentPolicy (PATCH-CORE-UNIFIED-R3) ────────────────────────────────────
+# Single source of truth for how an intent maps to convergence and read-count
+# requirements. Created once per run from classify_intent() and stored on _LoopCtx.
+
+
+@dataclass
+class IntentPolicy:
+    """Convergence policy derived from a single ``classify_intent()`` call.
+
+    Attributes:
+        requires_plan:  When True, a CompletionTracker must be present before
+                        finalization is allowed (fail-closed).
+        minimum_reads:  Minimum distinct file reads required before a final
+                        answer may be emitted. Applied upfront — NOT as a
+                        post-hoc hack.
+        needs_investigation: When True, the prompt requires tool-using
+                        investigation rather than chitchat.
+    """
+
+    requires_plan: bool = False
+    minimum_reads: int = 0
+    needs_investigation: bool = False
+
+
 # Prompt Leak Markers — shared between streaming and non-streaming paths.
 # Detects structural system markers leaked in model output and triggers
 # provider failover instead of displaying them to the user.
@@ -161,6 +185,10 @@ class _LoopCtx:
     # has been allowed this run. Permitted exactly ONCE so the model can satisfy
     # the verifier's "directories explored >= 1" gate without re-scanning.
     root_list_count: int = 0
+    # ── PATCH-CORE-UNIFIED-R3: intent + policy (single classification) ──
+    # Set once in run() via classify_intent(). NEVER re-classified dynamically.
+    intent: str = "Chat"
+    intent_policy: IntentPolicy = field(default_factory=IntentPolicy)
     # Phase 0 fix B: cumulative no-tool reasoning rounds that NEVER resets on a
     # transient tool call. DEPRECATED (superseded by consecutive_no_progress
     # + the step/budget hard ceilings) — the engine no longer increments it.

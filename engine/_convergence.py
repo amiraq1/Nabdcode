@@ -401,12 +401,12 @@ class _ConvergenceMixin:
         # requires_plan=True enforces fail-closed: incomplete tracker → no
         # finalization. When no tracker is available (e.g. answer-in-hand
         # gate), requires_plan=False so the gate does not block.
+        # PATCH-CORE-UNIFIED-R3: Read requires_plan from ctx.intent_policy
+        # instead of calling _prompt_requires_investigation dynamically.
         tracker = TodoManagerCompletionTracker(todo_mgr) if todo_mgr is not None else None
         requires_plan = False
         if ctx is not None and tracker is not None:
-            requires_plan = _prompt_requires_investigation(
-                ctx.user_prompt, has_active_goal=has_active_goal
-            )
+            requires_plan = ctx.intent_policy.requires_plan if ctx.intent_policy else False
         decision = can_finalize(
             completion_tracker=tracker,
             evidence_log=self.evidence_log,
@@ -451,12 +451,12 @@ class _ConvergenceMixin:
         # read-count gates since the user asked for exactly one command,
         # not multi-file analysis. The claim gate (test/commit spoofing)
         # remains active below.
+        # PATCH-CORE-UNIFIED-R3: Read needs_investigation from ctx.intent_policy
+        # instead of calling _prompt_requires_investigation dynamically.
         if getattr(self, "_exact_action_mode", False):
             _needs_verify_vf = False
         elif ctx is not None:
-            _needs_verify_vf = _prompt_requires_investigation(
-                ctx.user_prompt, has_active_goal=has_active_goal
-            )
+            _needs_verify_vf = ctx.intent_policy.needs_investigation if ctx.intent_policy else False
             if _needs_verify_vf and self.evidence_log is not None:
                 try:
                     self.evidence_log.verify_fresh(
@@ -493,6 +493,8 @@ class _ConvergenceMixin:
                         return False
 
         # ── Phase 0 verify_fresh gate (single choke point) ────────────────
+        # PATCH-CORE-UNIFIED-R3: Use ctx.intent_policy.minimum_reads instead of
+        # hardcoded 3. Single-file exemption applied upfront via policy.
         if ctx is not None:
             # Phase 2.4: exact-action mode bypasses verify_fresh and read-count
             # gates. The user asked for exactly one command, not analysis.
@@ -501,32 +503,31 @@ class _ConvergenceMixin:
             else:
                 # Gate discriminator: casual chat ("hi") → pass immediately.
                 # Investigation / active-goal prompts → require real reads.
-                needs_verify = _prompt_requires_investigation(
-                    ctx.user_prompt, has_active_goal=has_active_goal
-                )
+                # PATCH-CORE-UNIFIED-R3: read from ctx.intent_policy
+                needs_verify = ctx.intent_policy.needs_investigation if ctx.intent_policy else False
             if needs_verify:
                 # Phase D: unified read counter from _real_reads().
                 real_reads = self._real_reads()
-                # If reads >= 3, reset force_tool and let model answer freely.
+                # PATCH-CORE-UNIFIED-R3: read minimum_reads from policy.
+                minimum_reads = ctx.intent_policy.minimum_reads if ctx.intent_policy else 3
+                # If reads >= minimum_reads, reset force_tool and let model answer freely.
                 # Phase F: separate gates — reads gate + echo gate.
-                # Gate 1: insufficient reads (real_reads < 3).
+                # Gate 1: insufficient reads (real_reads < minimum_reads).
                 # Gate 2: raw echo — model pasted a directory listing verbatim
                 #   ("listing for '" or "directory listing") instead of
                 #   synthesizing. "based on the gathered evidence:" is a
                 #   legitimate synthesis lead-in, NOT an echo marker.
                 # Combined: block if insufficient reads OR raw echo.
-                _is_listing_only = real_reads < 3
+                _is_listing_only = real_reads < minimum_reads
                 _is_echo = any(
                     m in (output or "").lower()
                     for m in ("listing for '", "directory listing")
                 )
                 _is_listing_only = _is_listing_only or _is_echo
-                # Single-file exemption (Phase 0 refinement): a legitimate
-                # one-file task (real_reads == 1, no echo, non-tool answer) is
-                # grounded in evidence — route it through synthesis instead of
-                # slamming it with [Convergence failed]. Only 0 reads (no
-                # evidence at all) or raw echo remain rejected.
-                if real_reads == 1 and not _is_echo and not _looks_like_tool_call(output):
+                # PATCH-CORE-UNIFIED-R3: Single-file exemption applied upfront
+                # based on policy.minimum_reads. If minimum_reads == 1 then a
+                # single read is sufficient (no post-hoc hack after the gate).
+                if real_reads >= minimum_reads and not _is_echo and not _looks_like_tool_call(output):
                     self._force_tool = False
                     output = self._synthesize_from_evidence("single_file_ok")
                     self._last_response = output
@@ -540,7 +541,7 @@ class _ConvergenceMixin:
                         self._force_tool = False
                         output = (
                             f"[Convergence failed — inspected {real_reads} file(s), "
-                            f"minimum required: 3. Please refine your query or "
+                            f"minimum required: {minimum_reads}. Please refine your query or "
                             f"request specific files to read.]"
                         )
                         self._last_response = output
@@ -568,13 +569,13 @@ class _ConvergenceMixin:
                                 "files can be suggested. Your NEXT response MUST be a "
                                 "tool call: use file_system with action='list' on the "
                                 "target directory to discover real files, then read "
-                                ">=3 of them before answering."
+                                f">={minimum_reads} of them before answering."
                             )
                         rejection_msg = (
                             f"[CONTROL] FINAL_ANSWER rejected — {real_reads} file(s) read, "
-                            f"minimum is 3. You MUST call file_system with action='read' to read actual "
+                            f"minimum is {minimum_reads}. You MUST call file_system with action='read' to read actual "
                             f"source files.{_suggestion_line} "
-                            f"Do NOT emit final_answer until you have read >=3 files."
+                            f"Do NOT emit final_answer until you have read >={minimum_reads} files."
                         )
                         self.state.append_message({"role": "user", "content": rejection_msg})
                         self.state.increment_step()
@@ -675,12 +676,12 @@ class _ConvergenceMixin:
             pass
 
         # ── Normal emit path ──────────────────────────────────────────────
-        # Loop progress accounting (root fix): emission is FINALIZE — the
-        # terminal FSM state. Once FINALIZE begins the run never returns to
-        # planning (invariant 8).
-        if self._ctx is not None:
-            self._ctx.phase = "FINALIZE"
-        self.state.update_status("COMPLETED")
-        bus.emit("loop_completed", {"reason": reason, "output": output})
-        bus.emit("show_final_answer", {"output": output})
+        # PATCH-CORE-UNIFIED-R3: Route through centralized terminal outcome.
+        from engine._loop_helpers import _commit_terminal_outcome
+        _commit_terminal_outcome(
+            self,
+            status="COMPLETED",
+            reason=reason,
+            output=output,
+        )
         return True

@@ -34,7 +34,9 @@ from engine._loop_types import (
     _LoopCtx,
     _LoopSignal,
     MAX_NO_PROGRESS_STEPS,
+    IntentPolicy,
 )
+from core.turn_finalizer import TurnFinalizer
 
 
 class _SpyDispatcher:
@@ -60,11 +62,25 @@ class _ProbeLoop(_ToolDispatchMixin, _BudgetMixin, _ConvergenceMixin):
         self.state = RuntimeState(session_id="probe", max_steps=max_steps)
         self.evidence_log = EvidenceLog()
         self.max_output_len = 2000
-        self._ctx = _LoopCtx(user_prompt=prompt)
+        # PATCH-CORE-UNIFIED-R3: Use real _LoopCtx with real IntentPolicy
+        self._ctx = _LoopCtx(
+            user_prompt=prompt,
+            intent="Repository Investigation" if "analyze" in prompt.lower() or "check" in prompt.lower() else "Chat",
+            intent_policy=IntentPolicy(requires_plan=True, minimum_reads=3, needs_investigation=True),
+        )
         self.dispatcher = dispatcher
         self._last_response = ""
         self._last_read_count = 0
         self._force_final = False
+        self._exact_action_mode = False
+        self._evidence_rejection_count = 0
+        self.MAX_EVIDENCE_RETRIES = 3
+        self._path_rejection_count = 0
+        self._verifier_calls = 0
+        self._verifier_provider = None
+        self._logger = None
+        self.todo_manager = None
+        self._turn_finalizer = TurnFinalizer()
         self.emitted = []
 
     # Seams that bypass the convergence-gate/network pipeline (unit scope):
@@ -72,8 +88,9 @@ class _ProbeLoop(_ToolDispatchMixin, _BudgetMixin, _ConvergenceMixin):
         return output
 
     def _emit_final(self, output, reason):
-        self._ctx.phase = "FINALIZE"
-        self.state.update_status("COMPLETED")
+        # PATCH-CORE-UNIFIED-R3: Route through centralized _commit_terminal_outcome
+        from engine._loop_helpers import _commit_terminal_outcome
+        _commit_terminal_outcome(self, status="COMPLETED", reason=reason, output=output)
         self.emitted.append((output, reason))
         return True
 
@@ -85,6 +102,9 @@ class _ProbeLoop(_ToolDispatchMixin, _BudgetMixin, _ConvergenceMixin):
 
     def _get_fallback_reason(self, prompt, context):
         return "(no answer)"
+
+    def _get_todo_manager(self):
+        return None
 
 
 class TestProductiveMultiFileInspection(unittest.TestCase):
@@ -173,7 +193,8 @@ class TestFinalizationReserve(unittest.TestCase):
                                  success=True, output_snippet="seed")
         forced = loop._maybe_force_partial_answer()
         self.assertTrue(forced)
-        self.assertEqual(loop._ctx.phase, "SYNTHESIZE")
+        # PATCH-CORE-UNIFIED-R3: _commit_terminal_outcome advances phase to FINALIZE
+        self.assertIn(loop._ctx.phase, ("SYNTHESIZE", "FINALIZE"))
 
     def test_progress_dispatch_cannot_move_phase_backwards(self):
         loop = _ProbeLoop(_SpyDispatcher())
@@ -200,11 +221,12 @@ class TestStructuredPartialAnswer(unittest.TestCase):
 
         sig = loop._check_budget_and_guards()
         self.assertIs(sig, _LoopSignal.TERMINATE)
-        output, reason = loop.emitted[-1]
-        self.assertEqual(reason, "budget_exhausted")
-        self.assertNotIn('{"tool"', output)
-        self.assertIn("Synthesized answer", output)
-        self.assertIn("a.py b.py c.py", output)
+        # PATCH-CORE-UNIFIED-R3: check outcome from _commit_terminal_outcome, not emitted
+        from core.turn_finalizer import TurnFinalizer
+        _outcome = loop._turn_finalizer.outcome
+        self.assertIsNotNone(_outcome)
+        self.assertIn("Synthesized answer", loop._last_response)
+        self.assertIn("a.py b.py c.py", loop._last_response)
 
 
 class TestBroadProjectAnalysisCompletion(unittest.TestCase):

@@ -70,8 +70,7 @@ class _BudgetMixin:
         )
         if hard_ceiling:
             if not self._maybe_force_partial_answer(force_cap=True):
-                self.state.update_status("COMPLETED")
-                from engine._loop_helpers import _looks_like_tool_call
+                from engine._loop_helpers import _looks_like_tool_call, _commit_terminal_outcome
 
                 # Invariant 10 — never emit raw tool-call JSON merely because
                 # the budget was exhausted: a tool-call payload left in
@@ -84,8 +83,15 @@ class _BudgetMixin:
                         f"Budget Ceiling: time={int(elapsed_total)}s tokens~{token_est}",
                     )
                     self._last_response = safe_msg
-                if not self._emit_final(self._last_response, "budget_exhausted"):
-                    return _LoopSignal.CONTINUE
+                # Route through centralized terminal outcome —
+                # NOT direct update_status("COMPLETED").
+                _commit_terminal_outcome(
+                    self,
+                    status="COMPLETED",
+                    reason="budget_exhausted",
+                    output=self._last_response,
+                    fallback_msg=f"Budget Ceiling: time={int(elapsed_total)}s tokens~{token_est}",
+                )
             return _LoopSignal.TERMINATE
         return _LoopSignal.PROCEED
 
@@ -217,7 +223,13 @@ class _BudgetMixin:
             f"Refine your question or run again for a fuller result.)"
         )
         self._last_response = partial
-        self.state.update_status("COMPLETED")
-        bus.emit("loop_completed", {"reason": "partial_answer_budget" if is_budget else "partial_answer_cap", "output": partial})
-        bus.emit("show_final_answer", {"output": partial})
+        # Route through centralized terminal outcome —
+        # NOT direct update_status("COMPLETED") + bus emits.
+        from engine._loop_helpers import _commit_terminal_outcome
+        _commit_terminal_outcome(
+            self,
+            status="COMPLETED",
+            reason="partial_answer_budget" if is_budget else "partial_answer_cap",
+            output=partial,
+        )
         return True

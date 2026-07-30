@@ -453,16 +453,18 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # Phase F: when reads >= 3, inject one-time synthesis directive.
         self._force_tool = False
         if self._ctx is not None:
+            # PATCH-CORE-UNIFIED-R3: Use ctx.intent_policy.needs_investigation
+            # instead of dynamically calling _prompt_requires_investigation.
             # Invariant 8 — once SYNTHESIZE/FINALIZE begins, never return to
             # planning/collection: skip the read-forcing machinery entirely.
             if self._ctx.phase not in ("SYNTHESIZE", "FINALIZE"):
-                _needs = _prompt_requires_investigation(
-                    self._ctx.user_prompt, has_active_goal=_has_active_goal(self)
-                )
+                _needs = self._ctx.intent_policy.needs_investigation if self._ctx.intent_policy else False
             else:
                 _needs = False
             if _needs:
-                if self._real_reads() < 3:
+                # PATCH-CORE-UNIFIED-R3: Use minimum_reads from policy.
+                _min_reads = self._ctx.intent_policy.minimum_reads if self._ctx.intent_policy else 3
+                if self._real_reads() < _min_reads:
                     self._force_tool = True
                     # Phase G: proactive real-file directive. As soon as a listing
                     # exists, feed the model concrete EXISTING paths on EVERY forced
@@ -473,7 +475,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                     if _proactive_sugg:
                         self._force_read_directive_text = (
                             "[CONTROL] You have not read enough source files yet "
-                            "(need >=3). Do NOT guess or invent file paths. Call "
+                            f"(need >={_min_reads}). Do NOT guess or invent file paths. Call "
                             "file_system with action='read' on these EXISTING "
                             f"files now: {_proactive_sugg}"
                         )
@@ -487,17 +489,19 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                             "[CONTROL] You have read 0 source files. Do NOT answer "
                             "from memory or reasoning alone. Your NEXT response MUST "
                             "be a tool call: use file_system with action='list' on the "
-                            "target directory to discover real files, then read >=3 of "
-                            "them before answering."
+                            "target directory to discover real files, then read >="
+                            f"{_min_reads} of them before answering."
                         )
-                # Phase F: one-time synthesis directive when reads just reached >= 3
+                # Phase F: one-time synthesis directive when reads just reached >= minimum
                 # Save the text; actual injection into compacted happens AFTER
                 # _compact_messages + _inject_runtime_context to avoid being
                 # dropped by the sliding-window compaction.
-                if self._real_reads() >= 3 and not getattr(self, "_synthesis_directive_injected", False):
+                # PATCH-CORE-UNIFIED-R3: Use _min_reads instead of hardcoded 3.
+                if self._real_reads() >= _min_reads and not getattr(self, "_synthesis_directive_injected", False):
                     self._synthesis_directive_injected = True
                     self._synthesis_directive_text = (
-                        "[CONTROL] SYNTHESIS DIRECTIVE: You have read at least 3 source files. "
+                        "[CONTROL] SYNTHESIS DIRECTIVE: You have read at least "
+                        f"{_min_reads} source files. "
                         "This is sufficient. Do NOT call any more tools. "
                         "Synthesize your architectural report IMMEDIATELY using final_answer."
                     )
@@ -782,14 +786,22 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         has_tool = bool(extract_json_from_response(response_text))
         is_thought_only = (not has_tool) and _is_thought_only(response_text)
 
+        # PATCH-CORE-UNIFIED-R3: Use centralized terminal outcome.
+        from engine._loop_helpers import _commit_terminal_outcome
+
         if is_thought_only:
-            self.state.update_status("COMPLETED")
             safe_msg = self._get_fallback_reason(
                 ctx.user_prompt,
                 "CRITICAL: Detected only 'Thinking' blocks without tools (bullet/star detected). "
                 "Aborting loop to prevent hallucination.",
             )
-            bus.emit("loop_completed", {"reason": "thought_only_loop", "output": safe_msg})
+            _commit_terminal_outcome(
+                self,
+                status="FAILED",
+                reason="thought_only_loop",
+                output=safe_msg,
+                fallback_msg="Thought-only loop detected.",
+            )
             return _LoopSignal.TERMINATE
 
         fingerprint = normalized_resp[:200]
@@ -799,13 +811,18 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             # the no-tool verifier room to defer to this guard for pure
             # reasoning loops that never emit a tool.
             if ctx.fingerprints.count(fingerprint) >= 2:
-                self.state.update_status("COMPLETED")
                 safe_msg = self._get_fallback_reason(
                     ctx.user_prompt,
                     "CRITICAL: Infinite Replication Loop Detected (Entropy = 0). "
                     "Aborting session to preserve API budget and memory.",
                 )
-                bus.emit("loop_completed", {"reason": "infinite_replication_loop", "output": safe_msg})
+                _commit_terminal_outcome(
+                    self,
+                    status="FAILED",
+                    reason="infinite_replication_loop",
+                    output=safe_msg,
+                    fallback_msg="Infinite replication loop detected.",
+                )
                 return _LoopSignal.TERMINATE
             ctx.fingerprints.append(fingerprint)
             if len(ctx.fingerprints) > 3:
@@ -1530,7 +1547,17 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         bus.emit("loop_started", {"session_id": self.state.session_id})
 
         interrupted = False
-        self._ctx = _LoopCtx(user_prompt=user_prompt)
+        # PATCH-CORE-UNIFIED-R3: classify_intent EXACTLY ONCE at start, store
+        # the result on _LoopCtx. Dynamic reclassification is FORBIDDEN.
+        from engine.deep_agent import classify_intent
+        from engine._loop_helpers import _get_intent_policy
+        _intent = classify_intent(user_prompt)
+        _policy = _get_intent_policy(_intent)
+        self._ctx = _LoopCtx(
+            user_prompt=user_prompt,
+            intent=_intent,
+            intent_policy=_policy,
+        )
         # Phase F: reset synthesis directive flag per run.
         self._synthesis_directive_injected = False
         # Scratch holders written by helpers, read by the orchestrator.

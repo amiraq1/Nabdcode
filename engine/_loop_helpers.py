@@ -360,3 +360,142 @@ def _type_name(t: Any) -> str:
         return "dict"
     name = getattr(t, "__name__", str(t))
     return name
+
+
+# ====================================================================
+# PATCH-CORE-UNIFIED-R3: Centralized Terminal Outcome + Intent Policy
+# ====================================================================
+
+
+def _get_intent_policy(intent: str) -> "IntentPolicy":
+    """Map a classified intent to its convergence policy.
+
+    Called EXACTLY ONCE per run (from ExecutionLoop.run()). The result is
+    stored on _LoopCtx.intent_policy and read by all convergence choke points
+    — dynamic reclassification via _prompt_requires_investigation is FORBIDDEN.
+
+    Intent-to-policy mapping:
+      Chat / Single File Lookup / Tool Execution → no plan needed, 0/1 reads
+      Repository Investigation+ (multi-stage) → plan required, 3 reads minimum
+    """
+    from engine._loop_types import IntentPolicy
+
+    # Import lazily to avoid circular imports at module load.
+    try:
+        from core.investigation import is_multi_stage_investigation
+    except ImportError:
+        is_multi_stage_investigation = lambda x: False
+
+    if is_multi_stage_investigation(intent):
+        return IntentPolicy(
+            requires_plan=True,
+            minimum_reads=3,
+            needs_investigation=True,
+        )
+
+    if intent in ("Single File Lookup",):
+        return IntentPolicy(
+            requires_plan=False,
+            minimum_reads=1,
+            needs_investigation=True,
+        )
+
+    # Chat, Tool Execution, or unknown → no gate.
+    return IntentPolicy(
+        requires_plan=False,
+        minimum_reads=0,
+        needs_investigation=False,
+    )
+
+
+def _commit_terminal_outcome(
+    loop_self: Any,
+    *,
+    status: str = "COMPLETED",
+    reason: str = "",
+    output: str = "",
+    fallback_msg: str = "",
+) -> None:
+    """Single centralized choke point for terminal outcome assignment.
+
+    This is the ONLY function that:
+      1. Sets state.update_status("COMPLETED")  (for successful terminal outcomes)
+      2. Sets state.update_status("FAILED")      (for failed terminal outcomes)
+      3. Emits bus.emit("loop_completed", ...)
+      4. Emits bus.emit("show_final_answer", ...)
+      5. Updates phase to FINALIZE
+      6. Marks TurnFinalizer.is_finalized
+
+    Budget exhaustion, Thought-only, Exact-action caps, Repetition guards, and
+    any other guard MUST NOT directly assign COMPLETED or emit terminal events.
+    They must call this function, which routes to the appropriate terminal state.
+
+    Parameters:
+        loop_self: The ExecutionLoop instance (provides .state, ._ctx, ._turn_finalizer, etc.)
+        status: "COMPLETED" | "FAILED" | "PAUSED"
+        reason: Machine-readable reason (e.g. "thought_only_loop", "budget_exhausted")
+        output: The final answer text (optional)
+        fallback_msg: Fallback message when output is empty
+    """
+    from core.kernel.events import bus
+    from core.turn_outcome import TurnOutcome, TurnStatus
+
+    ctx = getattr(loop_self, "_ctx", None)
+
+    if status == "COMPLETED":
+        # Successful terminal outcome
+        loop_self.state.update_status("COMPLETED")
+        if ctx is not None:
+            ctx.phase = "FINALIZE"
+
+        final_output = output or fallback_msg or "(completed)"
+        loop_self._last_response = final_output
+
+        # Emit terminal events exactly once.
+        bus.emit("loop_completed", {"reason": reason, "output": final_output})
+        bus.emit("show_final_answer", {"output": final_output})
+
+        # Commit to TurnFinalizer (idempotent — rejects duplicates).
+        loop_self._turn_finalizer.finalize(TurnOutcome(
+            status=TurnStatus.COMPLETED,
+            safe_message=final_output,
+            final_answer=final_output,
+        ))
+    elif status == "FAILED":
+        # Failed terminal outcome — use FAILED status, not COMPLETED.
+        loop_self.state.update_status("FAILED")
+        if ctx is not None:
+            ctx.phase = "FINALIZE"
+
+        final_output = output or fallback_msg or "(failed)"
+        loop_self._last_response = final_output
+
+        bus.emit("loop_completed", {"reason": reason, "output": final_output})
+        bus.emit("show_final_answer", {"output": final_output})
+
+        loop_self._turn_finalizer.finalize(TurnOutcome(
+            status=TurnStatus.FAILED,
+            safe_message=final_output,
+            final_answer=final_output,
+        ))
+    elif status == "PAUSED":
+        # Paused — no terminal events emitted.
+        loop_self.state.update_status("PAUSED")
+        bus.emit("loop_interrupted", {"reason": reason})
+    else:
+        # Default: FAILED for unknown status.
+        loop_self.state.update_status("FAILED")
+        if ctx is not None:
+            ctx.phase = "FINALIZE"
+
+        final_output = output or fallback_msg or f"(unknown terminal status: {status})"
+        loop_self._last_response = final_output
+
+        bus.emit("loop_completed", {"reason": reason, "output": final_output})
+        bus.emit("show_final_answer", {"output": final_output})
+
+        loop_self._turn_finalizer.finalize(TurnOutcome(
+            status=TurnStatus.FAILED,
+            safe_message=final_output,
+            final_answer=final_output,
+        ))

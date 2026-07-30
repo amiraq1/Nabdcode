@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import MagicMock
 from engine.loop import ExecutionLoop
 from engine.state import RuntimeState
+from engine._loop_types import IntentPolicy
 
 
 class TestLoopRepetitionGuard(unittest.TestCase):
@@ -14,11 +15,22 @@ class TestLoopRepetitionGuard(unittest.TestCase):
         repeated_response = "I will repeat this exact response forever to cause an infinite loop. " * 5
         mock_llm = MagicMock(return_value=repeated_response)
 
-        loop = ExecutionLoop(llm_provider=mock_llm, state=state)
+        loop = ExecutionLoop(
+            llm_provider=mock_llm,
+            verifier_provider=MagicMock(return_value='{"verdict": "pass"}'),
+            state=state,
+            no_stream=True,
+        )
         # Ensure safe shutdown returns cleanly
         loop._get_fallback_reason = MagicMock(return_value="ABORTED_SAFE")
 
-        loop.run("Check workspace files and fix bugs")
+        # PATCH-CORE-UNIFIED-R3: Patch _get_intent_policy to force investigation mode
+        from unittest.mock import patch
+        import engine._loop_helpers as _hlp
+        with patch.object(_hlp, '_get_intent_policy', return_value=IntentPolicy(
+            requires_plan=True, minimum_reads=3, needs_investigation=True
+        )):
+            loop.run("Check workspace")
 
         # LLM should be called exactly 3 times (1st appearance, 2nd appearance, 3rd appearance triggers kill switch)
         self.assertEqual(mock_llm.call_count, 3)
@@ -49,10 +61,21 @@ class TestLoopRepetitionGuard(unittest.TestCase):
             "Thought for 8s\nExact same repeated hallucinated response body that repeats over and over.",
         ]
         mock_llm = MagicMock(side_effect=responses)
-        loop = ExecutionLoop(llm_provider=mock_llm, state=state)
+        loop = ExecutionLoop(
+            llm_provider=mock_llm,
+            verifier_provider=MagicMock(return_value='{"verdict": "pass"}'),
+            state=state,
+            no_stream=True,
+        )
         loop._get_fallback_reason = MagicMock(return_value="ABORTED_SAFE")
 
-        loop.run("Check workspace files and fix bugs")
+        # PATCH-CORE-UNIFIED-R3: Patch _get_intent_policy to force investigation mode
+        from unittest.mock import patch
+        import engine._loop_helpers as _hlp
+        with patch.object(_hlp, '_get_intent_policy', return_value=IntentPolicy(
+            requires_plan=True, minimum_reads=3, needs_investigation=True
+        )):
+            loop.run("Check workspace")
 
         self.assertEqual(mock_llm.call_count, 3)
         loop._get_fallback_reason.assert_called_once()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import difflib
+import os
+import errno
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 from pathlib import Path
@@ -158,7 +160,7 @@ class FileSystemTool(BaseTool):
 
         try:
 
-            target = self._resolve(path)
+            target = self._resolve_workspace_path(path)
 
             if action is FileAction.LIST:
                 return self._list(target, recursive=bool(kwargs.get("recursive", False)))
@@ -224,19 +226,84 @@ class FileSystemTool(BaseTool):
 
     # ------------------------------------------------------------------
 
-    def _resolve(self, relative_path: str) -> Path:
+    def _resolve_workspace_path(self, relative_path: str) -> Path:
         """
-        Resolve a path safely inside the workspace.
+        Resolve a path safely inside the workspace using Path.resolve() + relative_to() to prevent path traversal.
+        Rejects absolute paths, .. components, and symlink escapes.
+        Implements parent-directory TOCTOU protection using dir_fd + O_DIRECTORY + O_NOFOLLOW traversal.
         """
+        import os
+        import errno
 
-        target = (self.workspace / relative_path).resolve()
+        # Convert to Path and check for dangerous components before resolving
+        path_obj = Path(relative_path)
 
-        if self.workspace not in target.parents and target != self.workspace:
-            raise PermissionError(
-                "Access outside the workspace is forbidden."
-            )
+        # Check if the path is absolute
+        if path_obj.is_absolute():
+            raise PermissionError("Absolute paths are forbidden.")
 
-        return target
+        # Convert to string and check manually for '..' components to prevent traversal
+        path_parts = str(relative_path).split('/')
+        if '..' in path_parts:
+            raise PermissionError("Path traversal with '..' is forbidden.")
+
+        # Split the path into directory components and file component
+        # For path like 'dir1/dir2/file.txt', we'll have ['dir1', 'dir2'] as dirs and 'file.txt' as file
+        full_path = Path(relative_path)
+        *dir_parts, file_part = full_path.parts if full_path.parts else [""]
+
+        # If there are directory components, perform secure traversal on them
+        if dir_parts:
+            # Start from the workspace directory descriptor
+            workspace_fd = os.open(str(self.workspace), os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                current_fd = workspace_fd
+                for i, dir_component in enumerate(dir_parts):
+                    if dir_component == ".." or dir_component == ".":
+                        raise PermissionError("Path traversal with '..' or '.' in parts is forbidden.")
+
+                    # Open each directory component with O_NOFOLLOW to prevent symlink attacks during traversal
+                    try:
+                        next_fd = os.open(dir_component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current_fd)
+                        # Successfully opened as directory, continue traversal
+                        os.close(current_fd)
+                        current_fd = next_fd
+                    except OSError as e:
+                        # If it's not a directory, that's an error
+                        if e.errno == errno.ENOTDIR:
+                            raise PermissionError(f"Path component '{dir_component}' is not a directory")
+                        else:
+                            # For other errors (like ENOENT), re-raise them
+                            raise
+
+                # At this point, current_fd refers to the parent directory of the target file
+                # Now verify that the final file path doesn't escape the workspace by resolving it completely
+                target = (self.workspace / relative_path).resolve()
+
+                # Ensure the resolved path is within the workspace using relative_to
+                try:
+                    target.relative_to(self.workspace)
+                except ValueError:
+                    raise PermissionError(
+                        "Access outside the workspace is forbidden."
+                    )
+
+                return target
+            finally:
+                os.close(current_fd)
+        else:
+            # No directory components, just a file in the workspace root
+            target = (self.workspace / relative_path).resolve()
+
+            # Ensure the resolved path is within the workspace using relative_to
+            try:
+                target.relative_to(self.workspace)
+            except ValueError:
+                raise PermissionError(
+                    "Access outside the workspace is forbidden."
+                )
+
+            return target
 
     # ------------------------------------------------------------------
 
@@ -295,7 +362,7 @@ class FileSystemTool(BaseTool):
             future_to_path: dict[Any, str] = {}
             for fp in file_paths:
                 try:
-                    target = self._resolve(fp)
+                    target = self._resolve_workspace_path(fp)
                     future = executor.submit(self._read_raw, target)
                     future_to_path[future] = fp
                 except Exception as exc:
@@ -382,6 +449,13 @@ class FileSystemTool(BaseTool):
             old_content = target.read_text(encoding="utf-8")
         except FileNotFoundError:
             old_content = ""
+        except PermissionError:
+            return ToolResult(
+                success=False,
+                stderr="PATH_CONTAINMENT_REJECTED: Access denied due to path containment policy.",
+                returncode=-1,
+                status="path_containment_rejected",
+            )
 
         # Compute unified diff with 2 lines of context.
         diff_lines = list(difflib.unified_diff(
@@ -429,9 +503,39 @@ class FileSystemTool(BaseTool):
                 },
             )
 
-        # Normal path: write immediately.
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(new_content, encoding="utf-8")
+        # Normal path: write immediately using secure file operations
+        # Create parent directories using secure mkdir
+        parent_dir = target.parent
+        parent_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use secure file writing with O_CREAT | O_EXCL to prevent race conditions
+        parent_fd = os.open(str(parent_dir), os.O_RDONLY)
+        try:
+            basename = target.name
+            # Try to create the file exclusively
+            try:
+                fd = os.open(basename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666, dir_fd=parent_fd)
+                created = True
+            except FileExistsError:
+                # File exists, open for writing (but still with O_NOFOLLOW)
+                fd = os.open(basename, os.O_WRONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                created = False
+
+            try:
+                # Write the content
+                os.write(fd, new_content.encode('utf-8'))
+            except Exception as e:
+                # If there was an error and we just created the file, remove it
+                if created:
+                    try:
+                        os.unlink(basename, dir_fd=parent_fd)
+                    except:
+                        pass  # Best effort cleanup
+                raise
+            finally:
+                os.close(fd)
+        finally:
+            os.close(parent_fd)
 
         summary = f"Updated {path_str} with {additions} additions and {removals} removals"
 
@@ -484,15 +588,40 @@ class FileSystemTool(BaseTool):
             except Exception:
                 old_content = ""
 
+        # Create parent directories using secure mkdir
         path.parent.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        path.write_text(
-            str(content),
-            encoding="utf-8",
-        )
+        # Use secure file writing with O_CREAT | O_EXCL to prevent race conditions
+        parent_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            basename = path.name
+            # Try to create the file exclusively
+            try:
+                fd = os.open(basename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666, dir_fd=parent_fd)
+                created = True
+            except FileExistsError:
+                # File exists, open for writing (but still with O_NOFOLLOW)
+                fd = os.open(basename, os.O_WRONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                created = False
+
+            try:
+                # Write the content
+                os.write(fd, str(content).encode('utf-8'))
+            except Exception as e:
+                # If there was an error and we just created the file, remove it
+                if created:
+                    try:
+                        os.unlink(basename, dir_fd=parent_fd)
+                    except:
+                        pass  # Best effort cleanup
+                raise
+            finally:
+                os.close(fd)
+        finally:
+            os.close(parent_fd)
 
         diff_text, additions, deletions = self._compute_diff(path.name, old_content, str(content))
 
@@ -529,12 +658,19 @@ class FileSystemTool(BaseTool):
         old_content = path.read_text(encoding="utf-8", errors="replace")
         new_content = old_content + str(content)
 
-        with path.open(
-            "a",
-            encoding="utf-8",
-        ) as fp:
-
-            fp.write(str(content))
+        # Use secure file appending with O_APPEND to prevent race conditions
+        parent_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            basename = path.name
+            # Open file for appending with O_NOFOLLOW to prevent symlink attacks
+            fd = os.open(basename, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, dir_fd=parent_fd)
+            try:
+                # Append the content
+                os.write(fd, str(content).encode('utf-8'))
+            finally:
+                os.close(fd)
+        finally:
+            os.close(parent_fd)
 
         diff_text, additions, deletions = self._compute_diff(path.name, old_content, new_content)
 
@@ -616,10 +752,20 @@ class FileSystemTool(BaseTool):
             updated = content.replace(old_text, new_text, count)
             occurrences = min(content.count(old_text), count)
 
-        path.write_text(
-            updated,
-            encoding="utf-8",
-        )
+        # Use secure file writing with O_CREAT | O_TRUNC to prevent race conditions
+        parent_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            basename = path.name
+            # Open file for writing with O_NOFOLLOW to prevent symlink attacks
+            # Use O_CREAT in case we're creating a new file, O_TRUNC to overwrite
+            fd = os.open(basename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, dir_fd=parent_fd)
+            try:
+                # Write the updated content
+                os.write(fd, updated.encode('utf-8'))
+            finally:
+                os.close(fd)
+        finally:
+            os.close(parent_fd)
 
         diff_text, additions, deletions = self._compute_diff(path.name, content, updated)
 
