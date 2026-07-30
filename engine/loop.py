@@ -1549,13 +1549,23 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         interrupted = False
         # PATCH-CORE-UNIFIED-R3: classify_intent EXACTLY ONCE at start, store
         # the result on _LoopCtx. Dynamic reclassification is FORBIDDEN.
-        from engine.deep_agent import classify_intent
+        # PATCH-INTENT-ROUTING-R4: Use core.investigation.classify_intent (not
+        # engine.deep_agent.classify_intent) so the result is an InvestigationIntent
+        # enum value that _get_intent_policy can type-check.
+        from core.investigation import classify_intent as classify_investigation_intent
         from engine._loop_helpers import _get_intent_policy
-        _intent = classify_intent(user_prompt)
-        _policy = _get_intent_policy(_intent)
+        investigation_intent = classify_investigation_intent(user_prompt)
+        _policy = _get_intent_policy(investigation_intent)
+        # PATCH-INTENT-ROUTING-R4: For SINGLE_FILE_LOOKUP, extract the target file
+        # from the user prompt and store it on the policy.
+        if investigation_intent == "Single File Lookup":
+            import re as _re
+            _m = _re.search(r"(?:read|view|show|cat|check|inspect)\s+([\w/\-\.]+\.\w+)", user_prompt, _re.IGNORECASE)
+            if _m:
+                _policy.required_target = _m.group(1)
         self._ctx = _LoopCtx(
             user_prompt=user_prompt,
-            intent=_intent,
+            intent=investigation_intent,
             intent_policy=_policy,
         )
         # Phase F: reset synthesis directive flag per run.

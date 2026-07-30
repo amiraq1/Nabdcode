@@ -75,7 +75,10 @@ def classify_intent(user_prompt: str) -> str:
         return InvestigationIntent.CODE_AUDIT
 
     # Single File Lookup
-    if re.search(r"^(?:read|view|show|cat|check|inspect)\s+[\w/\-\.]+\.\w+$", lower):
+    # PATCH-INTENT-ROUTING-R4: Remove the trailing $ anchor so prompts like
+    # "Read broken_script.py and identify the syntax error only." are correctly
+    # classified as SINGLE_FILE_LOOKUP instead of falling through to TOOL_EXECUTION.
+    if re.search(r"^(?:read|view|show|cat|check|inspect)\s+[\w/\-\.]+\.\w+", lower):
         return InvestigationIntent.SINGLE_FILE_LOOKUP
 
     # Tool Execution / Specific target actions

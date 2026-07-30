@@ -374,11 +374,24 @@ def _get_intent_policy(intent: str) -> "IntentPolicy":
     stored on _LoopCtx.intent_policy and read by all convergence choke points
     — dynamic reclassification via _prompt_requires_investigation is FORBIDDEN.
 
+    PATCH-INTENT-ROUTING-R4: Strict type-check — only InvestigationIntent enum
+    values are accepted. Plain strings or unknown types raise TypeError,
+    enforcing a fail-closed taxonomy.
+
     Intent-to-policy mapping:
       Chat / Single File Lookup / Tool Execution → no plan needed, 0/1 reads
       Repository Investigation+ (multi-stage) → plan required, 3 reads minimum
     """
     from engine._loop_types import IntentPolicy
+
+    # PATCH-INTENT-ROUTING-R4: Fail-closed type check.
+    from core.investigation import InvestigationIntent
+    if not isinstance(intent, InvestigationIntent):
+        raise TypeError(
+            f"_get_intent_policy requires an InvestigationIntent enum value, "
+            f"got {type(intent).__name__}('{intent}'). "
+            f"Use core.investigation.classify_intent() for classification."
+        )
 
     # Import lazily to avoid circular imports at module load.
     try:
@@ -393,7 +406,7 @@ def _get_intent_policy(intent: str) -> "IntentPolicy":
             needs_investigation=True,
         )
 
-    if intent in ("Single File Lookup",):
+    if intent == InvestigationIntent.SINGLE_FILE_LOOKUP:
         return IntentPolicy(
             requires_plan=False,
             minimum_reads=1,

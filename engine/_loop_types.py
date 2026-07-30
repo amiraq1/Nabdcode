@@ -44,11 +44,16 @@ class IntentPolicy:
                         post-hoc hack.
         needs_investigation: When True, the prompt requires tool-using
                         investigation rather than chitchat.
+        required_target: For SINGLE_FILE_LOOKUP, the specific file path that
+                        should be read (e.g. "broken_script.py"). Empty string
+                        for other intents.
     """
 
     requires_plan: bool = False
     minimum_reads: int = 0
     needs_investigation: bool = False
+    required_target: str = ""
+
 
 
 # Prompt Leak Markers — shared between streaming and non-streaming paths.
