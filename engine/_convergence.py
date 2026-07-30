@@ -470,10 +470,18 @@ class _ConvergenceMixin:
             _needs_verify_vf = ctx.intent_policy.needs_investigation if ctx.intent_policy else False
             if _needs_verify_vf and self.evidence_log is not None:
                 try:
+                    # PATCH-R4.1: Pass IntentPolicy params so verify_fresh and
+                    # check_investigation_gates use the same policy as can_finalize.
+                    _vf_min_reads = ctx.intent_policy.minimum_reads if ctx.intent_policy else 0
+                    _vf_root_list = ctx.intent_policy.requires_root_listing if ctx.intent_policy else False
+                    _vf_target = ctx.intent_policy.required_target if ctx.intent_policy else ""
                     self.evidence_log.verify_fresh(
                         claim=output,
                         require_tools=True,
                         user_prompt=ctx.user_prompt,
+                        minimum_reads=_vf_min_reads,
+                        requires_root_listing=_vf_root_list,
+                        required_target=_vf_target,
                     )
                 except VerifierError:
                     # Route through the existing evidence rejection lifecycle.

@@ -344,6 +344,41 @@ def _is_substantive_evidence(tool_name: str, success: bool, output: str) -> bool
     return bool((output or "").strip())
 
 
+def _normalize_path(path: str) -> str:
+    """Normalize a relative file path for cross-repository matching.
+
+    - Rejects absolute paths (starting with /)
+    - Rejects paths with '..' traversal components
+    - Strips leading ``./`` or ``.`` prefixes
+    - Normalizes backslash separators to forward slashes
+    - Returns the canonical relative path
+
+    Raises ``ValueError`` on rejection (absolute or traversal).
+
+    Examples::
+        _normalize_path("src/app.py")        -> "src/app.py"
+        _normalize_path("./src/app.py")       -> "src/app.py"
+        _normalize_path("/etc/passwd")         -> raises ValueError
+        _normalize_path("../secret.txt")       -> raises ValueError
+        _normalize_path("core\\utils\\h.py")  -> "core/utils/h.py"
+    """
+    if not path:
+        return ""
+    # Normalize backslashes to forward slashes
+    normalized = path.replace("\\", "/")
+    # Strip leading ./ prefix
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    # Reject absolute paths (starting with /)
+    if normalized.startswith("/"):
+        raise ValueError(f"Absolute path rejected: {path}")
+    # Reject path traversal (.. components)
+    parts = normalized.split("/")
+    if ".." in parts:
+        raise ValueError(f"Path traversal rejected: {path}")
+    return normalized
+
+
 def _type_name(t: Any) -> str:
     """Map a Python type annotation to a short human-readable name."""
     if t is str:

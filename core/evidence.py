@@ -627,8 +627,16 @@ class Verifier:
         records: Dict[str, EvidenceRecord],
         require_tools: bool,
         user_prompt: str = "",
+        minimum_reads: int = 0,
+        requires_root_listing: bool = False,
+        required_target: str = "",
     ) -> None:
-        """Raise VerifierError if any check fails."""
+        """Raise VerifierError if any check fails.
+
+        PATCH-R4.1: Accepts IntentPolicy params (minimum_reads,
+        requires_root_listing, required_target) and forwards them
+        to check_investigation_gates() for unified policy alignment.
+        """
         if require_tools and not records:
             raise VerifierError(
                 "Task aborted.\n\n"
@@ -640,7 +648,12 @@ class Verifier:
 
         if require_tools and user_prompt:
             from core.investigation import check_investigation_gates
-            passed, details = check_investigation_gates(user_prompt, list(records.values()))
+            passed, details = check_investigation_gates(
+                user_prompt, list(records.values()),
+                minimum_reads=minimum_reads,
+                requires_root_listing=requires_root_listing,
+                required_target=required_target,
+            )
             if not passed:
                 raise VerifierError(details)
 
@@ -811,9 +824,18 @@ class EvidenceLog:
                 raise VerifierError(result.to_error("L1"))
 
     def verify_fresh(
-        self, claim: str, evidence_text: str = "", require_tools: bool = True, user_prompt: str = ""
+        self, claim: str, evidence_text: str = "",
+        require_tools: bool = True, user_prompt: str = "",
+        minimum_reads: int = 0, requires_root_listing: bool = False,
+        required_target: str = "",
     ) -> VerificationResult:
-        """Run fresh-context verification (L1) without execution history bias."""
+        """Run fresh-context verification (L1) without execution history bias.
+
+        PATCH-R4.1: Accepts IntentPolicy parameters (minimum_reads,
+        requires_root_listing, required_target) and passes them through
+        to Verifier.verify(), which forwards them to
+        check_investigation_gates() for unified policy alignment.
+        """
         if not require_tools:
             return VerificationResult(
                 ok=True,
@@ -848,6 +870,9 @@ class EvidenceLog:
             records=self._records,
             require_tools=require_tools,
             user_prompt=user_prompt,
+            minimum_reads=minimum_reads,
+            requires_root_listing=requires_root_listing,
+            required_target=required_target,
         )
         result = StructuralVerifier.verify(
             claim=claim,

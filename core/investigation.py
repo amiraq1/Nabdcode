@@ -263,8 +263,13 @@ class CoverageMetrics:
         self.tests = len(tests_set)
         self.architecture = len(arch_set)
 
-    def is_sufficient_for_investigation(self) -> tuple[bool, List[str]]:
-        """Evaluate if coverage satisfies Phase 3 & Phase 4 mandatory completion gates."""
+    def is_sufficient_for_investigation(self, minimum_reads: int = 3) -> tuple[bool, List[str]]:
+        """Evaluate if coverage satisfies Phase 3 & Phase 4 mandatory completion gates.
+
+        PATCH-R4.1: Accepts minimum_reads parameter so the policy's value is
+        used instead of the hardcoded 3. Callers from check_investigation_gates
+        pass the IntentPolicy's minimum_reads through to this method.
+        """
         missing: List[str] = []
         if self.directories < 1:
             missing.append("Repository structure not discovered (directories explored = 0). Must run list_dir / find_files.")
@@ -272,8 +277,8 @@ class CoverageMetrics:
             missing.append("Build configuration not located/inspected (e.g., pyproject.toml, package.json, setup.py, Makefile).")
         if self.entrypoints < 1 and self.modules < 1:
             missing.append("Entry point(s) and major modules not located (e.g., main.py, core/, engine/).")
-        if self.files < 3:
-            missing.append(f"Insufficient file inspection coverage (inspected {self.files} file(s), minimum required is >= 3 representative source files across modules).")
+        if self.files < minimum_reads:
+            missing.append(f"Insufficient file inspection coverage (inspected {self.files} file(s), minimum required is >= {minimum_reads} representative source files across modules).")
 
         return (len(missing) == 0, missing)
 
@@ -297,8 +302,18 @@ def compute_investigation_state(coverage: CoverageMetrics) -> InvestigationProgr
     return InvestigationProgressState.REPORTING
 
 
-def check_investigation_gates(user_prompt: str, records: List[Any], report_text: str = "") -> tuple[bool, str]:
+def check_investigation_gates(
+    user_prompt: str, records: List[Any],
+    report_text: str = "",
+    minimum_reads: int = 0,
+    requires_root_listing: bool = False,
+    required_target: str = "",
+) -> tuple[bool, str]:
     """Check Phase 3, Phase 8, and Phase 9 completion gates.
+
+    PATCH-R4.1: Accepts IntentPolicy parameters from the convergence gate
+    so the evaluation uses the SAME policy as can_finalize() — no legacy
+    classifiers or hardcoded thresholds.
 
     Returns ``(passed, failure_reason_or_details)``.
     If `user_prompt` does not require multi-stage investigation, passes automatically.
@@ -320,7 +335,9 @@ def check_investigation_gates(user_prompt: str, records: List[Any], report_text:
         )
 
     # Phase 3: Completion Gates check
-    sufficient, missing_gates = coverage.is_sufficient_for_investigation()
+    # PATCH-R4.1: Use policy-provided minimum_reads instead of hardcoded 3.
+    _effective_min_reads = minimum_reads if minimum_reads > 0 else 3
+    sufficient, missing_gates = coverage.is_sufficient_for_investigation(minimum_reads=_effective_min_reads)
     if not sufficient or current_state != InvestigationProgressState.REPORTING:
         formatted_missing = "\n".join(f"- ❌ {m}" for m in missing_gates) if missing_gates else "- ❌ State not yet REPORTING."
         plan_formatted = "\n".join(f"  {i+1}. {step}" for i, step in enumerate(MANDATORY_INVESTIGATION_PLAN))

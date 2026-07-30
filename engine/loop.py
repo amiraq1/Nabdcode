@@ -1578,6 +1578,9 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             # PATCH-INTENT-ROUTING-R4: Extract target path from the user prompt.
             # Handle quotes at the Python level before regex (avoids "\" in
             # raw strings) so inline quoted paths like Read "file.py" work.
+            # PATCH-R4.1: Normalize path via _normalize_path() for strict
+            # relative path matching. Rejects absolute and traversal paths.
+            from engine._loop_helpers import _normalize_path
             _verb_match = _re.match(
                 r"(?:read|view|show|cat|check|inspect)\s+", user_prompt, _re.IGNORECASE,
             )
@@ -1589,10 +1592,10 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 _m = _re.search(r"([\w/\-\.]+(?:\.[a-zA-Z]\w+))", _after_verb)
                 if _m:
                     _raw = _m.group(1)
-                    # Path traversal prevention
-                    if '..' in _raw.split('/') or _raw.startswith('/'):
-                        _policy.required_target = _raw  # store for diagnostics
-                    else:
+                    try:
+                        _policy.required_target = _normalize_path(_raw)
+                    except ValueError:
+                        # Traversal or absolute path — store for diagnostics
                         _policy.required_target = _raw
         self._ctx = _LoopCtx(
             user_prompt=user_prompt,
