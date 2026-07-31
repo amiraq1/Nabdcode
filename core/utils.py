@@ -43,30 +43,8 @@ def _validate_and_tokenize(cmd_str: str) -> Tuple[bool, str, Optional[List[str]]
 # ---------------------------------------------------------------------------
 
 def _handle_background(cmd_str: str) -> Tuple[int, str, str]:
-    """Start a background process (``command &``).
-
-    Strips trailing ``&`` (and optional ``> /dev/null`` redirections),
-    then launches via ``subprocess.Popen`` with ``start_new_session`` so
-    the agent loop is never blocked.
-    """
-    bg_cmd = cmd_str[:-1].strip() if cmd_str.endswith("&") else cmd_str
-    for redir in ["> /dev/null 2>&1", ">/dev/null 2>&1", "> /dev/null", ">/dev/null"]:
-        if bg_cmd.endswith(redir):
-            bg_cmd = bg_cmd[: -len(redir)].strip()
-    try:
-        args = shlex.split(bg_cmd)
-        if not args:
-            return -1, "", "Empty background command."
-        proc = subprocess.Popen(
-            args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        return 0, f"Background server process started successfully (PID: {proc.pid}).", ""
-    except Exception as e:
-        return -1, "", f"Failed to start background process: {e}"
+    """Start a background process (``command &``) via the centralized SubprocessGuard."""
+    return default_guard.spawn_agent_background(cmd_str)
 
 
 # ---------------------------------------------------------------------------
@@ -87,50 +65,9 @@ def _drain_stderr_into(idx: int, pipe, parts: List[List[str]]) -> None:
             pass
 
 
-def _handle_piped(segments: List[List[str]], timeout: int) -> Tuple[int, str, str]:
-    """Execute a pipeline of commands connected via ``|``.
-
-    Spawns every segment as a ``subprocess.Popen``, chains stdout→stdin,
-    drains stderr concurrently on daemon threads to prevent deadlock,
-    then kills any hung intermediate processes.
-    """
-    procs: List[subprocess.Popen] = []
-    prev_stdout = None
-    stderr_parts: List[List[str]] = [[] for _ in segments]
-    stderr_threads: List[threading.Thread] = []
-
-    for i, seg_tokens in enumerate(segments):
-        proc = subprocess.Popen(
-            seg_tokens,
-            stdin=prev_stdout,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        if prev_stdout is not None:
-            prev_stdout.close()
-        prev_stdout = proc.stdout
-        procs.append(proc)
-        t = threading.Thread(
-            target=_drain_stderr_into, args=(i, proc.stderr, stderr_parts), daemon=True
-        )
-        t.start()
-        stderr_threads.append(t)
-
-    last_proc = procs[-1]
-    stdout_data, stderr_data = last_proc.communicate(timeout=timeout)
-
-    for t in stderr_threads:
-        t.join(timeout=5)
-
-    for p in procs[:-1]:
-        p.poll()
-        if p.returncode is None:
-            p.kill()
-            p.wait()
-
-    combined_stderr = "".join("".join(part) for part in stderr_parts)
-    return (last_proc.returncode or 0), sanitize(stdout_data or ""), sanitize(combined_stderr or "")
+def _handle_piped(cmd_str: str, timeout: int) -> Tuple[int, str, str]:
+    """Execute a pipeline of commands connected via ``|`` using the centralized SubprocessGuard."""
+    return default_guard.run_agent_pipeline(cmd_str, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +127,7 @@ def safe_execute_command(command: str, timeout: int = 300) -> Tuple[int, str, st
         try:
             ok_p, segments, parse_err = split_pipe_segments(cmd_str)
             if ok_p and len(segments) > 1:
-                return _handle_piped(segments, timeout)
+                return _handle_piped(cmd_str, timeout)
         except Exception:
             pass  # fall through to simple command
 

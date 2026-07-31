@@ -36,33 +36,34 @@ def test_select_status_verb_stages():
 
 def test_filesystem_diff_and_metadata():
     tool = FileSystemTool()
-    tmpdir = Path.cwd() / ".tmp_ui3_test"
-    tmpdir.mkdir(exist_ok=True)
-    target = tmpdir / "test_diff.py"
+    tmpdir_abs = Path.cwd() / ".tmp_ui3_test"
+    tmpdir_abs.mkdir(exist_ok=True)
+    target_abs = tmpdir_abs / "test_diff.py"
+    target_rel = ".tmp_ui3_test/test_diff.py"
     try:
         # 1. First write
-        res1 = tool.execute(action="write", path=str(target), content="line1\nline2\n")
+        res1 = tool.execute(action="write", path=target_rel, content="line1\nline2\n")
         assert res1.success
         assert "diff" in res1.metadata
         assert res1.metadata["additions"] == 2
         assert res1.metadata["deletions"] == 0
 
         # 2. Append
-        res2 = tool.execute(action="append", path=str(target), content="line3\n")
+        res2 = tool.execute(action="append", path=target_rel, content="line3\n")
         assert res2.success
         assert res2.metadata["additions"] == 1
         assert res2.metadata["deletions"] == 0
 
         # 3. Replace
-        res3 = tool.execute(action="replace", path=str(target), old_text="line2", new_text="line2_updated")
+        res3 = tool.execute(action="replace", path=target_rel, old_text="line2", new_text="line2_updated")
         assert res3.success
         assert res3.metadata["additions"] == 1
         assert res3.metadata["deletions"] == 1
     finally:
-        if target.exists():
-            target.unlink()
-        if tmpdir.exists():
-            tmpdir.rmdir()
+        if target_abs.exists():
+            target_abs.unlink()
+        if tmpdir_abs.exists():
+            tmpdir_abs.rmdir()
 
 
 def test_render_diff_formatting():

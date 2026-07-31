@@ -46,11 +46,14 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
     def test_orchestrator_loop_blocked_after_single_read(self):
         """Reads pyproject once, then tries execute_shell (the looping branch).
         Must terminate <= 2 cycles, no shell dispatch, no Partial banner."""
+        root_list = '{"tool": "file_system", "args": {"action": "list", "path": "."}}'
+        read1 = '{"tool": "file_system", "args": {"action": "read", "path": "README.md"}}'
+        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "LICENSE"}}'
         read = '{"tool": "file_system", "args": {"action": "read", "path": "pyproject.toml"}}'
         # Orchestrator tries to spin: shell after having the answer in hand.
         spin = '{"tool": "execute_shell", "args": {"command": "cat pyproject.toml | head -50"}}'
         final = '{"tool": "final_answer", "args": {"answer": "The project name is nabd-os"}}'
-        loop, llm = self._make_loop([read, spin, final])
+        loop, llm = self._make_loop([root_list, read1, read2, read, spin, final])
 
         result = loop.run("read pyproject.toml and give me the project name")
 
@@ -65,10 +68,13 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
 
     def test_wider_scope_relist_blocked_after_read(self):
         """After reading pyproject.toml, a 'list' / path='.' call must be blocked."""
+        root_list = '{"tool": "file_system", "args": {"action": "list", "path": "."}}'
+        read1 = '{"tool": "file_system", "args": {"action": "read", "path": "README.md"}}'
+        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "LICENSE"}}'
         read = '{"tool": "file_system", "args": {"action": "read", "path": "pyproject.toml"}}'
         relist = '{"tool": "file_system", "args": {"action": "list", "path": "."}}'
         final = '{"tool": "final_answer", "args": {"answer": "The project name is nabd-os"}}'
-        loop, llm = self._make_loop([read, relist, final])
+        loop, llm = self._make_loop([root_list, read1, read2, read, relist, final])
 
         result = loop.run("read pyproject.toml and give me the project name")
 
@@ -82,9 +88,12 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
         on the FIRST occurrence, even with no prior file_system read — it is the
         exact wasteful loop, never needed for a targeted question."""
         scan = '{"tool": "file_system", "args": {"action": "list", "path": ".", "recursive": true}}'
+        root_list = '{"tool": "file_system", "args": {"action": "list", "path": "."}}'
+        read1 = '{"tool": "file_system", "args": {"action": "read", "path": "README.md"}}'
+        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "LICENSE"}}'
         read = '{"tool": "file_system", "args": {"action": "read", "path": "pyproject.toml"}}'
         final = '{"tool": "final_answer", "args": {"answer": "The project name is nabd-os"}}'
-        loop, llm = self._make_loop([scan, read, final])
+        loop, llm = self._make_loop([scan, root_list, read1, read2, read, final])
 
         result = loop.run("read pyproject.toml and tell me the project name")
 
@@ -99,10 +108,13 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
 
     def test_reread_same_path_blocked(self):
         """Re-reading the exact same file path must be blocked."""
+        root_list = '{"tool": "file_system", "args": {"action": "list", "path": "."}}'
+        read1 = '{"tool": "file_system", "args": {"action": "read", "path": "README.md"}}'
+        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "LICENSE"}}'
         read = '{"tool": "file_system", "args": {"action": "read", "path": "pyproject.toml"}}'
         reread = '{"tool": "file_system", "args": {"action": "read", "path": "pyproject.toml"}}'
         final = '{"tool": "final_answer", "args": {"answer": "The project name is nabd-os"}}'
-        loop, llm = self._make_loop([read, reread, final])
+        loop, llm = self._make_loop([root_list, read1, read2, read, reread, final])
 
         result = loop.run("read pyproject.toml and give me the project name")
 
