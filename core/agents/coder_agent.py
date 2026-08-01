@@ -98,10 +98,8 @@ class CoderAgent:
 
     _EXCLUDED_TOOLS = {"secure_shell", "secure_workspace_reader"}
 
-    def __init__(self, model: Any, workspace_path: str = ".") -> None:
+    def __init__(self, model: Any) -> None:
         self._model = model
-        # Pin the workspace root so the jail still applies to this isolated agent.
-        _lazy_pin_workspace_root()(Path(workspace_path).resolve())
 
         CodeAgent = _lazy_smolagents()
         (
@@ -113,14 +111,15 @@ class CoderAgent:
             SecureGraphifyTool,
         ) = _lazy_secure_tools()
 
+        # D-06: Rely on the authoritative get_workspace_root() in tools.
         self._agent = CodeAgent(
             tools=[
-                SecureFileSystemTool(workspace=workspace_path),
+                SecureFileSystemTool(),
                 SecureWebSearchTool(),
-                SecureCodeIntelligenceTool(workspace=workspace_path),
-                SecurePythonREPLTool(workspace=workspace_path),
-                SecureTasteManagerTool(workspace=workspace_path),
-                SecureGraphifyTool(workspace_dir=workspace_path),
+                SecureCodeIntelligenceTool(),
+                SecurePythonREPLTool(),
+                SecureTasteManagerTool(),
+                SecureGraphifyTool(),
                 *_lazy_build_skill_tools(),
             ],
             model=model,

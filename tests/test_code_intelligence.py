@@ -50,19 +50,18 @@ class TestCodeIntelligenceTool(unittest.TestCase):
         self.assertIn("async def fetch_data(url: str, timeout: int) (L12-L14) -- Fetch data asynchronously.", res.output)
 
     def test_get_definition_class_method(self) -> None:
-        res = self.tool.execute(action="get_definition", path=".", symbol="speak")
+        res = self.tool.execute(action="get_definition", path="sample.py", symbol="speak")
         self.assertTrue(res.success, res.stderr)
         self.assertIn("• [def] speak in sample.py (L8-L10)", res.output)
         self.assertIn("Docstring: Make a noise.", res.output)
 
-    def test_get_definition_across_nested_dir(self) -> None:
+    def test_get_definition_directory_fails(self) -> None:
         res = self.tool.execute(action="get_definition", path=".", symbol="calculate")
-        self.assertTrue(res.success, res.stderr)
-        self.assertIn("pkg/utils.py", res.output)
-        self.assertIn("• [def] calculate", res.output)
+        self.assertFalse(res.success)
+        self.assertIn("PRECONDITION_NOT_MET: Target", res.stderr)
 
     def test_get_definition_missing_symbol(self) -> None:
-        res = self.tool.execute(action="get_definition", path=".", symbol="non_existent_func")
+        res = self.tool.execute(action="get_definition", path="sample.py", symbol="non_existent_func")
         self.assertTrue(res.success)
         self.assertIn("No definition found for symbol 'non_existent_func'", res.output)
 

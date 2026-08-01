@@ -38,3 +38,13 @@ class ToolResult:
             return self[key]
         except (KeyError, AttributeError):
             return default
+
+class ToolPreconditionError(Exception):
+    """Exception raised when a tool is called before its required preconditions are met."""
+    def __init__(self, code: str, safe_message: str, recommended_transition: str):
+        self.code = code
+        self.safe_message = safe_message
+        self.recommended_transition = recommended_transition
+        # We format it exactly how the LLM should see it
+        super().__init__(f"ToolPreconditionError[{code}]: {safe_message} \\nRecommended Action: {recommended_transition}")
+

@@ -64,9 +64,11 @@ class CodeIntelligenceTool(BaseTool):
         """Resolve path safely inside the workspace."""
         if not relative_path or relative_path.strip() == "":
             relative_path = "."
+            
         target = (self.workspace / relative_path).resolve()
         if self.workspace not in target.parents and target != self.workspace:
-            raise PermissionError("Access outside the workspace is forbidden.")
+            raise PermissionError(f"Access outside the workspace is forbidden: {target}")
+            
         return target
 
     def execute(self, **kwargs) -> ToolResult:
@@ -93,9 +95,11 @@ class CodeIntelligenceTool(BaseTool):
     def _list_symbols(self, target: Path) -> ToolResult:
         """List all classes, methods, and functions inside a single Python file."""
         if not target.exists():
-            return ToolResult(success=False, stderr=f"File not found: {target.name}")
+            return ToolResult(success=False, stderr=f"PRECONDITION_NOT_MET: Target file does not exist: {target.name}")
+        if target.is_dir():
+            return ToolResult(success=False, stderr=f"PRECONDITION_NOT_MET: Target '{target.name}' is a directory. list_symbols requires a specific .py file.")
         if not target.is_file() or target.suffix != ".py":
-            return ToolResult(success=False, stderr=f"Target must be an existing Python (.py) file: {target.name}")
+            return ToolResult(success=False, stderr=f"PRECONDITION_NOT_MET: Target must be an existing Python (.py) file: {target.name}")
 
         try:
             content = target.read_text(encoding="utf-8")
@@ -154,21 +158,22 @@ class CodeIntelligenceTool(BaseTool):
         )
 
     def _get_definition(self, target: Path, symbol: str) -> ToolResult:
-        """Find definitions of a symbol across a target file or workspace directory."""
+        """Find definitions of a symbol in a specific Python file."""
         if not symbol:
-            return ToolResult(success=False, stderr="Argument 'symbol' is required for action 'get_definition'.")
+            return ToolResult(success=False, stderr="PRECONDITION_NOT_MET: Argument 'symbol' is required for action 'get_definition'.")
 
         py_files: List[Path] = []
+        if not target.exists():
+            return ToolResult(success=False, stderr=f"PRECONDITION_NOT_MET: Target file does not exist: {target.name}")
+            
+        if target.is_dir():
+            return ToolResult(success=False, stderr=f"PRECONDITION_NOT_MET: Target '{target.name}' is a directory. get_definition requires a specific .py file.")
+            
         if target.is_file():
             if target.suffix == ".py":
                 py_files.append(target)
-        elif target.is_dir():
-            for root, dirs, files in os.walk(target):
-                # Prune common ignore directories
-                dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".venv", "node_modules", ".pytest_cache")]
-                for file in files:
-                    if file.endswith(".py"):
-                        py_files.append(Path(root) / file)
+            else:
+                return ToolResult(success=False, stderr=f"PRECONDITION_NOT_MET: Target must be an existing Python (.py) file: {target.name}")
 
         if not py_files:
             return ToolResult(success=False, stderr=f"No Python (.py) files found in {target}")

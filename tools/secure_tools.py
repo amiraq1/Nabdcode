@@ -806,11 +806,45 @@ class SecureCodeIntelligenceTool(SecureTool):
 
     def forward(self, action: str = "", path: str = ".", symbol: str = "", **kwargs: Any) -> str:
         act = action or kwargs.get("action", "")
+        from tools.models import ToolPreconditionError
+        
         if not act:
-            return "Error: code_intelligence requires an 'action' argument ('list_symbols' or 'get_definition')."
+            raise ToolPreconditionError(
+                code="MISSING_ACTION",
+                safe_message="code_intelligence requires an 'action' argument ('list_symbols' or 'get_definition').",
+                recommended_transition="Provide 'action' parameter."
+            )
+        
         result = self._tool.execute(action=str(act), path=str(path or kwargs.get("path", ".")), symbol=str(symbol or kwargs.get("symbol", "")), **kwargs)
         if not result.success:
-            return f"Error ({result.returncode}): {result.stderr or result.stdout}"
+            err_msg = str(result.stderr or result.stdout)
+            
+            if "PRECONDITION_NOT_MET" in err_msg:
+                raise ToolPreconditionError(
+                    code="INVALID_TARGET",
+                    safe_message=err_msg.replace("PRECONDITION_NOT_MET: ", "").strip(),
+                    recommended_transition="DISCOVER_REPOSITORY"
+                )
+            elif "Access outside the workspace is forbidden" in err_msg:
+                raise ToolPreconditionError(
+                    code="WORKSPACE_ESCAPE_ATTEMPT",
+                    safe_message="Target path is outside the allowed workspace. You must target files within the current repository.",
+                    recommended_transition="DISCOVER_REPOSITORY"
+                )
+            elif "SyntaxError" in err_msg:
+                raise ToolPreconditionError(
+                    code="SYNTAX_ERROR",
+                    safe_message="Target file contains invalid Python syntax and cannot be analyzed.",
+                    recommended_transition="Fix syntax errors before analysis."
+                )
+            else:
+                # Opaque error for unhandled internal failures to avoid leaking raw stderr/paths
+                raise ToolPreconditionError(
+                    code="INTERNAL_ANALYSIS_FAILURE",
+                    safe_message="The AST analyzer encountered an internal failure on this file.",
+                    recommended_transition="Skip this file or use file_system read instead."
+                )
+            
         return str(result.stdout or result.stderr).strip()
 
 

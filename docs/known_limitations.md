@@ -49,3 +49,20 @@ ambiguous output. The user can retry with a command whose output does not
 look like a claim. This is a deliberate trade-off: investigation gates are
 bypassed for efficiency, but the claim gate remains as the last line of
 defense against narrative spoofing.
+
+## UI-DECISION-01 — Reversed Arabic in Code/Diff Rendering (Conscious Non-Fix)
+
+**التصنيف:** UI-DECISION (قرار مسجَّل)، **وليس** defect.
+
+Reversed/bidi-misrendered Arabic in code/diff rendering is a **conscious,
+recorded non-fix**. No bidi / arabic-reshaper / python-bidi / heavy rendering
+library will be added to correct it — the user explicitly rejected heavy
+dependencies on the Termux weight budget, and the live production UI renders
+via Rich/prompt_toolkit on `ui/repl_termux.py`.
+
+This is a deliberate product decision, not a defect. **No later phase or agent
+may silently add a bidi dependency "to be helpful".** If a future phase finds
+reversal is genuinely fixable within the existing Rich stack without any new
+heavy dependency, it must surface that as a new, separately-authorized
+decision — it must not be bundled into another phase or treated as a bug fix.
+
