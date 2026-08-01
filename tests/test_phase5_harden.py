@@ -197,12 +197,15 @@ def test_evidence_feedback_loop_soft_interception():
 
     state = RuntimeState(session_id="test_evidence_rejection")
     loop = ExecutionLoop(state=state)
-    loop._ctx = _LoopCtx(user_prompt="find the file and report line count")
-    loop._last_response = "The file has 42 lines."  # Unverified claim without evidence anchor
+    loop._ctx = _LoopCtx(user_prompt="run tests and report")
+    loop._last_response = "Ran 42 tests successfully."  # Unverified claim without evidence anchor
 
-    # Call final_answer tool call
-    tc_final = ToolCall(tool="final_answer", args={"answer": "The file has 42 lines."})
-    sig = loop._handle_cycle_and_security(tc_final)
+    from unittest.mock import patch
+    
+    with patch.object(ExecutionLoop, '_run_independent_checker', return_value=True):
+        # Call final_answer tool call
+        tc_final = ToolCall(tool="final_answer", args={"answer": "Ran 42 tests successfully."})
+        sig = loop._handle_cycle_and_security(tc_final)
 
     assert sig.name == "CONTINUE"
     assert loop._evidence_rejection_count == 1

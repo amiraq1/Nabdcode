@@ -283,11 +283,14 @@ class TestNativeSkillsLoader(unittest.TestCase):
             with patch("core.skills.Path.home", return_value=Path(tmp) / "no_home"):
                 skill = discover_skills(Path(tmp))[0]
             state = type("S", (), {"shell_permissions": ShellPermissions()})()
+            from core.kernel.security import pin_workspace_root
+            pin_workspace_root(Path(tmp))
+            
             # args carries the target path; must substitute {target}.
             result = execute_skill(
                 skill, state=state, evidence_log=EvidenceLog(), args=target
             )
-            self.assertTrue(result.success)
+            self.assertTrue(result.success, msg=result.stderr)
             self.assertIn("hello from skill", result.stdout)
 
     def test_execute_skill_args_cannot_bypass_heuristics(self):

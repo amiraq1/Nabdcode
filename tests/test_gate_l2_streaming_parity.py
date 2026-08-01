@@ -102,7 +102,9 @@ class TestGateL2StreamingParity(unittest.TestCase):
         
         with patch('engine.loop._resolve_default_provider', return_value=mock_provider):
             self.engine.llm_provider = mock_provider  # same object → identity passes
-            self.engine._force_tool = True
+            self.engine._ctx.intent_policy.needs_investigation = True
+            self.engine._ctx.intent_policy.minimum_reads = 3
+            self.engine._real_reads = MagicMock(return_value=0)
             
             # Mock streaming to raise RuntimeError → forces fallthrough to non-streaming
             with patch.object(self.engine, '_invoke_with_token_stream', side_effect=RuntimeError("stream forced fallback")):
