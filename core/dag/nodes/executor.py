@@ -1,6 +1,7 @@
 # core/dag/nodes/executor.py
 import os
 import ast
+from pathlib import Path
 from core.dag.base import BaseNode, Edge
 from core.dag.context import NabdExecutionContext
 
@@ -19,8 +20,24 @@ class ExecutorNode(BaseNode):
         # ملاحظة معمارية: نفترض هنا أن context.code_diffs يحتوي على 
         # { "مسار_الملف": "الكود_الجديد_بالكامل" } لضمان سلامة التنفيذ.
         
+        workspace_path = Path(context.workspace_dir).resolve()
+        
         for file_path, new_content in context.code_diffs.items():
-            full_path = os.path.join(context.workspace_dir, file_path)
+            raw_full_path = Path(context.workspace_dir) / file_path
+            
+            try:
+                resolved_path = raw_full_path.resolve()
+            except Exception as e:
+                print(f"❌ [Executor] Path resolution failed for {file_path}: {e}")
+                context.error_flags = True
+                return Edge(target_node_id="end", reason="Path Resolution Error")
+
+            if not resolved_path.is_relative_to(workspace_path):
+                print(f"❌ [Executor] SECURITY VIOLATION: Path traversal blocked for {file_path}")
+                context.error_flags = True
+                return Edge(target_node_id="end", reason="Path Containment Violation")
+                
+            full_path = str(resolved_path)
             
             # 1. الدرع الأخير: الفحص النحوي (Syntax Validation) قبل المساس بالقرص
             try:

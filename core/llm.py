@@ -339,8 +339,10 @@ class OpenRouterClient:
                     reader = SSELineReader(iter(_read_chunk, b""))
                     for event in reader:
                         delta = self._extract_content_delta(event)
-                        if delta is not None and "content" in delta:
-                            assembled.append(delta["content"])
+                        if delta is not None:
+                            if "content" in delta:
+                                assembled.append(delta["content"])
+                            yield delta
                     if CancelToken().is_cancelled():
                         return "".join(assembled)
                 return "".join(assembled)

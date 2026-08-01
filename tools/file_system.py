@@ -12,13 +12,7 @@ from tools.base import BaseTool
 from tools.models import ToolResult
 from core.sanitize import sanitize
 from core.kernel.events import bus
-from core.accept_edits_state import (
-    PendingEdit,
-    _accept_edits_pending,
-    _accept_edits_enabled,
-    _compute_digest,
-    _highlight_word_changes,
-)
+import core.accept_edits_state as aes
 
 
 class FileAction(str, Enum):
@@ -444,10 +438,11 @@ class FileSystemTool(BaseTool):
         # gate. This is the intended fail-closed behavior.
         # NOTE: ToolResult does NOT accept a `summary` keyword argument.
         # The summary string is embedded in stdout via header lines above.
+        # However, it must be included in the metadata dict to satisfy tests.
         return ToolResult(
             success=n_ok > 0,
             stdout=combined,
-            metadata={"action": "read_many"},
+            metadata={"action": "read_many", "summary": summary},
         )
 
     def _handle_edit(self, path_str: str, target: Path, kwargs: dict[str, Any]) -> ToolResult:
@@ -498,8 +493,8 @@ class FileSystemTool(BaseTool):
         # When accept-edits mode is active, queue the edit for user approval
         # instead of writing to disk immediately. The queue is drained by
         # ui/repl_termux.py after the agent turn completes.
-        if _accept_edits_enabled:
-            _accept_edits_pending.append(PendingEdit(
+        if aes._accept_edits_enabled:
+            aes._accept_edits_pending.append(aes.PendingEdit(
                 path=path_str,
                 resolved_path=str(target),
                 old_content=old_content,
@@ -507,7 +502,7 @@ class FileSystemTool(BaseTool):
                 diff=diff_display,
                 additions=additions,
                 removals=removals,
-                expected_original_digest=_compute_digest(old_content) if old_content else "",
+                expected_original_digest=aes._compute_digest(old_content) if old_content else "",
             ))
             summary = f"Pending edit: {path_str} (+{additions} -{removals}) — awaiting approval"
             return ToolResult(

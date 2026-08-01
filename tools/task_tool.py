@@ -127,7 +127,6 @@ class TaskTool(BaseTool):
         return ToolResult(
             success=True,
             stdout=payload,
-            output=payload,
             returncode=0,
             status="success",
         )

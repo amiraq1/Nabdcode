@@ -108,7 +108,7 @@ class TestConsecutiveNoToolCap(unittest.TestCase):
 
         # 3 consecutive no-tool rounds → on the 4th the cap (>3) forces partial.
         for _ in range(3):
-            loop._ctx.consecutive_no_tool_rounds += 1
+            loop._ctx.consecutive_no_progress += 1
         forced = loop._maybe_force_partial_answer()
         self.assertTrue(forced)
         self.assertIn("Partial answer", loop._last_response)
@@ -120,11 +120,11 @@ class TestConsecutiveNoToolCap(unittest.TestCase):
         loop._ctx.start_time = time.time()  # Brand new start time (time_ratio = 0)
         loop.evidence_log.record(tool="web_search", command_or_path="q", success=True, output_snippet="found X")
 
-        loop._ctx.consecutive_no_tool_rounds = 4  # Exceeds cap (3)
+        loop._ctx.consecutive_no_progress = 4  # Exceeds cap (3)
         forced = loop._maybe_force_partial_answer()
         self.assertTrue(forced)
         self.assertIn("Partial answer", loop._last_response)
-        self.assertIn("consecutive reasoning limit reached", loop._last_response)
+        self.assertIn("no-progress limit reached", loop._last_response)
 
 
 class TestBudgetRecoveryMode(unittest.TestCase):
@@ -132,7 +132,7 @@ class TestBudgetRecoveryMode(unittest.TestCase):
         state = RuntimeState(session_id="rec_time")
         loop = ExecutionLoop(llm_provider=MagicMock(return_value="ok"), state=state)
         loop._ctx = _LoopCtx(user_prompt="task")
-        loop._ctx.consecutive_no_tool_rounds = 0
+        loop._ctx.consecutive_no_progress = 0
         loop._ctx.start_time = time.time() - (180 * 0.81)  # > 80% time budget
         loop.evidence_log.record(tool="file_system", command_or_path="main.py", success=True, output_snippet="code data")
 

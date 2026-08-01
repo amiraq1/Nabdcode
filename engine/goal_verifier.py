@@ -84,7 +84,7 @@ def evaluate_goal_exit(
     if goal is None or not goal.raw_prompt.strip():
         return GoalVerificationResult(ok=True, findings=[], goal_active=False)
 
-    criteria = goal.success_criteria.strip() or goal.raw_prompt.strip()
+    criteria = (goal.success_criteria or goal.raw_prompt).strip()
 
     # No evidence at all → cannot prove anything. Fail closed.
     if require_tools and not evidence_log.has_evidence():

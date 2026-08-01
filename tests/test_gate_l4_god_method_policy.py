@@ -16,6 +16,9 @@ class TestGateL4GodMethodPolicy(unittest.TestCase):
         self.engine._logger = MagicMock()
         self.engine.evidence_log = MagicMock()
         self.engine._ctx = MagicMock()
+        self.engine._ctx.intent_policy = MagicMock()
+        self.engine._ctx.intent_policy.needs_investigation = False
+        self.engine._ctx.intent_policy.minimum_reads = 3
         self.engine.POLL_DELAY = 0
 
     def test_no_unjustified_semantic_drift_in_invoke_llm_and_normalize(self):
