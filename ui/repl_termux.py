@@ -965,6 +965,10 @@ def _process_pending_edits() -> None:
     """
     # Shared accept-edits state (core/ module — no tools-layer dependency).
     import core.accept_edits_state as _state  # noqa: E402 — lazy
+    # V-02: modular word-diff renderer (ui/widgets/diff_render.py — Rich, not
+    # textual). Kept lazy to avoid a top-of-file import; the god file only keeps
+    # a minimal call site (R4).
+    from ui.widgets.diff_render import render_edit_diff  # noqa: E402 — lazy
 
     # Use peek_pending() to read edits WITHOUT removing them from the queue.
     # drain_pending() is called only AFTER all edits are processed.
@@ -974,32 +978,7 @@ def _process_pending_edits() -> None:
 
     console.print()
     for edit in pending:
-        diff_lines = edit.diff.splitlines()
-        colored: list[str] = []
-        i = 0
-        while i < len(diff_lines):
-            line = diff_lines[i]
-            if (
-                line.startswith("-") and not line.startswith("---")
-                and i + 1 < len(diff_lines)
-                and diff_lines[i + 1].startswith("+") and not diff_lines[i + 1].startswith("+++")
-            ):
-                old_line = line[1:].rstrip("\n")
-                new_line = diff_lines[i + 1][1:].rstrip("\n")
-                hl_old, hl_new = _state._highlight_word_changes(old_line, new_line)
-                colored.append(f"[red]-{hl_old}[/red]")
-                colored.append(f"[green]+{hl_new}[/green]")
-                i += 2
-            elif line.startswith("+") and not line.startswith("+++"):
-                colored.append(f"[green]{line}[/green]")
-                i += 1
-            elif line.startswith("-") and not line.startswith("---"):
-                colored.append(f"[red]{line}[/red]")
-                i += 1
-            else:
-                colored.append(f"[dim]{line}[/dim]")
-                i += 1
-        diff_text = "\n".join(colored)
+        diff_text = render_edit_diff(edit.diff)
 
         panel = Panel(
             diff_text if diff_text else "(no diff — new file)",
