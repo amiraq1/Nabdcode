@@ -26,6 +26,13 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
             registry.register(ShellTool())
         except ValueError:
             pass
+        from pathlib import Path
+        self.fixture_path = Path("fixture.txt")
+        self.fixture_path.write_text("fixture content")
+
+    def tearDown(self):
+        if self.fixture_path.exists():
+            self.fixture_path.unlink()
 
     def _make_loop(self, responses):
         state = RuntimeState(session_id="test-live-convergence")
@@ -48,7 +55,7 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
         Must terminate <= 2 cycles, no shell dispatch, no Partial banner."""
         root_list = '{"tool": "file_system", "args": {"action": "list", "path": "."}}'
         read1 = '{"tool": "file_system", "args": {"action": "read", "path": "README.md"}}'
-        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "AGENT.md"}}'
+        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "fixture.txt"}}'
         read = '{"tool": "file_system", "args": {"action": "read", "path": "pyproject.toml"}}'
         # Orchestrator tries to spin: shell after having the answer in hand.
         spin = '{"tool": "execute_shell", "args": {"command": "cat pyproject.toml | head -50"}}'
@@ -70,7 +77,7 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
         """After reading pyproject.toml, a 'list' / path='.' call must be blocked."""
         root_list = '{"tool": "file_system", "args": {"action": "list", "path": "."}}'
         read1 = '{"tool": "file_system", "args": {"action": "read", "path": "README.md"}}'
-        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "AGENT.md"}}'
+        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "fixture.txt"}}'
         read = '{"tool": "file_system", "args": {"action": "read", "path": "pyproject.toml"}}'
         relist = '{"tool": "file_system", "args": {"action": "list", "path": "."}}'
         final = '{"tool": "final_answer", "args": {"answer": "The project name is nabd-os"}}'
@@ -90,7 +97,7 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
         scan = '{"tool": "file_system", "args": {"action": "list", "path": ".", "recursive": true}}'
         root_list = '{"tool": "file_system", "args": {"action": "list", "path": "."}}'
         read1 = '{"tool": "file_system", "args": {"action": "read", "path": "README.md"}}'
-        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "AGENT.md"}}'
+        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "fixture.txt"}}'
         read = '{"tool": "file_system", "args": {"action": "read", "path": "pyproject.toml"}}'
         final = '{"tool": "final_answer", "args": {"answer": "The project name is nabd-os"}}'
         loop, llm = self._make_loop([scan, root_list, read1, read2, read, final])
@@ -110,7 +117,7 @@ class TestLiveAnswerInHandConvergence(unittest.TestCase):
         """Re-reading the exact same file path must be blocked."""
         root_list = '{"tool": "file_system", "args": {"action": "list", "path": "."}}'
         read1 = '{"tool": "file_system", "args": {"action": "read", "path": "README.md"}}'
-        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "AGENT.md"}}'
+        read2 = '{"tool": "file_system", "args": {"action": "read", "path": "fixture.txt"}}'
         read = '{"tool": "file_system", "args": {"action": "read", "path": "pyproject.toml"}}'
         reread = '{"tool": "file_system", "args": {"action": "read", "path": "pyproject.toml"}}'
         final = '{"tool": "final_answer", "args": {"answer": "The project name is nabd-os"}}'
