@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 from typing import Any, Dict, List
 
+from core.kernel.subprocess_guard import default_guard
+
 
 class UvIsolationManager:
     """Executes code in an ephemeral uv-isolated environment."""

@@ -145,6 +145,8 @@ class TestShellValidationGateway(unittest.TestCase):
         self.assertTrue(ok, f"Git push should pass: {reason}")
 
     def test_whitelisted_binary(self):
+        from core.security import pin_workspace_root
+        pin_workspace_root(Path("/workspace"))
         ok, reason = validate("cat /workspace/file.txt")
         self.assertTrue(ok, f"Cat should pass: {reason}")
 
