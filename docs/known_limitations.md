@@ -49,3 +49,15 @@ ambiguous output. The user can retry with a command whose output does not
 look like a claim. This is a deliberate trade-off: investigation gates are
 bypassed for efficiency, but the claim gate remains as the last line of
 defense against narrative spoofing.
+
+## UI-LIMIT: Loop-Phase, Budget, and Max Step (V-04)
+
+The `AgentStatusBar` currently subscribes to kinetic activity (`tool_started`, `llm_request_started`, etc.) and accurately displays the agent's current step (`Step N`).
+However, the UI does NOT display the true underlying `loop_phase` (e.g. PLAN/COLLECT/SYNTHESIZE/FINALIZE), the `budget` ratio, or the `/max` steps limit. 
+This is because the `loop.py` engine currently does not emit these state pieces to the event bus. To avoid visual fabrication (inventing state that the engine didn't broadcast), the UI explicitly omits these indicators. This limitation is deferred to a future engineering phase (`ENGINE-OBS-01`), which will securely add emits for these items in the engine layer, at which point the UI can safely render them.
+
+## UI-CHANGE: Visual Line Wrapping Changes Default Collapse Behavior (V-07a)
+
+V-07a introduced visual line estimation in `ToolResultWidget._count_visible_lines` (folding long lines into multiple visual lines based on console width). This means very long single-line outputs (e.g. minified JSON, base64, long stack traces) now collapse by default.
+
+**Contract change:** Truncation testing for long outputs must explicitly set `w._collapsed = False` to force the expanded rendering path, as the default behavior for long visual lines is now collapsed.
