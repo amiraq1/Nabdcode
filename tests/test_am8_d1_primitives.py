@@ -135,10 +135,10 @@ def test_personalities_are_visually_distinct():
 
 def test_statusline_snapshot_per_personality():
     cases = [
-        (Personality.THINKING, UIState.THINKING, "\u280b  thinking  thinking"),
-        (Personality.RUNNING,  UIState.RUNNING,  "\u2500  running  running"),
+        (Personality.THINKING, UIState.THINKING, "\u2026  thinking  thinking"),
+        (Personality.RUNNING,  UIState.RUNNING,  "\u25b6  running  running"),
         (Personality.SUCCESS,  UIState.SUCCESS,  "✓  ok  success"),
-        (Personality.WARNING,  UIState.WARNING,  "\u25e2  warn  warning"),
+        (Personality.WARNING,  UIState.WARNING,  "⚠  warn  warning"),
         (Personality.ERROR,    UIState.ERROR,    "✖  error  error"),
     ]
     for p, state, expected in cases:
@@ -443,3 +443,25 @@ def test_status_line_emits_exactly_one_leading_glyph(state):
     assert len(parts) == 3, f"Expected 3 parts, got {len(parts)}: {parts}"
     assert len(parts[0]) == 1, f"Expected exactly one leading glyph, got {len(parts[0])}: {parts[0]!r}"
     assert parts[2] == "Ctx"
+
+@pytest.mark.parametrize("state", list(UIState))
+def test_static_render_uses_state_icon_not_spinner_frame(state):
+    from ui.design.primitives.status_line import StatusLine
+    from ui.design.icons import Icon
+    from ui.design.primitives.personality import style_of, UI_STATES
+    from ui.design.tokens import GAP
+    from ui.design.animation import Spinner
+
+    sl = StatusLine(state, "Ctx", hide_verb=False)
+    rendered = _visible(sl, 80)
+    gap = " " * GAP.status
+    leading_glyph = rendered.split(gap)[0]
+
+    style = style_of(state)
+    expected_icon = Icon.glyph(style.icon)
+    
+    assert leading_glyph == expected_icon
+    
+    spinner = UI_STATES[state].spinner
+    if spinner != Spinner.NONE:
+        assert leading_glyph != spinner.frame

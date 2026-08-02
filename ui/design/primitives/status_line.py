@@ -42,8 +42,7 @@ class StatusLine:
         weight = to_style_str(style.weight)
         gap = " " * GAP.status
 
-        frame = spinner_frame_for(self.state)
-        glyph = frame if frame else Icon.glyph(style.icon)
+        glyph = Icon.glyph(style.icon)
 
         line = Text(style=style.color.to_rich_style())
         line.append(glyph, style=weight or None)
