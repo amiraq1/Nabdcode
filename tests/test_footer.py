@@ -1,55 +1,70 @@
-"""Tests for Phase 4 navigation footer help widget."""
+"""Tests for Phase D-3b AppFooter widget."""
 
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from rich.console import RenderableType
-from rich.text import Text
-
-from ui.widgets.footer import NavigationFooter
-from ui.theme import FOOTER_COLOR
-
-
-def test_render_active_is_renderable():
-    """render(active=True) must return a Rich renderable."""
-    footer = NavigationFooter()
-    result = footer.render(active=True)
-    assert isinstance(result, RenderableType) or hasattr(result, "__rich__")
+from rich.console import Console
+from ui.widgets.footer import AppFooter
 
 
 def test_render_active_contains_jk():
-    """render(active=True) must contain 'j/k'."""
-    footer = NavigationFooter()
+    """render(active=True) must contain 'j/k ↑↓' via KeyValueRow."""
+    footer = AppFooter()
     result = footer.render(active=True)
-    # Text objects expose .plain for the raw string
-    plain = result.plain if hasattr(result, "plain") else str(result)
-    assert "j/k" in plain
+    
+    console = Console(width=80, force_terminal=True, highlight=False)
+    with console.capture() as cap:
+        console.print(result)
+    text = cap.get()
+    
+    assert "j/k" in text
+    assert "Navigate" in text
 
 
 def test_render_active_contains_enter():
-    """render(active=True) must contain 'Enter'."""
-    footer = NavigationFooter()
+    """render(active=True) must contain 'Enter' via KeyValueRow."""
+    footer = AppFooter()
     result = footer.render(active=True)
-    plain = result.plain if hasattr(result, "plain") else str(result)
-    assert "Enter" in plain
+    
+    console = Console(width=80, force_terminal=True, highlight=False)
+    with console.capture() as cap:
+        console.print(result)
+    text = cap.get()
+    
+    assert "Enter" in text
+    assert "Expand" in text
 
 
 def test_render_active_contains_esc():
-    """render(active=True) must contain 'Esc'."""
-    footer = NavigationFooter()
+    """render(active=True) must contain 'Esc' via KeyValueRow."""
+    footer = AppFooter()
     result = footer.render(active=True)
-    plain = result.plain if hasattr(result, "plain") else str(result)
-    assert "Esc" in plain
+    
+    console = Console(width=80, force_terminal=True, highlight=False)
+    with console.capture() as cap:
+        console.print(result)
+    text = cap.get()
+    
+    assert "Esc" in text
+    assert "Exit" in text
 
 
-def test_render_inactive_empty():
-    """render(active=False) must render empty."""
-    footer = NavigationFooter()
+def test_render_inactive_contains_idle_hints():
+    """render(active=False) must render idle hints via KeyValueRow."""
+    footer = AppFooter()
     result = footer.render(active=False)
-    plain = result.plain if hasattr(result, "plain") else str(result)
-    assert plain == ""
+    
+    console = Console(width=80, force_terminal=True, highlight=False)
+    with console.capture() as cap:
+        console.print(result)
+    text = cap.get()
+    
+    assert "[shift+tab]" in text
+    assert "Input" in text
+    assert "?" in text
+    assert "Help" in text
 
 
 def test_no_hardcoded_colors_in_footer():
@@ -58,33 +73,17 @@ def test_no_hardcoded_colors_in_footer():
     import inspect
 
     source = inspect.getsource(footer_mod)
-    # Strip the import line that references FOOTER_COLOR
-    lines = [
-        line for line in source.splitlines()
-        if "FOOTER_COLOR" not in line
-    ]
-    source_without_import = "\n".join(lines)
     # No inline hex colors or named color strings should appear
     forbidden = ["#000000", "#ffffff", "grey50", "bright_cyan", "red", "green"]
     for color in forbidden:
-        assert color not in source_without_import, (
+        assert color not in source, (
             f"Hardcoded color '{color}' found in footer.py source"
         )
 
-
-def test_footer_uses_theme_color():
-    """The footer text must use the FOOTER_COLOR from the theme."""
-    footer = NavigationFooter()
-    result = footer.render(active=True)
-    assert result.style == FOOTER_COLOR
-
-
 if __name__ == "__main__":
-    test_render_active_is_renderable()
     test_render_active_contains_jk()
     test_render_active_contains_enter()
     test_render_active_contains_esc()
-    test_render_inactive_empty()
+    test_render_inactive_contains_idle_hints()
     test_no_hardcoded_colors_in_footer()
-    test_footer_uses_theme_color()
     print("All footer tests passed.")

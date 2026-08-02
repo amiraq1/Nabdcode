@@ -1,30 +1,29 @@
-"""Navigation footer help widget (Phase 4).
-
-Renders a short hint bar showing the available keyboard shortcuts when
-navigation is active (after ``show_final_answer``).  When navigation is
-inactive the footer renders as an empty ``Text`` so nothing is printed.
-"""
+"""Application footer and navigation hint widget (Phase D-3b)."""
 
 from __future__ import annotations
 
-from rich.text import Text
 from rich.console import RenderableType
 
-from ui.theme import FOOTER_COLOR
+from ui.design.primitives import Row, KeyValueRow
 
 
-class NavigationFooter:
-    """Minimal footer that shows/hides navigation hint text."""
+class AppFooter:
+    """Footer displaying active keybindings/hints via atoms."""
 
-    def render(self, active: bool) -> RenderableType:
+    def render(self, active: bool = False) -> RenderableType:
         """Return the footer renderable.
 
-        When *active* is ``False`` an empty ``Text`` is returned so the
-        caller can safely ``console.print()`` without producing output.
+        When *active* is False, returns general repl hints.
+        When *active* is True, returns navigation hints.
         """
-        if not active:
-            return Text("")
-        return Text(
-            "  Navigate: j/k \u2191\u2193   Expand: Enter   Exit: Esc",
-            style=FOOTER_COLOR,
+        if active:
+            return Row(
+                KeyValueRow("Navigate", "j/k ↑↓"),
+                KeyValueRow("Expand", "Enter"),
+                KeyValueRow("Exit", "Esc"),
+            )
+            
+        return Row(
+            KeyValueRow("Input", "[shift+tab]"),
+            KeyValueRow("Help", "? for shortcuts"),
         )
