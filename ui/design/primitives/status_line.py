@@ -16,7 +16,7 @@ from ui.design.theme.semantic import SEMANTIC
 from ui.design.tokens import GAP
 
 from ui.design.primitives.personality import (
-    PersonalityStyle, style_of, spinner_frame_for, to_style_str,
+    PersonalityStyle, style_of, to_style_str,
 )
 
 

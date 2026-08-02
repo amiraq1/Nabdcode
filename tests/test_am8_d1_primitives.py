@@ -43,9 +43,15 @@ STYLE_CALL = re.compile(r"(?<![A-Za-z])Style\(")   # rich Style, not Personality
 
 
 def _capture(renderable, width: int = 80) -> str:
-    """Render a Rich renderable to a string via the mandated fixed console."""
+    """Render a Rich renderable to a string via the mandated fixed console.
+
+    IMPORTANT: Console(width=N) only honors N when height is also supplied.
+    Rich's size property requires both _width and _height to be non-None;
+    otherwise it falls through to the real terminal dimensions (80x25 on
+    Termux even when width=9 is requested). Always pass height=25.
+    """
     buf = io.StringIO()
-    console = Console(file=buf, width=width, force_terminal=True,
+    console = Console(file=buf, width=width, height=25, force_terminal=True,
                       color_system="truecolor")
     console.print(renderable)
     return buf.getvalue()
@@ -278,7 +284,7 @@ def _plain_render(widget, width: int = 80) -> str:
     from ui.widgets.tool_result import ToolResultWidget
     from rich.console import Console
     buf = io.StringIO()
-    console = Console(file=buf, width=width, force_terminal=True,
+    console = Console(file=buf, width=width, height=25, force_terminal=True,
                       color_system="truecolor")
     widget._console = console
     console.print(widget.render())
@@ -326,7 +332,7 @@ from rich.console import Console
 import {wmod}
 w = {wmod}.{class_name}({inst_code})
 buf = io.StringIO()
-c = Console(file=buf, width=80, force_terminal=True, color_system="truecolor")
+c = Console(file=buf, width=80, height=25, force_terminal=True, color_system="truecolor")
 w._console = c
 if hasattr(w, 'render'):
     renderable = w.render()
@@ -465,3 +471,59 @@ def test_static_render_uses_state_icon_not_spinner_frame(state):
     spinner = UI_STATES[state].spinner
     if spinner != Spinner.NONE:
         assert leading_glyph != spinner.frame
+
+
+# ── design global mutation guard ─────────────────────────────────────────────
+
+def test_no_test_mutates_shared_design_globals():
+    """Permanent guard: the shared design globals must equal their pristine values.
+
+    Any test that hot-reloads or monkey-patches _PERSONALITY_STYLE,
+    _PERSONALITY_OF, or Icon must restore them. This guard catches the leak
+    by comparing current state against a fresh import in a subprocess so that
+    in-process mutations don't poison the comparison itself.
+    """
+    import subprocess, sys
+    script = """
+import sys, json
+sys.path.insert(0, sys.argv[1])
+from ui.design.primitives.personality import _PERSONALITY_OF, _PERSONALITY_STYLE
+from ui.design.icons import Icon as _Icon
+result = {
+    "personality_of_keys": sorted(str(k) for k in _PERSONALITY_OF),
+    "personality_of_values": sorted(str(v) for v in _PERSONALITY_OF.values()),
+    "personality_style_keys": sorted(str(k) for k in _PERSONALITY_STYLE),
+    "icon_members": sorted(str(m) for m in _Icon),
+}
+import sys
+import json
+sys.stdout.write(json.dumps(result))
+"""
+    import json
+    root = str(Path(__file__).resolve().parents[1])
+    result = subprocess.run(
+        [sys.executable, "-c", script, root],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    pristine = json.loads(result.stdout)
+
+    # Compare against the in-process (possibly mutated) state
+    current_of_keys = sorted(str(k) for k in _PERSONALITY_OF)
+    current_of_values = sorted(str(v) for v in _PERSONALITY_OF.values())
+    current_style_keys = sorted(str(k) for k in _PERSONALITY_STYLE)
+    from ui.design.icons import Icon as _Icon
+    current_icon_members = sorted(str(m) for m in _Icon)
+
+    assert current_of_keys == pristine["personality_of_keys"], (
+        "_PERSONALITY_OF keys mutated by a test"
+    )
+    assert current_of_values == pristine["personality_of_values"], (
+        "_PERSONALITY_OF values mutated by a test"
+    )
+    assert current_style_keys == pristine["personality_style_keys"], (
+        "_PERSONALITY_STYLE keys mutated by a test"
+    )
+    assert current_icon_members == pristine["icon_members"], (
+        "Icon registry mutated by a test"
+    )
