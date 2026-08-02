@@ -34,6 +34,8 @@ class Gap:
     widget: int = 2
     section: int = 3
     panel: int = 4
+    header_after_logo: int = 1  # blank line between logo and status row
+    footer_indent: int = 2      # leading indent of the footer hint bar
 
 
 GAP: Gap = Gap()

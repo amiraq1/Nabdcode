@@ -11,10 +11,23 @@ from ui.widgets.footer import AppFooter
 
 
 def test_render_active_is_row_of_atoms():
-    """render(active=True) must be a Row composed of KeyValueRow atoms."""
+    """render(active=True) must be a padded Row composed of KeyValueRow atoms."""
+    from rich.padding import Padding
+
     result = AppFooter().render(active=True)
-    assert isinstance(result, Row)
-    assert all(isinstance(child, KeyValueRow) for child in result.children)
+    assert isinstance(result, Padding)
+    row = result.renderable
+    assert isinstance(row, Row)
+    assert all(isinstance(child, KeyValueRow) for child in row.children)
+
+
+def test_footer_leading_indent_uses_spacing_token():
+    """The footer's leading indent must come from the GAP.footer_indent
+    spacing token, not ad-hoc padding."""
+    from ui.design.tokens import GAP
+
+    result = AppFooter().render(active=True)
+    assert result.left == GAP.footer_indent  # leading edge
 
 
 def test_render_active_contains_jk():
@@ -77,6 +90,7 @@ def test_footer_uses_semantic_colors():
 
 if __name__ == "__main__":
     test_render_active_is_row_of_atoms()
+    test_footer_leading_indent_uses_spacing_token()
     test_render_active_contains_jk()
     test_render_active_contains_enter()
     test_render_active_contains_esc()

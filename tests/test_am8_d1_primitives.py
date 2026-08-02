@@ -585,3 +585,67 @@ def test_no_unpinned_console_in_tests():
         if rel not in _UNPINNED_CONSOLE_ALLOWLIST
     }
     assert not unexpected, f"console width= without height=:\n{unexpected}"
+
+
+# ── D-3b.1: the eye must find the boundaries ────────────────────────────────
+
+def test_key_value_row_separates_key_from_value():
+    """KeyValueRow must render the SEPARATOR.key_value glyph between key and
+    value — never whitespace alone — in the token's SEMANTIC color."""
+    from ui.design.tokens import GAP, SEPARATOR
+
+    out = _visible(KeyValueRow("k", "v"), 80)
+    sep = SEPARATOR.key_value.glyph
+    assert out == f"k{sep}{' ' * GAP.status}v", f"got {out!r}"
+
+    colored = _capture(KeyValueRow("k", "v"), 80)
+    r, g, b = SEPARATOR.key_value.color.rgb
+    assert f"38;2;{r};{g};{b}" in colored
+
+
+def test_row_separates_groups():
+    """Row(separator=…) must interleave the group glyph between children: on
+    a rendered line, adjacent groups must not be distinguishable by
+    whitespace alone."""
+    from rich.text import Text
+
+    from ui.design.tokens import GAP, SEPARATOR
+
+    row = Row(Text("A"), Text("B"), Text("C"), separator=SEPARATOR.group)
+    out = _visible(row, 80)
+    sep = SEPARATOR.group.glyph
+    gap = " " * GAP.status
+
+    assert len(out.splitlines()) == 1
+    assert out.count(sep) == 2                      # one between each pair
+    for segment in ("A", "B", "C"):
+        assert segment in out
+    # the glyph must sit between groups, not only whitespace
+    assert f"A{gap}{sep}{gap}B" in out
+    assert f"B{gap}{sep}{gap}C" in out
+
+
+def test_no_literal_separators_in_widgets():
+    """No widget may type a literal '|' or ':' delimiter: separators have a
+    single owner (the token layer) and atoms apply them. The glyphs are
+    allowed only in ui/design/tokens/ and ui/design/primitives/ — the guard
+    proves guards 1-2 are satisfied through the token, not a copy."""
+    widgets_root = Path(__file__).resolve().parents[1] / "ui" / "widgets"
+    offenders: dict[str, list[str]] = {}
+    for path in sorted(widgets_root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        for i, line in enumerate(path.read_text().splitlines(), 1):
+            if re.search(r'["\'](:|\|)["\']', line):
+                offenders.setdefault(path.name, []).append(f"line {i}: {line.strip()[:80]}")
+    assert not offenders, f"literal separator glyphs in widgets:\n{offenders}"
+
+    # single-owner proof: the glyphs exist in the token layer
+    from ui.design.tokens import SEPARATOR
+
+    tokens_root = Path(__file__).resolve().parents[1] / "ui" / "design" / "tokens"
+    token_src = "\n".join(
+        p.read_text() for p in tokens_root.glob("*.py") if "__pycache__" not in p.parts
+    )
+    assert SEPARATOR.key_value.glyph in token_src
+    assert SEPARATOR.group.glyph in token_src

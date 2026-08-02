@@ -11,10 +11,20 @@ from ui.widgets.header import AppHeader
 
 
 def test_header_is_column_of_centered_parts():
-    """render() must be a Column: centered logo + centered status row."""
+    """render() must be a Column: centered logo + blank line + centered status."""
     result = AppHeader(workspace="w", model="m").render()
     assert isinstance(result, Column)
-    assert len(result.children) == 2
+    assert len(result.children) == 3
+
+
+def test_header_blank_line_uses_spacing_token():
+    """The blank line between logo and status row must exist and be driven
+    by the GAP.header_after_logo spacing token."""
+    from ui.design.tokens import GAP
+
+    assert GAP.header_after_logo >= 1
+    text = render_to_text(AppHeader(workspace="w", model="m").render())
+    assert "\n\n" in text  # logo block, blank line, status row
 
 
 def test_header_shows_session_metadata():
@@ -60,6 +70,7 @@ def test_header_carries_no_color_literals():
 
 if __name__ == "__main__":
     test_header_is_column_of_centered_parts()
+    test_header_blank_line_uses_spacing_token()
     test_header_shows_session_metadata()
     test_header_defaults_workspace_to_cwd()
     test_header_uses_semantic_colors()

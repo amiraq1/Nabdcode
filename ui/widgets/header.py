@@ -2,7 +2,8 @@
 
 Replaces the manual logo/status ``console.print`` block in ``run_repl``:
 logo Text + a status Row of Badge/KeyValueRow, centered, all colors via
-SEMANTIC (no hex literals in this file).
+SEMANTIC (no hex literals in this file). The blank line between logo and
+status row and the group separators come from tokens, never literals.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from rich.text import Text
 
 from ui.design.primitives import Column, Row, Badge, KeyValueRow
 from ui.design.theme.semantic import SEMANTIC
+from ui.design.tokens import GAP, SEPARATOR
 
 
 class AppHeader:
@@ -41,9 +43,11 @@ class AppHeader:
             Badge("System Ready", meaning="success"),
             KeyValueRow("Model", self.model),
             KeyValueRow("Workspace", self.workspace),
+            separator=SEPARATOR.group,
         )
 
         return Column(
             Align.center(logo),
+            Text("\n" * GAP.header_after_logo),
             Align.center(status_row),
         )
