@@ -205,12 +205,25 @@ def test_badge_for_shell():
 # ── Truncation ───────────────────────────────────────────────────────────────
 
 def test_long_output_truncated_in_expanded():
-    """Expanded view should truncate output > 2000 chars."""
+    """Expanded view truncates output > 2000 chars. V-07a contract: long
+    visual lines now collapse by default, so force expanded to test the
+    truncation path directly (collapse is asserted in the next test)."""
     output = "x" * 3000
     w = ToolResultWidget("shell", output)
+    w._collapsed = False          # V-07a: force expanded; collapse tested below
     rendered = _render_to_string(w)
     assert "truncated" in rendered
     assert len(rendered) < 4000  # not the full 3000 chars
+
+
+def test_long_single_line_collapses_by_visual_length():
+    """V-07a NEW contract: a single very long line counts as many visual
+    lines and collapses by default (this is the intended improvement)."""
+    output = "x" * 3000
+    w = ToolResultWidget("shell", output)
+    w.render()                    # triggers _count_visible_lines
+    assert w.line_count > 5
+    assert w.is_collapsed
 
 
 # ── Edge cases ───────────────────────────────────────────────────────────────

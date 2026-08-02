@@ -97,3 +97,6 @@ forensics_report*.md
 /tests_collection.txt
 /tool_routing_remediation_report.md
 /update_l1_ast.py
+
+scratch.py
+session-*.md

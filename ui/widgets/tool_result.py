@@ -19,6 +19,8 @@ from rich.console import Console, RenderableType
 from rich.panel import Panel
 from rich.text import Text
 
+from rich.syntax import Syntax
+
 from ui.theme import ACTION_COLORS, PANEL_STYLES, SELECTED_COLOR
 
 
@@ -99,8 +101,24 @@ class ToolResultWidget:
     # ── Internal helpers ───────────────────────────────────────────────
 
     def _count_visible_lines(self) -> None:
-        """Count non-empty lines in the output."""
-        self._line_count = sum(1 for line in self.output.splitlines() if line.strip())
+        """Count non-empty lines in the output, estimating visual word-wrap on narrow terminals."""
+        lines = 0
+        # If no console attached or width unavailable, fallback to 80 chars.
+        # Narrow phones often sit around 40-50, but 80 is a safe conservative estimate.
+        w = 80
+        if self._console is not None:
+            _cw = getattr(self._console, "width", None)
+            if isinstance(_cw, int) and _cw > 0:   # robust vs MagicMock / non-int width
+                w = _cw
+        w = max(40, w) # Minimum width sanity check to avoid excessive counts
+        
+        for line in self.output.splitlines():
+            if not line.strip():
+                continue
+            # V-07a: Each visual wrap adds a line to the visible count
+            lines += 1 + (len(line) // w)
+            
+        self._line_count = lines
 
     def _generate_preview(self) -> None:
         """Build a short preview: first non-empty line, max 3 words."""
@@ -130,6 +148,36 @@ class ToolResultWidget:
         if not self.output.strip():
             return "clean"
         return f"{self._line_count} lines"
+        
+    def _format_args_preview(self) -> str:
+        """Extract a meaningful path or command from args and truncate it."""
+        if not self.args:
+            return ""
+            
+        target = (
+            self.args.get("path") or 
+            self.args.get("file") or 
+            self.args.get("target") or 
+            self.args.get("TargetFile") or 
+            self.args.get("AbsolutePath") or 
+            self.args.get("DirectoryPath")
+        )
+        
+        if not target and self.args.get("command"):
+            target = self.args.get("command")
+        elif not target and self.args.get("CommandLine"):
+            target = self.args.get("CommandLine")
+            
+        if not isinstance(target, str):
+            return ""
+            
+        # Smart truncation in the middle if > 40 chars
+        MAX_LEN = 40
+        if len(target) > MAX_LEN:
+            half = (MAX_LEN - 3) // 2
+            target = target[:half] + "..." + target[-half:]
+            
+        return target
 
     def _build_header_markup(self) -> str:
         """Compose the collapsed header as Rich markup."""
@@ -138,9 +186,13 @@ class ToolResultWidget:
         status = "✓" if self.success else "✗"
         status_style = "green" if self.success else "red"
         info = self._get_info()
+        
+        arg_preview = self._format_args_preview()
+        arg_markup = f" [cyan]{arg_preview}[/]" if arg_preview else ""
+        
         return (
             f"► [#{color}]{badge}[/]  "
-            f"{self.tool_name}  "
+            f"{self.tool_name}{arg_markup}  "
             f"[{status_style}]{status}[/]  "
             f"({info})"
         )
@@ -148,11 +200,27 @@ class ToolResultWidget:
     def _render_expanded(self) -> RenderableType:
         """Full output Panel — preserves existing rendering behavior."""
         output_text = self.output.strip() if self.output else "(empty result)"
-        if len(output_text) > 2000:
-            output_text = output_text[:2000] + "\n...[truncated by UI]"
+        
+        # V-07a: Smart truncation at line boundaries instead of raw mid-line cutting
+        MAX_LEN = 2000
+        if len(output_text) > MAX_LEN:
+            truncated = output_text[:MAX_LEN]
+            last_newline = truncated.rfind('\n')
+            if last_newline > 0:
+                output_text = truncated[:last_newline] + "\n...[truncated by UI]"
+            else:
+                output_text = truncated + "\n...[truncated by UI]"
+            
+        # V-03: Semantic traceback coloring
+        if "Traceback (most recent call last):" in output_text:
+            content = Syntax(output_text, "pytb", theme="monokai", word_wrap=True)
+        else:
+            # V-07a: Use ellipsis overflow and no_wrap to prevent ugly path tearing on narrow screens
+            content = Text(f"[{self.tool_name}]\n{output_text}", style="white", overflow="ellipsis", no_wrap=True)
+            
         border = SELECTED_COLOR if self.selected else PANEL_STYLES["tool_complete"]["border_style"]
         return Panel(
-            Text(f"[{self.tool_name}]\n{output_text}", style="white"),
+            content,
             border_style=border,
             title=PANEL_STYLES["tool_complete"]["title"],
             padding=PANEL_STYLES["tool_complete"]["padding"],
