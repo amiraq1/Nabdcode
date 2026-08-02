@@ -380,3 +380,28 @@ if __name__ == "__main__":
     test_selected_border_uses_selected_color_not_hardcoded()
     test_unselected_uses_default_border()
     print("All ToolResultWidget tests passed.")
+
+def test_error_reason_is_not_output_line_one():
+    """An error whose first output line is arbitrary text (e.g. 'out 0') must NOT surface that text as the reason."""
+    w = ToolResultWidget("shell", "out 0\narbitrary output", success=False)
+    rendered = _render_to_string(w)
+    assert "reason" not in rendered
+    assert "out 0" in rendered
+
+def test_error_without_reason_omits_segment():
+    """Skeleton equality must still hold with the segment absent — SUCCESS and reasonless-ERROR share the skeleton."""
+    import re
+    from ui.design.icons import Icon
+    
+    ok = ToolResultWidget("shell", "out 0", success=True)
+    err = ToolResultWidget("shell", "out 0", success=False)
+    
+    def norm(s: str) -> str:
+        s = (s.replace(Icon.glyph(Icon.SUCCESS), "O")
+              .replace(Icon.glyph(Icon.ERROR), "O")
+              .replace("ok", "V")
+              .replace("error", "V"))
+        return re.sub(r" +", " ", s).strip()
+        
+    a, b = _render_to_string(ok), _render_to_string(err)
+    assert norm(a) == norm(b)

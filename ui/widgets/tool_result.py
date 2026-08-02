@@ -120,6 +120,22 @@ class ToolResultWidget:
 
     # ── Data helpers (state, not rendering) ────────────────────────────
 
+    def _get_deduplicated_lines(self) -> list[str]:
+        """Return output lines, stripping the reason if it is the first line."""
+        lines = self.output.splitlines()
+        if self.success:
+            return lines
+            
+        reason = self._reason()
+        if not reason:
+            return lines
+            
+        first_non_empty = next((i for i, l in enumerate(lines) if l.strip()), -1)
+        if first_non_empty != -1 and lines[first_non_empty].strip() == reason:
+            return lines[:first_non_empty] + lines[first_non_empty+1:]
+            
+        return lines
+
     def _count_visible_lines(self) -> None:
         """Count non-empty lines in the output, estimating visual word-wrap."""
         lines = 0
@@ -130,7 +146,7 @@ class ToolResultWidget:
                 w = _cw
         w = max(40, w)  # minimum width sanity check to avoid excessive counts
 
-        for line in self.output.splitlines():
+        for line in self._get_deduplicated_lines():
             if not line.strip():
                 continue
             # V-07a: each visual wrap adds a line to the visible count
@@ -140,7 +156,7 @@ class ToolResultWidget:
 
     def _generate_preview(self) -> None:
         """Build a short preview: first non-empty line, max 3 words."""
-        lines = [line for line in self.output.splitlines() if line.strip()]
+        lines = [line.strip() for line in self._get_deduplicated_lines() if line.strip()]
         if not lines:
             self._preview = ""
             return
@@ -207,14 +223,29 @@ class ToolResultWidget:
         return SEMANTIC.success if self.success else SEMANTIC.error
 
     def _reason(self) -> str:
-        """Named error reason segment: summary, else first non-empty line."""
+        """Named error reason segment: exception message > stderr > exit code."""
         if self.success:
             return ""
-        text = self.summary or next(
-            (line.strip() for line in self.output.splitlines() if line.strip()),
-            "",
-        )
-        return text
+        if self.summary:
+            return self.summary
+            
+        lines = [line.strip() for line in self.output.splitlines() if line.strip()]
+        if not lines:
+            return ""
+            
+        if "Traceback (most recent call last):" in self.output:
+            return lines[-1]
+            
+        for line in lines:
+            lower = line.lower()
+            if lower.startswith(("error:", "fatal:", "exception:")):
+                return line
+                
+        for line in reversed(lines):
+            if "exit code" in line.lower():
+                return line
+                
+        return ""
 
     # ── Composition (atoms only) ───────────────────────────────────────
 
@@ -232,7 +263,8 @@ class ToolResultWidget:
 
     def _body(self):
         """Output body: Syntax for tracebacks, else a semantic Text."""
-        output_text = self.output.strip() if self.output else "(empty result)"
+        deduplicated = "\n".join(self._get_deduplicated_lines())
+        output_text = deduplicated.strip() if deduplicated.strip() else "(empty result)"
 
         # V-07a: truncate at line boundaries instead of raw mid-line cutting
         MAX_LEN = 2000
