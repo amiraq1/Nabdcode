@@ -14,7 +14,6 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from rich.align import Align
 from rich.box import ROUNDED
 from rich.console import Console
 from rich.live import Live
@@ -1254,55 +1253,6 @@ def _setup_repl_keybindings() -> KeyBindings:
     return bindings
 
 
-def _get_repl_toolbar_html() -> HTML:
-    """Dynamic bottom toolbar: status spinner + phase + token count + mode.
-
-    Extracted from ``run_repl`` to reduce its cyclomatic complexity.
-    Uses module-level globals for state (CC <= 5).
-    """
-    frame = _STATUS_SPINNER_FRAMES[_STATUS_SPINNER_IDX]
-    verb = _STATUS_PHASE_VERBS.get(_status_phase, _STATUS_PHASE_VERBS["idle"])
-    token_str = ""
-    if _status_tokens > 0:
-        if _status_tokens >= 1000:
-            token_str = f"  {_status_tokens/1000:.1f}k"
-        else:
-            token_str = f"  {_status_tokens}"
-
-    if _mode_state == 1:
-        mode_html = '<style bg="ansicyan" fg="black"> plan mode </style>'
-    elif _mode_state == 2:
-        # Derive from actual session state: show "accept edits on" ONLY when
-        # there are pending edits in the queue. This prevents stale footer
-        # state from leaking between sessions or tasks.
-        import core.accept_edits_state as _ae_state
-        if _ae_state.has_pending_edits():
-            mode_html = '<style bg="ansicyan" fg="black"> accept edits on </style>'
-        else:
-            mode_html = ''
-    else:
-        mode_html = ''
-
-    warn_html = ""
-    if _status_tokens > 150_000:
-        est_k = _status_tokens // 1000
-        warn_html = (
-            f'  <style bg="yellow" fg="black"> ⚠ {est_k}k tokens </style>'
-            '  <style fg="#ffcc00">run /compact</style>'
-        )
-    elif _status_tokens > _CONTEXT_WARN_THRESHOLD:
-        est_k = _status_tokens // 1000
-        warn_html = (
-            f'  <style bg="yellow" fg="black"> ⚠ {est_k}k tokens </style>'
-            '  <style fg="#ffcc00">try /compact</style>'
-        )
-
-    if _status_phase == "idle":
-        return HTML(f'<b>» {mode_html}{warn_html} [shift+tab]  ? for shortcuts</b>')
-
-    return HTML(f'<b>{frame} {verb}{token_str}  |  {mode_html}{warn_html} [shift+tab]  ? for shortcuts</b>')
-
-
 async def run_repl(agent, agent_runner_func=None) -> None:
     """Launch the Termux-optimized Sequential Cyberpunk REPL session.
 
@@ -1313,15 +1263,10 @@ async def run_repl(agent, agent_runner_func=None) -> None:
     # 1. Hard clear terminal (Termux specific)
     print("\033c", end="")
 
-    # 2. Print Logo exactly once
-    logo_ascii = "[#ffffff]█▄ █ ▄▀█ █▄▀ █▀▄ █▀▀ █▀█ █▀▄ █▀▀[/]\n[#808080]█ ▀█ █▀█ █▄█ █▄▀ █▄▄ █▄█ █▄▀ ██▄[/]"
-    console.print(Align.center(logo_ascii))
-    console.print()
-
-    # 3. Print Status exactly once
-    workspace_name = os.path.basename(os.getcwd())
-    status_line = f"[#ffffff]System Ready[/] | [#808080]Model: gemini-1.5-pro[/] | [#808080]Workspace: {workspace_name}[/]"
-    console.print(Align.center(status_line))
+    # 2. Header exactly once (D-3b: AppHeader atoms replace manual logo/status
+    # Panel printing)
+    from ui.widgets.header import AppHeader
+    console.print(AppHeader().render())
     console.print()
 
     bridge = get_bridge()
@@ -1336,13 +1281,13 @@ async def run_repl(agent, agent_runner_func=None) -> None:
     # the agent finishes execution.
     from core.kernel.events import bus as _event_bus
     from ui.keybindings import create_navigation_keybindings
-    from ui.widgets.footer import NavigationFooter
+    from ui.widgets.footer import AppFooter
     from prompt_toolkit.key_binding import merge_key_bindings
 
     _nav_visualizer = TerminalVisualizer(
         event_bus=_event_bus, state=None, register_listeners=False
     )
-    _footer = NavigationFooter()
+    _footer = AppFooter()
 
     # Wrap show_final_answer so the footer hint bar appears after the
     # final-answer card is rendered.
@@ -1362,12 +1307,10 @@ async def run_repl(agent, agent_runner_func=None) -> None:
     )
     _merged_bindings = merge_key_bindings([bindings, _nav_bindings])
 
-    # Bottom toolbar (extracted to module-level function for CC reduction).
     session = PromptSession(
         style=cyberpunk_style,
         history=FileHistory(HISTORY_FILE),
         key_bindings=_merged_bindings,
-        bottom_toolbar=_get_repl_toolbar_html,
         input_processors=[],
     )
 

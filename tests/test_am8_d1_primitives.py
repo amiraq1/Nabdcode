@@ -7,8 +7,8 @@ Invariant guarantees (mirrored from D-0, extended to all primitives):
   - every one of the 14 UIStates maps to a personality (total, no fallthrough)
   - the five personalities are VISUALLY DISTINCT (permanent guard)
   - Spinner keeps exposing the rate as a numeric VALUE (no loop/polling)
-Snapshots are captured with the mandated fixed console:
-    Console(width=80, force_terminal=True, color_system="truecolor")
+Snapshots are captured with the mandated fixed console (width and height
+both pinned — a width-only console falls back to the real terminal):
 """
 from __future__ import annotations
 
@@ -45,10 +45,10 @@ STYLE_CALL = re.compile(r"(?<![A-Za-z])Style\(")   # rich Style, not Personality
 def _capture(renderable, width: int = 80) -> str:
     """Render a Rich renderable to a string via the mandated fixed console.
 
-    IMPORTANT: Console(width=N) only honors N when height is also supplied.
-    Rich's size property requires both _width and _height to be non-None;
-    otherwise it falls through to the real terminal dimensions (80x25 on
-    Termux even when width=9 is requested). Always pass height=25.
+    IMPORTANT: a console with width=N only honors N when height is also
+    supplied. Rich's size property requires both _width and _height to be
+    non-None; otherwise it falls through to the real terminal dimensions
+    (80x25 on Termux even when width=9 is requested). Always pass height=25.
     """
     buf = io.StringIO()
     console = Console(file=buf, width=width, height=25, force_terminal=True,
@@ -527,3 +527,61 @@ sys.stdout.write(json.dumps(result))
     assert current_icon_members == pristine["icon_members"], (
         "Icon registry mutated by a test"
     )
+
+
+# ── D-3b: no unpinned Console in the test tree ──────────────────────────────
+
+_UNPINNED_CONSOLE_ALLOWLIST = {
+    # TEMPORARY — emptied by the follow-up commit (debt ledger, not exemption)
+    "tests/test_status_bar_live.py",
+    "tests/test_keybindings.py",
+    "tests/test_tool_result_widget.py",
+    "tests/test_tool_result_list.py",
+}
+
+
+def _console_calls(src: str) -> list[str]:
+    """Extract full Console( … ) call texts, spanning multiple lines."""
+    calls: list[str] = []
+    i = 0
+    while True:
+        j = src.find("Console(", i)
+        if j == -1:
+            break
+        depth = 0
+        k = j + len("Console(") - 1
+        while k < len(src):
+            if src[k] == "(":
+                depth += 1
+            elif src[k] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        calls.append(src[j:k + 1])
+        i = k + 1
+    return calls
+
+
+def test_no_unpinned_console_in_tests():
+    """Every console built with width= in the test tree must also pin
+    height=…; a bare width falls through to the real terminal dimensions
+    (80x25 on Termux) and silently un-measures the snapshot. Tolerated hits
+    may only live in the TEMPORARY allow-list above: adding a new file to it
+    in any future commit is forbidden — the guard's job is to block NEW
+    unpinned sites, and the follow-up commit empties the list."""
+    tests_root = Path(__file__).resolve().parents[1] / "tests"
+    offenders: dict[str, list[str]] = {}
+    for path in sorted(tests_root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        src = path.read_text()
+        rel = path.relative_to(tests_root.parent).as_posix()
+        for call in _console_calls(src):
+            if "width=" in call and "height=" not in call:
+                offenders.setdefault(rel, []).append(" ".join(call.split())[:90])
+    unexpected = {
+        rel: sites for rel, sites in offenders.items()
+        if rel not in _UNPINNED_CONSOLE_ALLOWLIST
+    }
+    assert not unexpected, f"console width= without height=:\n{unexpected}"

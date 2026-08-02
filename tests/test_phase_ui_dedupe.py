@@ -111,15 +111,13 @@ def test_tool_name_contract_resolves_canonical_key():
     # The printed completion line must contain the real names, not "None".
     # D-2: render() returns the D-1 SectionPanel (a native Rich renderable),
     # so capture text by rendering through a real Console instead of reading
-    # the old rich Panel's `.renderable` attribute.
-    from io import StringIO
-    from rich.console import Console
+    # the old rich Panel's `.renderable` attribute. D-3b: the canonical
+    # pinned console helper (tests/support/render) replaces the inline
+    # width-only Console here.
+    from tests.support.render import render_to_text
 
     def _text_of(renderable: object) -> str:
-        buf = StringIO()
-        Console(file=buf, width=80, color_system=None,
-                force_terminal=False).print(renderable)
-        return buf.getvalue()
+        return render_to_text(renderable)
 
     printed = "".join(
         _text_of(call.args[0])
