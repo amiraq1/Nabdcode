@@ -12,8 +12,11 @@ def test_status_bar_no_fabrication():
     assert bar._phase_states["Running Tools"] == "active"
     
     # Build renderable and check text
-    panel = bar._build_renderable()
-    text = panel.renderable.markup
+    from rich.console import Console
+    console = Console(width=80, force_terminal=False, highlight=False)
+    with console.capture() as cap:
+        console.print(bar._build_renderable())
+    text = cap.get()
     
     assert "Step 3" in text
     assert "/max" not in text
@@ -27,6 +30,7 @@ def test_status_bar_no_fabrication():
     assert bar._step == 3
     assert bar._phase_states["Thinking"] == "active"
     
-    panel = bar._build_renderable()
-    text = panel.renderable.markup
+    with console.capture() as cap:
+        console.print(bar._build_renderable())
+    text = cap.get()
     assert "Step 3" in text

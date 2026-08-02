@@ -249,8 +249,11 @@ def test_composition_group_in_panel():
 
 # ── D-2: theme swap seam + structural equality + widget style guard ───────
 
-WIDGET_FILE = Path(__file__).resolve().parents[1] / "ui" / "widgets" / "tool_result.py"
-REPO_ROOT = WIDGET_FILE.parents[2]
+MIGRATED_WIDGETS = [
+    Path(__file__).resolve().parents[1] / "ui" / "widgets" / "tool_result.py",
+    Path(__file__).resolve().parents[1] / "ui" / "widgets" / "status_bar.py",
+]
+REPO_ROOT = MIGRATED_WIDGETS[0].parents[2]
 
 _THEME_DEPENDENTS = [
     "ui.design.typography.presets",   # bakes SEMANTIC into PRESETS at import
@@ -264,7 +267,8 @@ _THEME_DEPENDENTS = [
     "ui.design.primitives.spinner",
     "ui.design.primitives.layout",
     "ui.design.primitives",           # package __init__ rebinds all atoms
-    "ui.widgets.tool_result",         # the migrated widget itself
+    "ui.widgets.tool_result",
+    "ui.widgets.status_bar",
 ]
 
 
@@ -295,35 +299,43 @@ def test_theme_swap_requires_no_widget_change():
     import subprocess
     import sys
 
-    source_before = WIDGET_FILE.read_text()
-
-    child_template = """\
-import sys, io, importlib, dataclasses
-sys.path.insert(0, {root!r})
-from ui.widgets.tool_result import ToolResultWidget
-import ui.design.theme.semantic as m
-from ui.design.theme.semantic import SEMANTIC as DEFAULT
-from ui.design.theme.color import Color
-from rich.console import Console
-{swap_code}import ui.widgets.tool_result as tr
-w = tr.ToolResultWidget("shell", "ls output\\nsecond line")
-buf = io.StringIO()
-c = Console(file=buf, width=80, force_terminal=True, color_system="truecolor")
-w._console = c
-c.print(w.render())
-sys.stdout.write(buf.getvalue())
-"""
-
     swap_block = (
         'm.SEMANTIC = dataclasses.replace(DEFAULT, success=Color("#00ff00"),\n'
         "                                 error=Color(\"#ff0000\"),\n"
         "                                 selection=Color(\"#00ffff\"),\n"
+        "                                 accent=Color(\"#ff00ff\"),\n"
+        "                                 thinking=Color(\"#ffff00\"),\n"
+        "                                 text_muted=Color(\"#888888\"),\n"
         "                                 text=Color(\"#ffffff\"))\n"
         f"for name in {_THEME_DEPENDENTS!r}:\n"
-        "    importlib.reload(sys.modules[name])\n"
+        "    if name in sys.modules:\n"
+        "        importlib.reload(sys.modules[name])\n"
     )
 
-    def run(swap: bool) -> str:
+    def run(swap: bool, wfile: Path, wmod: str, class_name: str, inst_code: str) -> str:
+        child_template = f"""\
+import sys, io, importlib, dataclasses
+sys.path.insert(0, {{root!r}})
+from {wmod} import {class_name}
+import ui.design.theme.semantic as m
+from ui.design.theme.semantic import SEMANTIC as DEFAULT
+from ui.design.theme.color import Color
+from rich.console import Console
+{{swap_code}}
+import {wmod}
+w = {wmod}.{class_name}({inst_code})
+buf = io.StringIO()
+c = Console(file=buf, width=80, force_terminal=True, color_system="truecolor")
+w._console = c
+if hasattr(w, 'render'):
+    renderable = w.render()
+elif hasattr(w, '_build_renderable'):
+    renderable = w._build_renderable()
+else:
+    renderable = w
+c.print(renderable)
+sys.stdout.write(buf.getvalue())
+"""
         code = child_template.format(root=str(REPO_ROOT),
                                      swap_code=swap_block if swap else "")
         result = subprocess.run(
@@ -332,32 +344,40 @@ sys.stdout.write(buf.getvalue())
         assert result.returncode == 0, result.stderr
         return result.stdout
 
-    ansi_default = run(swap=False)
-    ansi_swapped = run(swap=True)
+    widget_cases = [
+        (MIGRATED_WIDGETS[0], "ui.widgets.tool_result", "ToolResultWidget", '"shell", "ls output\\nsecond line"'),
+        (MIGRATED_WIDGETS[1], "ui.widgets.status_bar", "AgentStatusBar", ""),
+    ]
 
-    assert ansi_default != ansi_swapped                      # colors changed
-    assert ANSI.sub("", ansi_default) == ANSI.sub("", ansi_swapped)  # structure identical
-    assert WIDGET_FILE.read_text() == source_before         # widget never touched
+    for wfile, wmod, class_name, inst_code in widget_cases:
+        source_before = wfile.read_text()
+        ansi_default = run(False, wfile, wmod, class_name, inst_code)
+        ansi_swapped = run(True, wfile, wmod, class_name, inst_code)
+
+        assert ansi_default != ansi_swapped                      # colors changed
+        assert ANSI.sub("", ansi_default) == ANSI.sub("", ansi_swapped)  # structure identical
+        assert wfile.read_text() == source_before         # widget never touched
 
 
 def test_migrated_widget_carries_no_color_literals():
     """D-2 style guard: the migrated widget file carries no hex literals,
     no Rich color names, and no Style( / style="…" string literals — every
     color resolves through SEMANTIC (swap seam stays at the theme layer)."""
-    src = WIDGET_FILE.read_text()
+    for wfile in MIGRATED_WIDGETS:
+        src = wfile.read_text()
 
-    hex_lit = re.findall(r"#[0-9a-fA-F]{3,8}", src)
-    assert not hex_lit, f"hex literals in widget: {hex_lit}"
+        hex_lit = re.findall(r"#[0-9a-fA-F]{3,8}", src)
+        assert not hex_lit, f"hex literals in {wfile.name}: {hex_lit}"
 
-    names = re.findall(
-        r"\b(?:cyan|magenta|violet|green|red|yellow|blue|white|black|"
-        r"grey|gray|bright_[a-z]+)\b",
-        src, re.IGNORECASE,
-    )
-    assert not names, f"rich color names in widget: {names}"
+        names = re.findall(
+            r"\b(?:cyan|magenta|violet|green|red|yellow|blue|white|black|"
+            r"grey|gray|bright_[a-z]+)\b",
+            src, re.IGNORECASE,
+        )
+        assert not names, f"rich color names in {wfile.name}: {names}"
 
-    style_lit = re.findall(r"Style\(|style\s*=\s*['\"]", src)
-    assert not style_lit, f"rich Style construction in widget: {style_lit}"
+        style_lit = re.findall(r"Style\(|style\s*=\s*['\"]", src)
+        assert not style_lit, f"rich Style construction in {wfile.name}: {style_lit}"
 
 
 def test_success_error_share_skeleton():
@@ -388,3 +408,21 @@ def test_success_error_share_skeleton():
     assert "reason" in b2 and "boom" in b2
     b2_no_reason = "\n".join(l for l in b2.splitlines() if "reason" not in l)
     assert norm(a) == norm(b2_no_reason)
+
+def test_status_line_hide_verb():
+    """D-3: StatusLine can hide its verb for compact rendering."""
+    from ui.design.primitives.status_line import StatusLine
+    from ui.design.state import UIState
+    from ui.design.icons import Icon
+    
+    # Normal: icon + gap + verb + gap + context
+    normal = StatusLine(UIState.SUCCESS, "Thinking")
+    normal_text = _visible(normal, 80)
+    assert "ok" in normal_text
+    assert "Thinking" in normal_text
+    
+    # Hidden verb: icon + gap + context
+    compact = StatusLine(UIState.SUCCESS, "Thinking", hide_verb=True)
+    compact_text = _visible(compact, 80)
+    assert "ok" not in compact_text
+    assert "Thinking" in compact_text

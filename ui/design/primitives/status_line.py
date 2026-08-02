@@ -23,9 +23,13 @@ from ui.design.primitives.personality import (
 class StatusLine:
     """Single status-line component; face is driven by personality, not duplication."""
 
-    def __init__(self, state: UIState, context: str = ""):
+    def __init__(self, state: UIState, context: str = "", *, hide_verb: bool = False):
         self.state = state
-        self.context = context or UI_STATES[state].label
+        self.hide_verb = hide_verb
+        if not context and not hide_verb:
+            self.context = UI_STATES[state].label
+        else:
+            self.context = context
 
     @property
     def style(self) -> PersonalityStyle:
@@ -40,8 +44,9 @@ class StatusLine:
 
         line = Text(style=style.color.to_rich_style())
         line.append(Icon.glyph(style.icon), style=weight or None)
-        line.append(gap)
-        line.append(style.verb, style=weight or None)
+        if not self.hide_verb:
+            line.append(gap)
+            line.append(style.verb, style=weight or None)
 
         frame = spinner_frame_for(self.state)
         if frame:
