@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ui.widgets.tool_result import ToolResultWidget
 from ui.theme import CUSTOM_THEME
+from ui.design.icons import Icon
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -161,11 +162,13 @@ def test_toggle_short_output_still_expanded():
 # ── Success / failure indicators ─────────────────────────────────────────────
 
 def test_failure_shows_red_x():
-    """Failure should show ✗ in the collapsed header."""
+    """Failure should show the canonical error glyph (Icon.ERROR, ✖) in the
+    collapsed header. D-2: the old ballot-x (✗, Icon.DELETE) is replaced by
+    the registry's error icon."""
     output = "\n".join(f"line {i}" for i in range(10))
     w = ToolResultWidget("shell", output, success=False)
     rendered = _render_to_string(w)
-    assert "✗" in rendered
+    assert Icon.glyph(Icon.ERROR) in rendered
 
 
 def test_success_shows_green_check():
@@ -176,15 +179,26 @@ def test_success_shows_green_check():
 
 # ── Badge rendering ──────────────────────────────────────────────────────────
 
-def test_badge_uses_action_colors():
-    """Badge should use ACTION_COLORS, not hardcoded colors."""
-    from ui.theme import ACTION_COLORS
+def test_badge_resolves_semantic_color():
+    """Badge color must resolve via Badge meaning -> SEMANTIC, not a
+    hardcoded palette (ACTION_COLORS is superseded by the D-1 atoms)."""
+    from ui.design.primitives import Badge
+    from ui.design.theme.semantic import SEMANTIC
 
     w = ToolResultWidget("shell", "ls output")
-    badge = w._get_badge()
-    color = w._get_badge_color()
-    assert badge in ACTION_COLORS
-    assert color == ACTION_COLORS[badge]
+    label = w._get_badge()
+    meaning = w._badge_meaning()
+    assert label == "SHELL"          # label vocabulary unchanged
+    assert meaning == "info"
+    assert Badge(label, meaning).meaning == meaning
+
+    buf = StringIO()
+    console = Console(file=buf, width=80, force_terminal=True,
+                      color_system="truecolor")
+    w._console = console
+    console.print(w.render())
+    r, g, b = SEMANTIC.info.rgb
+    assert f"38;2;{r};{g};{b}" in buf.getvalue()
 
 
 def test_badge_for_file_system_read():
@@ -237,13 +251,13 @@ def test_no_content_output():
     assert w.preview == ""
 
 
-def test_render_returns_panel():
-    """render() should return a Rich renderable (Panel)."""
-    from rich.panel import Panel
+def test_render_returns_section_panel():
+    """render() must return the D-1 container atom (SectionPanel)."""
+    from ui.design.primitives import SectionPanel
 
     w = ToolResultWidget("read", "short output")
     result = w.render()
-    assert isinstance(result, Panel)
+    assert isinstance(result, SectionPanel)
 
 
 def test_widget_owns_state():
@@ -288,7 +302,7 @@ def test_select_deselect_chaining():
 
 def test_render_differs_when_selected():
     """render() output must differ between selected=True and selected=False."""
-    from ui.theme import SELECTED_COLOR
+    from ui.design.theme.semantic import SEMANTIC
 
     w_unselected = ToolResultWidget("read", "short output")
     w_unselected.deselect()
@@ -298,37 +312,36 @@ def test_render_differs_when_selected():
     w_selected.select()
     p_selected = w_selected.render()
 
-    # Border style must differ
-    assert p_unselected.border_style != p_selected.border_style
-    # Selected panel must use SELECTED_COLOR
-    assert str(p_selected.border_style) == SELECTED_COLOR
+    # Border color must differ and resolve through SEMANTIC
+    assert p_unselected.border_color != p_selected.border_color
+    assert str(p_selected.border_color) == str(SEMANTIC.selection)
 
 
 def test_selected_border_uses_selected_color_not_hardcoded():
-    """Selected border must use SELECTED_COLOR from theme (not hardcoded)."""
-    from ui.theme import SELECTED_COLOR
+    """Selected border must resolve through SEMANTIC.selection (not hardcoded)."""
+    from ui.design.theme.semantic import SEMANTIC
 
     # Short output → expanded render
     w = ToolResultWidget("read", "short output")
     w.select()
     panel = w.render()
-    assert str(panel.border_style) == SELECTED_COLOR
+    assert str(panel.border_color) == str(SEMANTIC.selection)
 
     # Long output → collapsed render
     output = "\n".join(f"line {i}" for i in range(10))
     w2 = ToolResultWidget("read", output)
     w2.select()
     panel2 = w2.render()
-    assert str(panel2.border_style) == SELECTED_COLOR
+    assert str(panel2.border_color) == str(SEMANTIC.selection)
 
 
 def test_unselected_uses_default_border():
-    """Unselected widgets must use the default border (not SELECTED_COLOR)."""
-    from ui.theme import SELECTED_COLOR
+    """Unselected widgets must not use the selection border."""
+    from ui.design.theme.semantic import SEMANTIC
 
     w = ToolResultWidget("read", "short output")
     panel = w.render()
-    assert str(panel.border_style) != SELECTED_COLOR
+    assert str(panel.border_color) != str(SEMANTIC.selection)
 
 
 if __name__ == "__main__":

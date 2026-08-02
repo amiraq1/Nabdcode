@@ -20,10 +20,18 @@ class Badge:
         self.text = text
         self.meaning = meaning
 
-    def __rich_console__(self, console, options):
+    def _line(self) -> Text:
         color = _MEANING_COLOR.get(self.meaning, SEMANTIC.info)
         line = Text(style=SEMANTIC.text_dim.to_rich_style())
         line.append("[")
         line.append(self.text, style=color.to_rich_style())
         line.append("]")
-        yield line
+        return line
+
+    def __rich_console__(self, console, options):
+        yield self._line()
+
+    def __rich_measure__(self, console, options):
+        """Faithful width so Badge composes horizontally inside Row."""
+        from rich.measure import Measurement
+        return Measurement.get(console, options, self._line())

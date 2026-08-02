@@ -31,7 +31,8 @@ class StatusLine:
     def style(self) -> PersonalityStyle:
         return style_of(self.state)
 
-    def __rich_console__(self, console, options) -> RenderableType:
+    def _line(self) -> Text:
+        """The rendered status line (single Text; measure reuses it)."""
         rec = UI_STATES[self.state]
         style = self.style
         weight = to_style_str(style.weight)
@@ -49,4 +50,14 @@ class StatusLine:
 
         line.append(gap, style=SEMANTIC.text_dim.to_rich_style())
         line.append(self.context, style=SEMANTIC.text_dim.to_rich_style())
-        yield line
+        return line
+
+    def __rich_console__(self, console, options) -> RenderableType:
+        yield self._line()
+
+    def __rich_measure__(self, console, options):
+        """Faithful width so StatusLine composes horizontally inside Row
+        (Rich Columns measures via __rich_measure__, else it assumes the
+        full console width and stacks items vertically)."""
+        from rich.measure import Measurement
+        return Measurement.get(console, options, self._line())

@@ -152,6 +152,17 @@ def test_five_personalities_have_distinct_renders():
     assert len(set(renders.values())) == 5
 
 
+# ── icons: COLLAPSE keeps a distinct glyph ────────────────────────────────
+
+def test_icon_collapse_is_distinct_glyph():
+    """COLLAPSE (►, U+25BA) must be a distinct member — never folded into
+    RUNNING (▶) or RESUME (▸), so the collapse affordance survives."""
+    glyph = Icon.glyph(Icon.COLLAPSE)
+    assert glyph == "\u25ba"
+    siblings = {Icon.glyph(m) for m in Icon if m is not Icon.COLLAPSE}
+    assert glyph not in siblings
+
+
 # ── spinner: rate is a numeric VALUE ─────────────────────────────────────
 
 def test_spinner_accepts_every_profile():
@@ -197,6 +208,19 @@ def test_key_value_row_cjk_truncation():
 
 # ── composition: all 8 atoms inside one Group inside one Panel ───────────
 
+def test_row_lays_out_horizontally():
+    """Row must compose children on ONE line (atoms carry faithful
+    __rich_measure__; without it Rich Columns assumes full width and stacks
+    items vertically)."""
+    row = Row(StatusLine(UIState.SUCCESS, "clean"), Badge("SHELL", "info"))
+    out = _visible(row)
+    lines = out.splitlines()
+    assert len(lines) == 1
+    assert Icon.glyph(Icon.SUCCESS) in lines[0]
+    assert "[SHELL]" in lines[0]
+    assert lines[0].endswith("[SHELL]")
+
+
 def test_composition_group_in_panel():
     """All 8 atoms render inside a single Group inside a single Panel with
     no manual width/height math anywhere (Rich owns layout/measurement)."""
@@ -221,3 +245,146 @@ def test_composition_group_in_panel():
     assert out
     assert "compose" in out
     assert "running" in out
+
+
+# ── D-2: theme swap seam + structural equality + widget style guard ───────
+
+WIDGET_FILE = Path(__file__).resolve().parents[1] / "ui" / "widgets" / "tool_result.py"
+REPO_ROOT = WIDGET_FILE.parents[2]
+
+_THEME_DEPENDENTS = [
+    "ui.design.typography.presets",   # bakes SEMANTIC into PRESETS at import
+    "ui.design.typography",           # re-exports PRESETS
+    "ui.design.primitives.personality",
+    "ui.design.primitives.status_line",
+    "ui.design.primitives.badge",
+    "ui.design.primitives.key_value_row",
+    "ui.design.primitives.divider",
+    "ui.design.primitives.section_panel",
+    "ui.design.primitives.spinner",
+    "ui.design.primitives.layout",
+    "ui.design.primitives",           # package __init__ rebinds all atoms
+    "ui.widgets.tool_result",         # the migrated widget itself
+]
+
+
+def _plain_render(widget, width: int = 80) -> str:
+    """Render a widget and strip ALL ANSI, returning pure structure bytes."""
+    from ui.widgets.tool_result import ToolResultWidget
+    from rich.console import Console
+    buf = io.StringIO()
+    console = Console(file=buf, width=width, force_terminal=True,
+                      color_system="truecolor")
+    widget._console = console
+    console.print(widget.render())
+    return ANSI.sub("", buf.getvalue())
+
+
+def test_theme_swap_requires_no_widget_change():
+    """D-0 seam proof: swapping SEMANTIC changes COLORS (ANSI) while the
+    ANSI-stripped structure stays byte-identical — and the widget file is
+    never touched. If a palette swap needed a widget edit, D-0 is wrong.
+
+    Runs each palette in a FRESH subprocess interpreter: importlib.reload
+    mutates module globals in place, so an in-process swap would leak new
+    class objects into every previously-imported binding (pytest-randomly
+    exposes that as order-dependent failures). The subprocess isolates the
+    swap to the child.
+    """
+    import dataclasses
+    import subprocess
+    import sys
+
+    source_before = WIDGET_FILE.read_text()
+
+    child_template = """\
+import sys, io, importlib, dataclasses
+sys.path.insert(0, {root!r})
+from ui.widgets.tool_result import ToolResultWidget
+import ui.design.theme.semantic as m
+from ui.design.theme.semantic import SEMANTIC as DEFAULT
+from ui.design.theme.color import Color
+from rich.console import Console
+{swap_code}import ui.widgets.tool_result as tr
+w = tr.ToolResultWidget("shell", "ls output\\nsecond line")
+buf = io.StringIO()
+c = Console(file=buf, width=80, force_terminal=True, color_system="truecolor")
+w._console = c
+c.print(w.render())
+sys.stdout.write(buf.getvalue())
+"""
+
+    swap_block = (
+        'm.SEMANTIC = dataclasses.replace(DEFAULT, success=Color("#00ff00"),\n'
+        "                                 error=Color(\"#ff0000\"),\n"
+        "                                 selection=Color(\"#00ffff\"),\n"
+        "                                 text=Color(\"#ffffff\"))\n"
+        f"for name in {_THEME_DEPENDENTS!r}:\n"
+        "    importlib.reload(sys.modules[name])\n"
+    )
+
+    def run(swap: bool) -> str:
+        code = child_template.format(root=str(REPO_ROOT),
+                                     swap_code=swap_block if swap else "")
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    ansi_default = run(swap=False)
+    ansi_swapped = run(swap=True)
+
+    assert ansi_default != ansi_swapped                      # colors changed
+    assert ANSI.sub("", ansi_default) == ANSI.sub("", ansi_swapped)  # structure identical
+    assert WIDGET_FILE.read_text() == source_before         # widget never touched
+
+
+def test_migrated_widget_carries_no_color_literals():
+    """D-2 style guard: the migrated widget file carries no hex literals,
+    no Rich color names, and no Style( / style="…" string literals — every
+    color resolves through SEMANTIC (swap seam stays at the theme layer)."""
+    src = WIDGET_FILE.read_text()
+
+    hex_lit = re.findall(r"#[0-9a-fA-F]{3,8}", src)
+    assert not hex_lit, f"hex literals in widget: {hex_lit}"
+
+    names = re.findall(
+        r"\b(?:cyan|magenta|violet|green|red|yellow|blue|white|black|"
+        r"grey|gray|bright_[a-z]+)\b",
+        src, re.IGNORECASE,
+    )
+    assert not names, f"rich color names in widget: {names}"
+
+    style_lit = re.findall(r"Style\(|style\s*=\s*['\"]", src)
+    assert not style_lit, f"rich Style construction in widget: {style_lit}"
+
+
+def test_success_error_share_skeleton():
+    """D-2 structural equality: SUCCESS and ERROR renders share a
+    byte-identical ANSI-stripped skeleton after normalizing icon glyph and
+    verb; only color/icon/weight differ. Declared exception: ERROR may add
+    a named optional 'reason' segment — modeled first-class, never hidden."""
+    from ui.widgets.tool_result import ToolResultWidget
+
+    ok = ToolResultWidget("shell", "", success=True)
+    err = ToolResultWidget("shell", "", success=False)
+
+    def norm(s: str) -> str:
+        s = (s.replace(Icon.glyph(Icon.SUCCESS), "O")
+              .replace(Icon.glyph(Icon.ERROR), "O")
+              .replace("ok", "V")
+              .replace("error", "V"))
+        # collapse width-fill whitespace runs (Rich pads every row to the
+        # panel width); the skeleton comparison ignores fill, not tokens
+        return re.sub(r" +", " ", s).strip()
+
+    a, b = _plain_render(ok), _plain_render(err)
+    assert norm(a) == norm(b), f"skeleton differs:\n{norm(a)!r}\n{norm(b)!r}"
+
+    # Declared exception: ERROR may carry an explicit reason segment
+    err2 = ToolResultWidget("shell", "", success=False, summary="boom")
+    b2 = _plain_render(err2)
+    assert "reason" in b2 and "boom" in b2
+    b2_no_reason = "\n".join(l for l in b2.splitlines() if "reason" not in l)
+    assert norm(a) == norm(b2_no_reason)

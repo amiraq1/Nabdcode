@@ -17,8 +17,7 @@ class KeyValueRow:
         self.key = key
         self.value = value
 
-    def __rich_console__(self, console, options):
-        max_width = options.max_width
+    def _line(self, max_width: int) -> Text:
         gap_count = GAP.status
 
         key_w = rich_cell_len(self.key)
@@ -32,4 +31,12 @@ class KeyValueRow:
 
         line = Text(self.key + (" " * gap_count), style=SEMANTIC.text.to_rich_style())
         line.append(value_text)
-        yield line
+        return line
+
+    def __rich_console__(self, console, options):
+        yield self._line(options.max_width)
+
+    def __rich_measure__(self, console, options):
+        """Faithful width (same truncation as render) for Row composition."""
+        from rich.measure import Measurement
+        return Measurement.get(console, options, self._line(options.max_width))

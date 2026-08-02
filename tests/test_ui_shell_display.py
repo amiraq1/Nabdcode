@@ -7,9 +7,10 @@ def test_traceback_coloring():
     tb_output = "Traceback (most recent call last):\n  File \"main.py\", line 10, in <module>\nValueError: oops"
     widget = ToolResultWidget(tool_name="python", output=tb_output)
     panel = widget._render_expanded()
-    # The renderable inside the panel should be a Syntax object
-    assert isinstance(panel.renderable, Syntax)
-    assert panel.renderable.lexer.name == "Python Traceback"
+    # The body inside the D-1 Column composition should be a Syntax object
+    parts = list(panel.content.children)
+    syntax = next(p for p in parts if isinstance(p, Syntax))
+    assert syntax.lexer.name == "Python Traceback"
 
 def test_path_truncation():
     """V-05: Long paths in args should be truncated smartly."""
@@ -18,9 +19,9 @@ def test_path_truncation():
         tool_name="read_file",
         args={"path": "/short/path.py"}
     )
-    header = widget_short._build_header_markup()
-    assert "/short/path.py" in header
-    assert "..." not in header
+    preview = widget_short._format_args_preview()
+    assert preview == "/short/path.py"
+    assert "..." not in preview
 
     # Long path, should be truncated in the middle
     long_path = "/home/user/workspace/smart-agent/core/some_very_long_module_name_that_exceeds_forty_chars.py"
@@ -28,13 +29,12 @@ def test_path_truncation():
         tool_name="read_file",
         args={"path": long_path}
     )
-    header = widget_long._build_header_markup()
-    # It should not contain the full path
-    assert long_path not in header
-    # It should contain the middle truncation marker
-    assert "..." in header
-    # The rendered args preview should be exactly 39 chars if it was truncated, but actually it's length 39 because of the slicing
     preview = widget_long._format_args_preview()
+    # It should not contain the full path
+    assert long_path not in preview
+    # It should contain the middle truncation marker
+    assert "..." in preview
+    # The rendered args preview should be exactly 39 chars if it was truncated, but actually it's length 39 because of the slicing
     assert len(preview) == 39
     assert preview.startswith("/home/user/worksp")
     assert preview.endswith("orty_chars.py")

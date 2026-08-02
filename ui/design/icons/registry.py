@@ -26,6 +26,7 @@ class Icon(Enum):
     RUNNING = "\u25b6"      # black right-pointing triangle
     RESUME = "\u25b8"       # right-pointing small triangle
     IDLE = "\u25cb"         # white circle
+    COLLAPSE = "\u25ba"     # black right-pointing pointer (collapsed header)
     PLANNING = "\u22c5"     # dot operator
     PAUSE = "\u23f8"        # double vertical bar
     STOP = "\u23f9"         # double vertical bar
