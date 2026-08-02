@@ -42,7 +42,7 @@ class SemanticTheme:
 
     # execution / status states
     thinking: Color     # agent thinking (#6943FF)
-    running: Color      # active execution (#3ecf8e)
+    running: Color      # active execution (#22d3ee cyan-teal, distinct from success)
     idle: Color         # idle / inactive (#4d4d4d)
     selection: Color    # keyboard selection highlight (#00dcff)
     focus: Color         # focus ring (#00a8ff)
@@ -71,7 +71,7 @@ SEMANTIC: SemanticTheme = SemanticTheme(
     error=Color("#e0524a"),
     info=Color("#6fd3d6"),
     thinking=Color("#6943FF"),
-    running=Color("#3ecf8e"),
+    running=Color("#22d3ee"),
     idle=Color("#4d4d4d"),
     selection=Color("#00dcff"),
     focus=Color("#00a8ff"),

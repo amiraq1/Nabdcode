@@ -2,10 +2,17 @@
 
 Widgets depend on primitives (not the other way around). Primitives depend on
 theme only.
+
+D-1.1: render returns a Rich ``RenderableType`` — layout and measurement are
+owned by Rich, not by the widget. This is the first real test of the contract
+declared PROVISIONAL in D-0; primitives are not bent to defend the old
+``-> str`` signature.
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+
+from rich.console import RenderableType
 
 
 class Widget(ABC):
@@ -19,8 +26,8 @@ class Widget(ABC):
     name: str = "widget"
 
     @abstractmethod
-    def render(self, width: int, height: int) -> str:
-        """Render the widget into a string of at most (width x height) cells."""
+    def render(self, width: int | None = None, height: int | None = None) -> RenderableType:
+        """Render the widget into a Rich renderable (Rich owns layout/measure)."""
 
     @abstractmethod
     def refresh(self) -> None:
