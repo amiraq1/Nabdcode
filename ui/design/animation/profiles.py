@@ -35,6 +35,19 @@ class Spinner(Enum):
     WAVE = "wave"
     BRAILLE = "braille"
 
+    @property
+    def frame(self) -> str:
+        """The static proxy glyph for this spinner (distinct from Icon)."""
+        return {
+            Spinner.NONE: "",
+            Spinner.DOTS: "\u280b",     # braille dot 1,2,4
+            Spinner.LINE: "\u2500",     # horizontal line (distinct from RUNNING triangle)
+            Spinner.ELAPSE: "\u25b2",   # triangle up
+            Spinner.PULSE: "\u25e2",    # lower right triangle
+            Spinner.WAVE: "\u223c",     # tilde operator
+            Spinner.BRAILLE: "\u2809",  # braille pattern
+        }[self]
+
 
 @dataclass(frozen=True)
 class AnimationSpec:

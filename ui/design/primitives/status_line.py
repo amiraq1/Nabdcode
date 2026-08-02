@@ -42,16 +42,15 @@ class StatusLine:
         weight = to_style_str(style.weight)
         gap = " " * GAP.status
 
+        frame = spinner_frame_for(self.state)
+        glyph = frame if frame else Icon.glyph(style.icon)
+
         line = Text(style=style.color.to_rich_style())
-        line.append(Icon.glyph(style.icon), style=weight or None)
+        line.append(glyph, style=weight or None)
+        
         if not self.hide_verb:
             line.append(gap)
             line.append(style.verb, style=weight or None)
-
-        frame = spinner_frame_for(self.state)
-        if frame:
-            line.append(gap)
-            line.append(frame, style=weight or None)
 
         line.append(gap, style=SEMANTIC.text_dim.to_rich_style())
         line.append(self.context, style=SEMANTIC.text_dim.to_rich_style())

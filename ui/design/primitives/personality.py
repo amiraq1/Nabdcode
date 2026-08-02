@@ -90,16 +90,7 @@ _PERSONALITY_STYLE: dict[Personality, PersonalityStyle] = {
     ),
 }
 
-# static proxy glyph per D-0 Spinner style (reuses EXISTING registry icons only)
-_SPINNER_FRAME: dict[SpinnerEnum, str] = {
-    SpinnerEnum.DOTS:    Icon.glyph(Icon.LOADING),
-    SpinnerEnum.LINE:    Icon.glyph(Icon.RUNNING),
-    SpinnerEnum.BRAILLE: Icon.glyph(Icon.STREAMING),
-    SpinnerEnum.ELAPSE:  Icon.glyph(Icon.WAITING),
-    SpinnerEnum.PULSE:   Icon.glyph(Icon.THINKING),
-    SpinnerEnum.WAVE:    Icon.glyph(Icon.THINKING),
-    SpinnerEnum.NONE:    "",
-}
+
 
 
 def personality_of(state: UIState) -> Personality:
@@ -118,7 +109,7 @@ def spinner_frame_for(state: UIState) -> str:
     style = _PERSONALITY_STYLE[personality_of(state)]
     if not style.animated:
         return ""
-    return _SPINNER_FRAME.get(rec.spinner, "")
+    return rec.spinner.frame
 
 
 def to_style_str(weight: str) -> str:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib
 import io
 import re
+import pytest
 from pathlib import Path
 
 from rich.console import Console, Group
@@ -134,10 +135,10 @@ def test_personalities_are_visually_distinct():
 
 def test_statusline_snapshot_per_personality():
     cases = [
-        (Personality.THINKING, UIState.THINKING, "…  thinking  ↻  thinking"),
-        (Personality.RUNNING,  UIState.RUNNING,  "▶  running  ▶  running"),
+        (Personality.THINKING, UIState.THINKING, "\u280b  thinking  thinking"),
+        (Personality.RUNNING,  UIState.RUNNING,  "\u2500  running  running"),
         (Personality.SUCCESS,  UIState.SUCCESS,  "✓  ok  success"),
-        (Personality.WARNING,  UIState.WARNING,  "⚠  warn  …  warning"),
+        (Personality.WARNING,  UIState.WARNING,  "\u25e2  warn  warning"),
         (Personality.ERROR,    UIState.ERROR,    "✖  error  error"),
     ]
     for p, state, expected in cases:
@@ -426,3 +427,19 @@ def test_status_line_hide_verb():
     compact_text = _visible(compact, 80)
     assert "ok" not in compact_text
     assert "Thinking" in compact_text
+
+@pytest.mark.parametrize("state", list(UIState))
+def test_status_line_emits_exactly_one_leading_glyph(state):
+    from ui.design.primitives.status_line import StatusLine
+    from ui.design.tokens import GAP
+    
+    sl = StatusLine(state, "Ctx", hide_verb=False)
+    rendered = _visible(sl, 80)
+    
+    gap = " " * GAP.status
+    parts = rendered.split(gap)
+    
+    # Should be exactly 3 parts: glyph, verb, context
+    assert len(parts) == 3, f"Expected 3 parts, got {len(parts)}: {parts}"
+    assert len(parts[0]) == 1, f"Expected exactly one leading glyph, got {len(parts[0])}: {parts[0]!r}"
+    assert parts[2] == "Ctx"
