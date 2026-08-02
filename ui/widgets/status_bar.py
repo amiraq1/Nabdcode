@@ -38,6 +38,7 @@ class AgentStatusBar:
         self._file_count: int = 0
         self._input_tokens: int = 0
         self._output_tokens: int = 0
+        self._step: int | None = None
         self._live: Live | None = None
         self._thread: threading.Thread | None = None
         self._running: bool = False
@@ -100,9 +101,13 @@ class AgentStatusBar:
     # ── Event handlers ─────────────────────────────────────────────────
 
     def _on_llm_start(self, payload: Any) -> None:
+        if isinstance(payload, dict) and "step" in payload:
+            self.set_step(payload.get("step"))
         self.set_active("Thinking")
 
     def _on_tool_start(self, payload: Any) -> None:
+        if isinstance(payload, dict) and "step" in payload:
+            self.set_step(payload.get("step"))
         self.set_active("Running Tools")
         self.increment_tool()
 
@@ -179,6 +184,15 @@ class AgentStatusBar:
             self._file_count += 1
         self._update_live()
 
+    def set_step(self, step: Any) -> None:
+        if step is not None:
+            with self._lock:
+                try:
+                    self._step = int(step)
+                except (ValueError, TypeError):
+                    pass
+            self._update_live()
+
     # ── Rendering ──────────────────────────────────────────────────────
 
     def _spin_loop(self) -> None:
@@ -220,6 +234,12 @@ class AgentStatusBar:
                 parts.append(f"[dim]{sym} {phase}[/]")
             if i < len(self.PHASES) - 1:
                 parts.append("[dim] → [/]")
+                
+        with self._lock:
+            step_val = self._step
+        if step_val is not None:
+            parts.append(f"  [dim]│[/]  [bold magenta]Step {step_val}[/]")
+            
         content = "".join(parts)
         return Panel(
             Text.from_markup(content),
