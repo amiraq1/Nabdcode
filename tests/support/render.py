@@ -9,21 +9,30 @@ measurement is identical on Termux and in a headless CI.
 from __future__ import annotations
 
 import io
+import re
 
 from rich.console import Console, RenderableType
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove all ANSI escape sequences from *text*.
+
+    Single owner for ANSI stripping in the test tree.
+    """
+    return _ANSI.sub("", text)
 
 
 def make_console(
     width: int = 80,
     height: int = 25,
     theme=None,
-    color_system: str | None = "truecolor",
 ) -> Console:
     """Return a Console with BOTH dimensions pinned to a StringIO buffer.
 
     ``height`` is mandatory: Rich honors ``width`` only when height is
-    supplied.  ``color_system`` defaults to ``"truecolor"`` (match
-    :func:`render_to_text`); pass ``None`` for a non-color sink.
+    supplied.
     """
     buf = io.StringIO()
     return Console(
@@ -31,7 +40,7 @@ def make_console(
         width=width,
         height=height,
         force_terminal=True,
-        color_system=color_system,
+        color_system="truecolor",
         theme=theme,
     )
 
@@ -41,13 +50,11 @@ def render_to_text(
     width: int = 80,
     height: int = 25,
     theme=None,
-    color_system: str | None = "truecolor",
 ) -> str:
     """Render *renderable* to a string with BOTH dimensions pinned.
 
     force_terminal=True and color_system="truecolor" are mandatory so the
     emitted ANSI is identical on Termux and in headless CI.
-    Pass ``color_system=None`` for a plain-text sink (no ANSI codes).
     """
     buf = io.StringIO()
     console = Console(
@@ -55,7 +62,7 @@ def render_to_text(
         width=width,
         height=height,
         force_terminal=True,
-        color_system=color_system,
+        color_system="truecolor",
         theme=theme,
     )
     console.print(renderable)

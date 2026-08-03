@@ -28,7 +28,7 @@ from tests.support.render import make_console, render_to_text
 
 def _make_list() -> ToolResultList:
     """Create a ToolResultList with a silent, dimension-pinned console."""
-    console = make_console(width=120, height=25, theme=CUSTOM_THEME, color_system=None)
+    console = make_console(width=120, height=25, theme=CUSTOM_THEME)
     return ToolResultList(console=console)
 
 

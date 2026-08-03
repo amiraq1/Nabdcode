@@ -8,14 +8,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from ui.widgets.tool_result import ToolResultWidget
 from ui.theme import CUSTOM_THEME
 from ui.design.icons import Icon
-from tests.support.render import render_to_text
+from tests.support.render import render_to_text, strip_ansi
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _render_to_string(widget: ToolResultWidget) -> str:
     """Render the widget to a plain string for assertions."""
-    return render_to_text(widget.render(), width=120, height=25, theme=CUSTOM_THEME, color_system=None)
+    return render_to_text(widget.render(), width=120, height=25, theme=CUSTOM_THEME)
 
 
 # ── Line counting ────────────────────────────────────────────────────────────
@@ -394,4 +394,4 @@ def test_error_without_reason_omits_segment():
         return re.sub(r" +", " ", s).strip()
         
     a, b = _render_to_string(ok), _render_to_string(err)
-    assert norm(a) == norm(b)
+    assert norm(strip_ansi(a)) == norm(strip_ansi(b))

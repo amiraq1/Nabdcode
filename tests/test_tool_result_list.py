@@ -16,7 +16,7 @@ from rich.console import Group
 
 def _make_list() -> ToolResultList:
     """Create a ToolResultList with a silent, dimension-pinned console."""
-    console = make_console(width=120, height=25, theme=CUSTOM_THEME, color_system=None)
+    console = make_console(width=120, height=25, theme=CUSTOM_THEME)
     return ToolResultList(console=console)
 
 
@@ -232,7 +232,7 @@ def test_after_clear_next_no_exception():
 
 def test_redraw_prints_all_widgets():
     """redraw() must print every widget's render() to the console."""
-    console = make_console(width=120, height=25, theme=CUSTOM_THEME, color_system=None)
+    console = make_console(width=120, height=25, theme=CUSTOM_THEME)
     lst = ToolResultList(console=console)
     lst.add(_make_widget("read", "first"))
     lst.add(_make_widget("read", "second"))
