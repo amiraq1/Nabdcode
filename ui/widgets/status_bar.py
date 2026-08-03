@@ -140,31 +140,27 @@ class AgentStatusBar:
 
     def _build_renderable(self) -> RenderableType:
         """Compose the single-line status bar panel."""
-        parts = []
-        for i, phase in enumerate(self.PHASES):
-            state_str = self._phase_states.get(phase, "pending")
-            
-            if state_str == "active":
-                if phase == "Thinking":
-                    ui_state = UIState.THINKING
-                elif phase == "Running Tools":
-                    ui_state = UIState.RUNNING
-                else:
-                    ui_state = UIState.STREAMING
-            elif state_str == "done":
-                ui_state = UIState.SUCCESS
-            else:
-                ui_state = UIState.IDLE
-                
-            parts.append(StatusLine(ui_state, context=phase, hide_verb=True))
-            
-            if i < len(self.PHASES) - 1:
-                parts.append(Text(" → ", style=SEMANTIC.text_muted.to_rich_style()))
-                
+        active_phase = next(
+            (phase for phase in self.PHASES if self._phase_states.get(phase) == "active"),
+            None,
+        )
+        if active_phase == "Thinking":
+            ui_state = UIState.THINKING
+        elif active_phase == "Running Tools":
+            ui_state = UIState.RUNNING
+        elif active_phase == "Generating":
+            ui_state = UIState.STREAMING
+        elif all(self._phase_states.get(phase) == "done" for phase in self.PHASES):
+            ui_state = UIState.SUCCESS
+        else:
+            ui_state = UIState.IDLE
+
+        parts = [StatusLine(ui_state, context=active_phase, hide_verb=False)]
+
         if self._step is not None:
             parts.append(Text("  │  ", style=SEMANTIC.text_muted.to_rich_style()))
             parts.append(Text(f"Step {self._step}", style=SEMANTIC.accent.to_rich_style()))
-            
+
         return SectionPanel(
             title="",
             content=Row(*parts),
