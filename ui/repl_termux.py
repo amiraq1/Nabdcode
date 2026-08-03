@@ -34,6 +34,7 @@ from core.context_manager import RepositoryContextManager
 from core.permissions import ShellPermissions, PermissionEngine
 from core.kernel.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor
+from ui.paste_guard import PasteGuard
 from core.utils import safe_strip
 from ui.theme import (
     nabd_theme,
@@ -52,6 +53,9 @@ console = Console(theme=CUSTOM_THEME)
 _last_echoed_input: str = ""
 _streaming_final: bool = False
 tool_result_list: ToolResultList = ToolResultList()
+# D-4: session-scoped paste guard — owns the bracketed-paste protocol
+# (separator-driven state machine + exit-path hygiene). Armed per REPL run.
+_paste_guard: PasteGuard = PasteGuard()
 
 
 def echo_user_input(text: str) -> None:
@@ -1314,6 +1318,10 @@ async def run_repl(agent, agent_runner_func=None) -> None:
         input_processors=[],
     )
 
+    # D-4: arm the bracketed-paste protocol — enable handshake + install
+    # the exit-path handlers (natural, exception, SIGINT, SIGTERM, atexit).
+    _paste_guard.arm(sys.stdout)
+
     # Cache the border line per terminal width so it isn't rebuilt every turn.
     # Cost is O(width) and negligible, but caching avoids redundant allocation.
     _hr_cache: dict[int, str] = {}
@@ -1353,7 +1361,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     placeholder="Ask your question..."
                 )
 
-                text = safe_strip(user_input)
+                text = safe_strip(_paste_guard.settle(user_input))
 
                 if text.lower() in ["exit", "quit"]:
                     console.print("[bold red]Exiting Nabd Agent OS cleanly...[/bold red]")
@@ -1551,6 +1559,8 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 break
     finally:
         # Graceful shutdown: stop the streaming consumer + spinner.
+        # D-4: disable bracketed paste on every exit path leaving the loop.
+        _paste_guard.disarm()
         consumer_task.cancel()
         spinner_task.cancel()
         try:
