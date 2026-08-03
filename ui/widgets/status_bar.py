@@ -141,7 +141,11 @@ class AgentStatusBar:
     def _build_renderable(self) -> RenderableType:
         """Compose the single-line status bar panel."""
         active_phase = next(
-            (phase for phase in self.PHASES if self._phase_states.get(phase) == "active"),
+            (
+                phase
+                for phase in self.PHASES
+                if self._phase_states.get(phase) == "active"
+            ),
             None,
         )
         if active_phase == "Thinking":
@@ -155,7 +159,7 @@ class AgentStatusBar:
         else:
             ui_state = UIState.IDLE
 
-        parts = [StatusLine(ui_state, context=active_phase, hide_verb=False)]
+        parts = [StatusLine(ui_state, context="", hide_verb=False)]
 
         if self._step is not None:
             parts.append(Text("  │  ", style=SEMANTIC.text_muted.to_rich_style()))
