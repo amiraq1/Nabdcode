@@ -27,6 +27,7 @@ class Icon(Enum):
     RESUME = "\u25b8"       # right-pointing small triangle
     IDLE = "\u25cb"         # white circle
     COLLAPSE = "\u25ba"     # black right-pointing pointer (collapsed header)
+    SELECT = "\u276f"       # heavy right-pointing angle quote (selection cursor)
     PLANNING = "\u22c5"     # dot operator
     PAUSE = "\u23f8"        # double vertical bar
     STOP = "\u23f9"         # double vertical bar

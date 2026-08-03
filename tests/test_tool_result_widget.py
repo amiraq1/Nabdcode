@@ -291,8 +291,10 @@ def test_select_deselect_chaining():
 
 
 def test_render_differs_when_selected():
-    """render() output must differ between selected=True and selected=False."""
-    from ui.design.theme.semantic import SEMANTIC
+    """render() output must differ between selected=True and selected=False:
+    the selected item carries the SelectionIndicator glyph (D-3c.2 strict
+    replace — selection is the leading glyph, not a border color)."""
+    from ui.design.icons import Icon
 
     w_unselected = ToolResultWidget("read", "short output")
     w_unselected.deselect()
@@ -302,36 +304,46 @@ def test_render_differs_when_selected():
     w_selected.select()
     p_selected = w_selected.render()
 
-    # Border color must differ and resolve through SEMANTIC
-    assert p_unselected.border_color != p_selected.border_color
-    assert str(p_selected.border_color) == str(SEMANTIC.selection)
+    glyph = Icon.glyph(Icon.SELECT)
+    assert glyph not in _render_to_string(w_unselected)
+    assert glyph in _render_to_string(w_selected)
+    assert _render_to_string(w_unselected) != _render_to_string(w_selected)
 
 
-def test_selected_border_uses_selected_color_not_hardcoded():
-    """Selected border must resolve through SEMANTIC.selection (not hardcoded)."""
+def test_selected_indicator_uses_selection_color_not_hardcoded():
+    """SelectionIndicator must resolve through SEMANTIC.selection (not
+    hardcoded) in both expanded and collapsed renders (D-3c.2)."""
+    from ui.design.icons import Icon
     from ui.design.theme.semantic import SEMANTIC
+
+    glyph = Icon.glyph(Icon.SELECT)
+    r, g, b = SEMANTIC.selection.rgb
 
     # Short output → expanded render
     w = ToolResultWidget("read", "short output")
     w.select()
-    panel = w.render()
-    assert str(panel.border_color) == str(SEMANTIC.selection)
+    assert glyph in _render_to_string(w)
+    assert f"38;2;{r};{g};{b}" in _render_to_string(w)
 
     # Long output → collapsed render
     output = "\n".join(f"line {i}" for i in range(10))
     w2 = ToolResultWidget("read", output)
     w2.select()
-    panel2 = w2.render()
-    assert str(panel2.border_color) == str(SEMANTIC.selection)
+    assert glyph in _render_to_string(w2)
+    assert f"38;2;{r};{g};{b}" in _render_to_string(w2)
 
 
-def test_unselected_uses_default_border():
-    """Unselected widgets must not use the selection border."""
+def test_unselected_carries_no_selection_glyph():
+    """Unselected widgets must not render the selection indicator and keep
+    the result-state border (never SEMANTIC.selection) — D-3c.2 replace."""
+    from ui.design.icons import Icon
     from ui.design.theme.semantic import SEMANTIC
 
     w = ToolResultWidget("read", "short output")
     panel = w.render()
+    assert Icon.glyph(Icon.SELECT) not in _render_to_string(w)
     assert str(panel.border_color) != str(SEMANTIC.selection)
+    assert str(panel.border_color) == str(SEMANTIC.success)
 
 
 if __name__ == "__main__":
@@ -367,8 +379,8 @@ if __name__ == "__main__":
     test_deselect_sets_selected_false()
     test_select_deselect_chaining()
     test_render_differs_when_selected()
-    test_selected_border_uses_selected_color_not_hardcoded()
-    test_unselected_uses_default_border()
+    test_selected_indicator_uses_selection_color_not_hardcoded()
+    test_unselected_carries_no_selection_glyph()
     print("All ToolResultWidget tests passed.")
 
 def test_error_reason_is_not_output_line_one():

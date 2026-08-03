@@ -2,7 +2,8 @@
 
 Rendering is composed exclusively from design atoms: StatusLine (result
 state), SectionPanel (container), Badge (tool label), KeyValueRow (metadata),
-Divider (separator), CollapseIndicator (fold marker), Row/Column (layout).
+Divider (separator), CollapseIndicator (fold marker), SelectionIndicator
+(selection cursor), Row/Column (layout).
 Colors arrive only via SEMANTIC; this file carries no hex values, no color
 names, and constructs no rich Style. Collapse state, line counting, and
 preview generation remain data owned by this widget; callers (e.g.
@@ -30,6 +31,7 @@ from ui.design.primitives import (
     KeyValueRow,
     Row,
     SectionPanel,
+    SelectionIndicator,
     StatusLine,
 )
 from ui.design.state import UIState
@@ -217,9 +219,8 @@ class ToolResultWidget:
         return _BADGE_MEANING.get(self._get_badge(), "info")
 
     def _border_color(self):
-        """Border resolves through SEMANTIC: selection, then result state."""
-        if self.selected:
-            return SEMANTIC.selection
+        """Border resolves through SEMANTIC: result state only (D-3c.2:
+        selection moved to the SelectionIndicator atom — strict replace)."""
         return SEMANTIC.success if self.success else SEMANTIC.error
 
     def _reason(self) -> str:
@@ -250,8 +251,11 @@ class ToolResultWidget:
     # ── Composition (atoms only) ───────────────────────────────────────
 
     def _header(self, collapsed: bool) -> Row:
-        """Header row: status/result line + tool badge (+ collapse marker)."""
+        """Header row: selection cursor + status/result line + tool badge
+        (+ collapse marker when folded)."""
         parts = []
+        if self.selected:
+            parts.append(SelectionIndicator())
         if collapsed:
             parts.append(CollapseIndicator())
         parts.append(StatusLine(self._state(), context=self._get_info()))

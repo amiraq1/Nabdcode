@@ -29,7 +29,8 @@ from ui.design.theme.semantic import SEMANTIC
 from ui.design.tokens import ANIMATION_SPEED
 from ui.design.primitives import (
     Personality, StatusLine, Spinner, SectionPanel, KeyValueRow,
-    Divider, Badge, CollapseIndicator, Row, Column, personality_of, style_of,
+    Divider, Badge, CollapseIndicator, SelectionIndicator, Row, Column,
+    personality_of, style_of,
 )
 from ui.design.primitives.personality import (
     _PERSONALITY_OF, _PERSONALITY_STYLE,
@@ -103,6 +104,7 @@ def test_d1_modules_import_acyclically():
         "ui.design.primitives.badge",
         "ui.design.primitives.layout",
         "ui.design.primitives.collapse_indicator",
+        "ui.design.primitives.selection_indicator",
     ]:
         importlib.import_module(mod)
 
@@ -171,6 +173,16 @@ def test_icon_collapse_is_distinct_glyph():
     assert glyph not in siblings
 
 
+def test_icon_select_is_distinct_glyph():
+    """SELECT (❯, U+276F) must be a distinct member — never folded into
+    COLLAPSE (►), RUNNING (▶) or RESUME (▸), so the selection cursor
+    survives (D-3c.2)."""
+    glyph = Icon.glyph(Icon.SELECT)
+    assert glyph == "\u276f"
+    siblings = {Icon.glyph(m) for m in Icon if m is not Icon.SELECT}
+    assert glyph not in siblings
+
+
 # ── CollapseIndicator ────────────────────────────────────────────────────────
 
 def test_collapse_indicator_renders_collapse_glyph():
@@ -194,6 +206,36 @@ def test_collapse_indicator_is_measurable():
 
     console = Console()
     indicator = CollapseIndicator()
+    assert hasattr(indicator, "__rich_measure__")
+    m = indicator.__rich_measure__(console, console.options)
+    assert isinstance(m, Measurement)
+    assert m.minimum > 0
+    assert m.maximum > 0
+
+
+# ── SelectionIndicator (D-3c.2) ───────────────────────────────────────────
+
+def test_selection_indicator_renders_selection_glyph():
+    """SelectionIndicator shows the selection cursor glyph, resolved via Icon."""
+    out = _capture(SelectionIndicator(), 20)
+    assert Icon.glyph(Icon.SELECT) in out
+
+
+def test_selection_indicator_uses_semantic_selection_color():
+    """Color must come from SEMANTIC.selection — no hex literals, no named colors."""
+    out = _capture(SelectionIndicator(), 20)
+    r, g, b = SEMANTIC.selection.rgb
+    # SEMANTIC.selection (#00dcff) -> rgb (0, 220, 255)
+    assert f"38;2;{r};{g};{b}" in out
+
+
+def test_selection_indicator_is_measurable():
+    """SelectionIndicator delegates width measurement to Rich via __rich_measure__."""
+    from rich.measure import Measurement
+    from rich.console import Console
+
+    console = Console()
+    indicator = SelectionIndicator()
     assert hasattr(indicator, "__rich_measure__")
     m = indicator.__rich_measure__(console, console.options)
     assert isinstance(m, Measurement)
@@ -271,6 +313,7 @@ def test_composition_group_in_panel():
             Badge("ok", "success"),
             Divider(),
             CollapseIndicator(),
+            SelectionIndicator(),
             SectionPanel("block", Group(
                 Badge("warn", "warning"),
                 KeyValueRow("key:", "value"),
@@ -306,6 +349,7 @@ _THEME_DEPENDENTS = [
     "ui.design.primitives.spinner",
     "ui.design.primitives.layout",
     "ui.design.primitives.collapse_indicator",
+    "ui.design.primitives.selection_indicator",
     "ui.design.primitives",           # package __init__ rebinds all atoms
     "ui.widgets.tool_result",
     "ui.widgets.status_bar",

@@ -1,8 +1,9 @@
 """List container for ToolResultWidget instances.
 
-Owns widget state (selection, current index) and rendering.
-Callers (e.g. ``repl_termux.py``) add widgets and never call
-``console.print(widget.render())`` directly.
+Owns widget state (selection, current index) and rendering (D-3c.2:
+the list composes its widgets through the ``Column`` atom — no manual
+print loop). Callers (e.g. ``repl_termux.py``) add widgets and never
+call ``console.print(widget.render())`` directly.
 
 # Navigation constraint:
 # next() / previous() only called after show_final_answer
@@ -16,6 +17,7 @@ from typing import Optional
 
 from rich.console import Console
 
+from ui.design.primitives import Column
 from ui.widgets.tool_result import ToolResultWidget
 
 
@@ -106,8 +108,8 @@ class ToolResultList:
     def redraw(self, console: Optional[Console] = None) -> None:
         """Single Source of Truth for rendering.
 
-        Phase 2: prints each widget in order.
-        Phase 3: will use Rich Live to update in place.
+        D-3c.2: the list composes via the ``Column`` atom (one print per
+        redraw); each widget renders itself with its own atoms.
         """
         if console is None:
             if self._console is not None:
@@ -116,5 +118,4 @@ class ToolResultList:
                 # Lazy import: pick up the live ``console`` from repl_termux
                 # (e.g. when tests patch ``ui.repl_termux.console``).
                 from ui.repl_termux import console
-        for widget in self._widgets:
-            console.print(widget.render())
+        console.print(Column(*[w.render() for w in self._widgets]))
