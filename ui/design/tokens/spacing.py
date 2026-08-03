@@ -60,3 +60,23 @@ class Margin:
 
 
 MARGIN: Margin = Margin()
+
+
+@dataclass(frozen=True)
+class Gutter:
+    """Fixed-width list gutter (D-3c.3): two independent slots, in cells.
+
+    Single owner of the gutter width. Slot widths equal the wcwidth of the
+    glyph each slot holds (❯ selection / ► collapse), so an inactive slot
+    is a same-width space and the status column never shifts.
+    """
+
+    selection_slot: int = 1  # wcwidth of ❯ (U+276F)
+    collapse_slot: int = 1   # wcwidth of ► (U+25BA)
+
+    @property
+    def width(self) -> int:
+        return self.selection_slot + self.collapse_slot
+
+
+GUTTER: Gutter = Gutter()

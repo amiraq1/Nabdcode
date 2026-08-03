@@ -1,9 +1,9 @@
 """Collapsible tool result widget — D-2: consumes D-1 primitives.
 
-Rendering is composed exclusively from design atoms: StatusLine (result
-state), SectionPanel (container), Badge (tool label), KeyValueRow (metadata),
-Divider (separator), CollapseIndicator (fold marker), SelectionIndicator
-(selection cursor), Row/Column (layout).
+Rendering is composed exclusively from design atoms: Gutter (fixed-width
+selection/collapse slots), StatusLine (result state), SectionPanel
+(container), Badge (tool label), KeyValueRow (metadata), Divider
+(separator), Row/Column (layout).
 Colors arrive only via SEMANTIC; this file carries no hex values, no color
 names, and constructs no rich Style. Collapse state, line counting, and
 preview generation remain data owned by this widget; callers (e.g.
@@ -25,13 +25,12 @@ from rich.text import Text
 from engine.ui_theme import map_tool_to_badge
 from ui.design.primitives import (
     Badge,
-    CollapseIndicator,
     Column,
     Divider,
+    Gutter,
     KeyValueRow,
     Row,
     SectionPanel,
-    SelectionIndicator,
     StatusLine,
 )
 from ui.design.state import UIState
@@ -251,16 +250,15 @@ class ToolResultWidget:
     # ── Composition (atoms only) ───────────────────────────────────────
 
     def _header(self, collapsed: bool) -> Row:
-        """Header row: selection cursor + status/result line + tool badge
-        (+ collapse marker when folded)."""
-        parts = []
-        if self.selected:
-            parts.append(SelectionIndicator())
-        if collapsed:
-            parts.append(CollapseIndicator())
-        parts.append(StatusLine(self._state(), context=self._get_info()))
-        parts.append(Badge(self._get_badge(), self._badge_meaning()))
-        return Row(*parts)
+        """Header row: fixed-width gutter (selection + collapse slots), then
+        the status/result line and the tool badge. The gutter (D-3c.3) keeps
+        the status glyph at a stable column across every (selected x collapsed)
+        combination, so the list never shakes horizontally."""
+        return Row(
+            Gutter(selected=self.selected, collapsed=collapsed),
+            StatusLine(self._state(), context=self._get_info()),
+            Badge(self._get_badge(), self._badge_meaning()),
+        )
 
     def _body(self):
         """Output body: Syntax for tracebacks, else a semantic Text."""

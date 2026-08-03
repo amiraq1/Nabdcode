@@ -29,7 +29,7 @@ from ui.design.theme.semantic import SEMANTIC
 from ui.design.tokens import ANIMATION_SPEED
 from ui.design.primitives import (
     Personality, StatusLine, Spinner, SectionPanel, KeyValueRow,
-    Divider, Badge, CollapseIndicator, SelectionIndicator, Row, Column,
+    Divider, Badge, CollapseIndicator, SelectionIndicator, Gutter, Row, Column,
     personality_of, style_of,
 )
 from ui.design.primitives.personality import (
@@ -105,6 +105,7 @@ def test_d1_modules_import_acyclically():
         "ui.design.primitives.layout",
         "ui.design.primitives.collapse_indicator",
         "ui.design.primitives.selection_indicator",
+        "ui.design.primitives.gutter",
     ]:
         importlib.import_module(mod)
 
@@ -286,7 +287,7 @@ def test_key_value_row_cjk_truncation():
     assert "テスト" not in tight                   # truncated, dropped
 
 
-# ── composition: all 8 atoms inside one Group inside one Panel ───────────
+# ── composition: all atoms inside one Group inside one Panel ────────────
 
 def test_row_lays_out_horizontally():
     """Row must compose children on ONE line (atoms carry faithful
@@ -314,6 +315,7 @@ def test_composition_group_in_panel():
             Divider(),
             CollapseIndicator(),
             SelectionIndicator(),
+            Gutter(),
             SectionPanel("block", Group(
                 Badge("warn", "warning"),
                 KeyValueRow("key:", "value"),
@@ -350,6 +352,7 @@ _THEME_DEPENDENTS = [
     "ui.design.primitives.layout",
     "ui.design.primitives.collapse_indicator",
     "ui.design.primitives.selection_indicator",
+    "ui.design.primitives.gutter",
     "ui.design.primitives",           # package __init__ rebinds all atoms
     "ui.widgets.tool_result",
     "ui.widgets.status_bar",
@@ -715,3 +718,87 @@ def test_no_literal_separators_in_widgets():
     )
     assert SEPARATOR.key_value.glyph in token_src
     assert SEPARATOR.group.glyph in token_src
+
+
+# ── D-3c.3: the gutter must not shake ─────────────────────────────────────
+
+def test_gutter_renders_selection_glyph():
+    """Gutter(selected=True) renders the selection cursor, resolved via Icon."""
+    out = _capture(Gutter(selected=True, collapsed=False), 20)
+    assert Icon.glyph(Icon.SELECT) in out
+
+
+def test_gutter_renders_collapse_glyph():
+    """Gutter(collapsed=True) renders the fold marker, resolved via Icon."""
+    out = _capture(Gutter(selected=False, collapsed=True), 20)
+    assert Icon.glyph(Icon.COLLAPSE) in out
+
+
+def test_gutter_uses_semantic_colors():
+    """Selection slot flows from SEMANTIC.selection, collapse slot from
+    SEMANTIC.text_muted — no hex literals, no named colors."""
+    sel = _capture(Gutter(selected=True, collapsed=False), 20)
+    col = _capture(Gutter(selected=False, collapsed=True), 20)
+
+    r, g, b = SEMANTIC.selection.rgb
+    assert f"38;2;{r};{g};{b}" in sel
+    r2, g2, b2 = SEMANTIC.text_muted.rgb
+    assert f"38;2;{r2};{g2};{b2}" in col
+
+
+def test_gutter_fixed_width_owned_by_token():
+    """Every (selected x collapsed) combo renders exactly GUTTER.width cells;
+    an inactive slot is a blank of the glyph's width. Width is owned once by
+    the GUTTER token (single owner — D-3c.3)."""
+    from ui.design.tokens import GUTTER
+
+    assert GUTTER.selection_slot == 1 == GUTTER.collapse_slot
+    assert GUTTER.width == GUTTER.selection_slot + GUTTER.collapse_slot == 2
+
+    for selected in (False, True):
+        for collapsed in (False, True):
+            line = _visible(Gutter(selected=selected, collapsed=collapsed), 20)
+            assert wcswidth(line) == GUTTER.width, (selected, collapsed, line)
+
+
+def test_list_gutter_is_column_stable():
+    """The status glyph must sit at the SAME column in all four header
+    combos: (plain x expanded) (plain x collapsed) (selected x expanded)
+    (selected x collapsed). The fixed two-slot gutter (GUTTER token) keeps
+    the status column stable, so the list never shakes horizontally.
+
+    Renders the four-widget list via tests/support/render.py, strips ANSI,
+    and asserts the status glyph lands at the same index in every header
+    row. Fails on 2811b5f, where plain rows carry no leading gutter.
+    """
+    from tests.support.render import render_to_text, strip_ansi
+    from ui.design.tokens import GUTTER
+    from ui.widgets.tool_result import ToolResultWidget
+
+    long_output = "\n".join(f"line {i:02d}" for i in range(1, 9))  # 8 lines > threshold
+    glyph = Icon.glyph(Icon.SUCCESS)
+
+    def make(selected: bool, collapsed: bool) -> ToolResultWidget:
+        w = ToolResultWidget(
+            "read",
+            long_output if collapsed else "line 01\nline 02\nline 03",
+            success=True,
+        )
+        if selected:
+            w.select()
+        return w
+
+    four = [
+        make(selected=False, collapsed=False),  # plain x expanded
+        make(selected=False, collapsed=True),   # plain x collapsed
+        make(selected=True, collapsed=False),   # selected x expanded
+        make(selected=True, collapsed=True),    # selected x collapsed
+    ]
+    assert GUTTER.width == 2  # both slots are wcwidth-1 glyphs
+
+    out = strip_ansi(render_to_text(Column(*[w.render() for w in four]),
+                                    width=80, height=40))
+    rows = [line for line in out.splitlines() if glyph in line]
+    assert len(rows) == 4, f"expected 4 header rows with the status glyph, got {len(rows)}"
+    cols = [row.index(glyph) for row in rows]
+    assert len(set(cols)) == 1, f"status column shakes across combos: {cols}"
