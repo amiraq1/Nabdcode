@@ -14,13 +14,19 @@ Esc             →  exit navigation mode, deselect current widget,
                    navigation disabled
 
 All other keys are ignored while ``navigation_enabled()`` is ``False``.
+
+D-4.1 also provides :func:`create_shift_enter_keybindings`: both Shift+Enter
+encodings become a newline instead of a submit, standing down whenever
+navigation is active.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable
 
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 
 if TYPE_CHECKING:
     from ui.widgets.tool_result_list import ToolResultList
@@ -87,5 +93,45 @@ def create_navigation_keybindings(
         set_navigation_enabled(False)
         if on_exit is not None:
             on_exit()
+
+    return bindings
+
+
+# XTerm modifyOtherKeys: Shift+Enter (the one encoding prompt_toolkit maps).
+_CSI_SHIFT_ENTER = chr(27) + "[27;2;13~"
+
+
+def create_shift_enter_keybindings(
+    navigation_enabled: Callable[[], bool],
+) -> KeyBindings:
+    """Turn both Shift+Enter encodings into a newline instead of a submit.
+
+    prompt_toolkit maps the XTerm modifyOtherKeys form (ESC [ 27;2;13~ ) onto
+    ``Keys.ControlM``, so it submits; the kitty-protocol form (ESC [ 13;2u )
+    is unmapped and leaks literal text into the buffer. Neither inserts a
+    newline, so both are re-bound here.
+
+    The kitty form is matched as its raw key sequence; the XTerm form arrives
+    as a ControlM key press whose data still carries the original sequence, so
+    the handler dispatches on ``key_sequence[-1].data`` and lets a plain Enter
+    keep its submit behaviour.
+
+    While ``navigation_enabled()`` is true the bindings stand down, so the
+    navigation layer keeps ownership of Enter/Space/Escape.
+    """
+    not_navigating = Condition(lambda: not navigation_enabled())
+
+    bindings = KeyBindings()
+
+    @bindings.add("escape", "[", "1", "3", ";", "2", "u", filter=not_navigating)
+    def _kitty_shift_enter(event) -> None:
+        event.current_buffer.insert_text("\n")
+
+    @bindings.add(Keys.ControlM, filter=not_navigating)
+    def _enter_or_csi_shift_enter(event) -> None:
+        if event.key_sequence[-1].data == _CSI_SHIFT_ENTER:
+            event.current_buffer.insert_text("\n")
+        else:
+            event.current_buffer.validate_and_handle()
 
     return bindings
