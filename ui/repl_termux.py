@@ -268,51 +268,6 @@ _SESSION_PERMS_STATE = None
 _mode_state: int = 0
 _plan_mode: bool = False
 
-_STATUS_PHASE_VERBS: dict[str, str] = {
-    "thinking": "Sketching",
-    "reading":  "Reviewing",
-    "writing":  "Channeling",
-    "shell":    "Resolving",
-    "search":   "Contemplating",
-    "reasoning":"Threading",
-    "git":      "Inspecting",
-    "finish":   "Articulating",
-    "idle":     "Drafting",
-}
-
-_status_phase: str = "idle"
-_status_tokens: int = 0
-
-
-def _set_status_phase(phase: str) -> None:
-    """Update the bottom-toolbar spinner phase."""
-    global _status_phase
-    _status_phase = phase
-
-
-def _add_status_tokens(count: int) -> None:
-    """Accumulate token count for the bottom-toolbar display."""
-    global _status_tokens
-    _status_tokens += count
-
-
-def _action_to_phase(action: str) -> str:
-    """Map a print_badge action to a status spinner phase verb."""
-    a = action.upper().strip()
-    if a in ("READ", "EXPLORE"):
-        return "reading"
-    if a in ("EDIT", "WRITE"):
-        return "writing"
-    if a == "SHELL":
-        return "shell"
-    if a in ("SEARCH", "RAG", "MEMORY"):
-        return "search"
-    if a == "TODOS":
-        return "reading"
-    if a == "GIT":
-        return "git"
-    return "thinking"
-
 # ── Arabic scan keywords — auto-trigger EXPLORE tool ────────────────────
 # When the user types "فحر مستودع" (or similar), the agent may not
 # produce tool calls naturally. We detect the intent and seed the
@@ -356,7 +311,6 @@ def _maybe_auto_scan(text: str, agent: Any) -> bool:
         return False
 
     console.print(f"  [info]⟳ Auto-scan triggered — listing workspace...[/]")
-    _set_status_phase("reading")
 
     try:
         # List the workspace root using stdlib (no tools-layer dependency).
@@ -1066,7 +1020,6 @@ async def render_agent_events(status_bar=None) -> None:
         nonlocal token_buf, held_buf, _stream_line_buf
         if status_bar:
             status_bar.stop()
-        _set_status_phase("idle")
         _flush_local_stream()
         token_buf = ""
         held_buf = ""
@@ -1078,7 +1031,6 @@ async def render_agent_events(status_bar=None) -> None:
         compressor.start()
         if status_bar:
             status_bar.start()
-        _set_status_phase("thinking")
         token_buf = ""
         held_buf = ""
         _stream_line_buf = ""
@@ -1091,12 +1043,10 @@ async def render_agent_events(status_bar=None) -> None:
         _display_thought_content(compressor)
         if status_bar:
             status_bar.stop()
-        _set_status_phase("idle")
 
     def _on_thought_chunk(content: str) -> None:
         """Accumulate a raw reasoning chunk."""
         compressor.feed(content)
-        _set_status_phase("reasoning")
 
     def _on_tool_start(name: str, args: dict) -> None:
         """Flush stream, stop thought, print action badge."""
@@ -1108,7 +1058,6 @@ async def render_agent_events(status_bar=None) -> None:
         _stream_line_buf = ""
         action, label, meta = _parse_tool_event(name, args or {})
         print_badge(action, label, meta)
-        _set_status_phase(_action_to_phase(action))
 
     def _on_tool_end(event: dict) -> None:
         """Flush stream, render tool result via ToolResultWidget."""
@@ -1144,7 +1093,6 @@ async def render_agent_events(status_bar=None) -> None:
             return
         nonlocal token_buf, held_buf, _stream_line_buf
         compressor.add_tokens(len(content))
-        _add_status_tokens(len(content))
         token_buf += content
         stripped = token_buf.lstrip()
         if stripped.startswith("{") or stripped.startswith("final_answer"):
@@ -1161,7 +1109,6 @@ async def render_agent_events(status_bar=None) -> None:
             clean_line = _strip_tool_call_lines(line)
             if clean_line:
                 compressor.stop()
-                _set_status_phase("finish")
                 if hasattr(bridge, "_tokens_streamed"):
                     bridge._tokens_streamed = True
                 _erase_live_line()
