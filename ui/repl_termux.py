@@ -268,11 +268,6 @@ _SESSION_PERMS_STATE = None
 _mode_state: int = 0
 _plan_mode: bool = False
 
-# ── Status spinner state (Stage 2) ──────────────────────────────────────────
-# Rotated in the bottom toolbar at 120ms. Phase is set by render_agent_events.
-_STATUS_SPINNER_FRAMES: list[str] = ["◇", "◈", "◆", "☆", "★", "○", "●"]
-_STATUS_SPINNER_IDX: int = 0
-
 _STATUS_PHASE_VERBS: dict[str, str] = {
     "thinking": "Sketching",
     "reading":  "Reviewing",
@@ -1198,28 +1193,6 @@ async def render_agent_events(status_bar=None) -> None:
             status_bar.stop()
 
 
-async def _toolbar_spinner_loop(active: asyncio.Event) -> None:
-    """Background task: rotate the toolbar spinner frame every 120ms.
-
-    The prompt_toolkit bottom toolbar (``_get_toolbar``) reads the global
-    ``_STATUS_SPINNER_IDX`` to determine which icon to show. This loop
-    advances the index and invalidates the app so the toolbar redraws.
-    """
-    global _STATUS_SPINNER_IDX
-    try:
-        while True:
-            await active.wait()
-            await asyncio.sleep(0.12)
-            _STATUS_SPINNER_IDX = (_STATUS_SPINNER_IDX + 1) % len(_STATUS_SPINNER_FRAMES)
-            try:
-                from prompt_toolkit.application import get_app
-                get_app().invalidate()
-            except Exception:
-                pass
-    except asyncio.CancelledError:
-        pass
-
-
 def _setup_repl_keybindings() -> KeyBindings:
     """Setup Ctrl+O (expand output) and Shift+Tab (cycle mode) bindings.
 
@@ -1337,8 +1310,6 @@ async def run_repl(agent, agent_runner_func=None) -> None:
     status_bar.wire()
 
     consumer_task = asyncio.create_task(render_agent_events(status_bar))
-    spinner_active = asyncio.Event()
-    spinner_task = asyncio.create_task(_toolbar_spinner_loop(spinner_active))
 
     try:
         # 5. Start the chat loop
@@ -1347,7 +1318,6 @@ async def run_repl(agent, agent_runner_func=None) -> None:
             # Explicitly stop Kinetic UI status and compressor before asking for user input
             status_bar.stop()
             thought_compressor.stop()
-            spinner_active.clear()
             try:
                 # Calculate width for the top separator
                 term_width = shutil.get_terminal_size().columns - 1
@@ -1361,8 +1331,6 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     prompt_message,
                     placeholder="Ask your question..."
                 )
-                spinner_active.set()
-
                 text = safe_strip(user_input)
 
                 if text.lower() in ["exit", "quit"]:
@@ -1560,15 +1528,10 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 console.print("\n[bold red]Session terminated cleanly.[/bold red]")
                 break
     finally:
-        # Graceful shutdown: stop the streaming consumer + spinner.
+        # Graceful shutdown: stop the streaming consumer.
         consumer_task.cancel()
-        spinner_task.cancel()
         try:
             await consumer_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await spinner_task
         except asyncio.CancelledError:
             pass
         # Tear down the Kinetic State Engine (clears the live status line).
