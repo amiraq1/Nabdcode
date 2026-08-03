@@ -415,14 +415,12 @@ def _resolve_runtime_state(agent) -> RuntimeState:
 def _erase_live_line() -> None:
     """Cleanly clear the single live status row before a full-width print.
 
-    The Kinetic status line (and the LiveThought compressor) own one terminal
+    The AgentStatusBar and LiveThought compressor own one terminal
     row written via raw ``sys.stdout``. A ``console.print`` of a Rich
     Panel for a config command (/goal, /skill, /allow) lands on the
     scrollback *under* that live row and can momentarily collide with
-    it. Erasing the row first (``\\r\\033[K``) lets the panel print
-    onto a clean line; the Kinetic spinner thread redraws its own row
-    on the next 100ms tick, so there is no deadlock and no shared-lock
-    contention — both writers use the same primitive stdout write.
+    it. Erasing the row first (``\r\033[K``) lets the panel print
+    onto a clean line; both writers use the same primitive stdout write.
     """
     try:
         sys.stdout.write("\r\033[K")
@@ -1252,7 +1250,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
             _hr_cache[width] = line
         return line
 
-    # Kinetic State Engine shared instance for REPL session
+    # AgentStatusBar shared instance for REPL session
     status_bar = AgentStatusBar(console=console)
     status_bar.wire()
 
@@ -1262,7 +1260,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
         # 5. Start the chat loop
         while True:
             # NO logo printing inside this loop!
-            # Explicitly stop Kinetic UI status and compressor before asking for user input
+            # Stop the live status and compressor before asking for user input
             status_bar.stop()
             thought_compressor.stop()
             try:
@@ -1481,7 +1479,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
             await consumer_task
         except asyncio.CancelledError:
             pass
-        # Tear down the Kinetic State Engine (clears the live status line).
+        # Tear down the AgentStatusBar (clears the live status line).
         try:
             status_bar.set_complete()
         except Exception:

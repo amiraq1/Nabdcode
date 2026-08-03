@@ -843,7 +843,7 @@ class NativeDeepAgent:
                 from engine.state import GoalSpec
                 from engine.goal_verifier import evaluate_goal_exit
                 if isinstance(goal, GoalSpec) and goal.raw_prompt.strip():
-                    # Signal the Kinetic UX that the Verifier is evaluating the
+                    # Signal the live status bar that the Verifier is evaluating the
                     # objective before the strict exit gate resolves.
                     bus.emit("goal_verify", {
                         "session_id": self.runtime_state.session_id,
