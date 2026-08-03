@@ -2,23 +2,21 @@
 
 import os
 import sys
-from io import StringIO
-
-from rich.console import Console
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ui.widgets.tool_result import ToolResultWidget
 from ui.widgets.tool_result_list import ToolResultList
 from ui.theme import CUSTOM_THEME
+from tests.support.render import make_console, render_to_text
+from rich.console import Group
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _make_list() -> ToolResultList:
-    """Create a ToolResultList with a silent (StringIO) console."""
-    buf = StringIO()
-    console = Console(file=buf, width=120, force_terminal=False, color_system=None, theme=CUSTOM_THEME)
+    """Create a ToolResultList with a silent, dimension-pinned console."""
+    console = make_console(width=120, height=25, theme=CUSTOM_THEME, color_system=None)
     return ToolResultList(console=console)
 
 
@@ -234,13 +232,15 @@ def test_after_clear_next_no_exception():
 
 def test_redraw_prints_all_widgets():
     """redraw() must print every widget's render() to the console."""
-    buf = StringIO()
-    console = Console(file=buf, width=120, force_terminal=False, color_system=None, theme=CUSTOM_THEME)
+    console = make_console(width=120, height=25, theme=CUSTOM_THEME, color_system=None)
     lst = ToolResultList(console=console)
     lst.add(_make_widget("read", "first"))
     lst.add(_make_widget("read", "second"))
 
-    output = buf.getvalue()
+    output = render_to_text(
+        Group(*[w.render() for w in lst._widgets]),
+        width=120, height=25, theme=CUSTOM_THEME,
+    )
     assert "first" in output
     assert "second" in output
 

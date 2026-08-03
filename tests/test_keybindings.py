@@ -14,9 +14,6 @@ Covers:
 
 import os
 import sys
-from io import StringIO
-
-from rich.console import Console
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -24,15 +21,19 @@ from ui.widgets.tool_result import ToolResultWidget
 from ui.widgets.tool_result_list import ToolResultList
 from ui.keybindings import create_navigation_keybindings
 from ui.theme import CUSTOM_THEME
+from tests.support.render import make_console, render_to_text
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _make_list() -> ToolResultList:
-    """Create a ToolResultList with a silent (StringIO) console."""
-    buf = StringIO()
-    console = Console(file=buf, width=120, force_terminal=False, color_system=None, theme=CUSTOM_THEME)
+    """Create a ToolResultList with a silent, dimension-pinned console."""
+    console = make_console(width=120, height=25, theme=CUSTOM_THEME, color_system=None)
     return ToolResultList(console=console)
+
+
+def _make_widget(name: str = "read", output: str = "short") -> ToolResultWidget:
+    return ToolResultWidget(name, output)
 
 
 def _make_widget(name: str = "read", output: str = "short") -> ToolResultWidget:
