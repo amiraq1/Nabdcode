@@ -8,7 +8,41 @@ measurement is identical on Termux and in a headless CI.
 """
 from __future__ import annotations
 
+import io
+import re
+
 from rich.console import Console, RenderableType
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove all ANSI escape sequences from *text*.
+
+    Single owner for ANSI stripping in the test tree.
+    """
+    return _ANSI.sub("", text)
+
+
+def make_console(
+    width: int = 80,
+    height: int = 25,
+    theme=None,
+) -> Console:
+    """Return a Console with BOTH dimensions pinned to a StringIO buffer.
+
+    ``height`` is mandatory: Rich honors ``width`` only when height is
+    supplied.
+    """
+    buf = io.StringIO()
+    return Console(
+        file=buf,
+        width=width,
+        height=height,
+        force_terminal=True,
+        color_system="truecolor",
+        theme=theme,
+    )
 
 
 def render_to_text(
@@ -22,8 +56,6 @@ def render_to_text(
     force_terminal=True and color_system="truecolor" are mandatory so the
     emitted ANSI is identical on Termux and in headless CI.
     """
-    import io
-
     buf = io.StringIO()
     console = Console(
         file=buf,

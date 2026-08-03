@@ -531,15 +531,6 @@ sys.stdout.write(json.dumps(result))
 
 # ── D-3b: no unpinned Console in the test tree ──────────────────────────────
 
-_UNPINNED_CONSOLE_ALLOWLIST = {
-    # TEMPORARY — emptied by the follow-up commit (debt ledger, not exemption)
-    "tests/test_status_bar_live.py",
-    "tests/test_keybindings.py",
-    "tests/test_tool_result_widget.py",
-    "tests/test_tool_result_list.py",
-}
-
-
 def _console_calls(src: str) -> list[str]:
     """Extract full Console( … ) call texts, spanning multiple lines."""
     calls: list[str] = []
@@ -566,10 +557,12 @@ def _console_calls(src: str) -> list[str]:
 def test_no_unpinned_console_in_tests():
     """Every console built with width= in the test tree must also pin
     height=…; a bare width falls through to the real terminal dimensions
-    (80x25 on Termux) and silently un-measures the snapshot. Tolerated hits
-    may only live in the TEMPORARY allow-list above: adding a new file to it
-    in any future commit is forbidden — the guard's job is to block NEW
-    unpinned sites, and the follow-up commit empties the list."""
+    (80x25 on Termux) and silently un-measures the snapshot.
+
+    Absolute guard: zero offenders are tolerated. Every Console constructor
+    call site must reside in tests/support/render.py and go through
+    render_to_text / make_console, both of which pin height=25.
+    """
     tests_root = Path(__file__).resolve().parents[1] / "tests"
     offenders: dict[str, list[str]] = {}
     for path in sorted(tests_root.rglob("*.py")):
@@ -580,11 +573,7 @@ def test_no_unpinned_console_in_tests():
         for call in _console_calls(src):
             if "width=" in call and "height=" not in call:
                 offenders.setdefault(rel, []).append(" ".join(call.split())[:90])
-    unexpected = {
-        rel: sites for rel, sites in offenders.items()
-        if rel not in _UNPINNED_CONSOLE_ALLOWLIST
-    }
-    assert not unexpected, f"console width= without height=:\n{unexpected}"
+    assert not offenders, f"console width= without height=:\n{offenders}"
 
 
 # ── D-3b.1: the eye must find the boundaries ────────────────────────────────
