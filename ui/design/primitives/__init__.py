@@ -9,11 +9,13 @@ from ui.design.primitives.section_panel import SectionPanel
 from ui.design.primitives.key_value_row import KeyValueRow
 from ui.design.primitives.divider import Divider
 from ui.design.primitives.badge import Badge
+from ui.design.primitives.collapse_indicator import CollapseIndicator
 from ui.design.primitives.layout import Row, Column
 
 __all__ = [
     "Widget",
     "Personality", "PersonalityStyle", "style_of", "personality_of", "spinner_frame_for",
     "StatusLine", "Spinner", "SectionPanel", "KeyValueRow", "Divider", "Badge",
+    "CollapseIndicator",
     "Row", "Column",
 ]

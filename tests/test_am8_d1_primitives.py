@@ -29,7 +29,7 @@ from ui.design.theme.semantic import SEMANTIC
 from ui.design.tokens import ANIMATION_SPEED
 from ui.design.primitives import (
     Personality, StatusLine, Spinner, SectionPanel, KeyValueRow,
-    Divider, Badge, Row, Column, personality_of, style_of,
+    Divider, Badge, CollapseIndicator, Row, Column, personality_of, style_of,
 )
 from ui.design.primitives.personality import (
     _PERSONALITY_OF, _PERSONALITY_STYLE,
@@ -102,6 +102,7 @@ def test_d1_modules_import_acyclically():
         "ui.design.primitives.divider",
         "ui.design.primitives.badge",
         "ui.design.primitives.layout",
+        "ui.design.primitives.collapse_indicator",
     ]:
         importlib.import_module(mod)
 
@@ -170,6 +171,36 @@ def test_icon_collapse_is_distinct_glyph():
     assert glyph not in siblings
 
 
+# ── CollapseIndicator ────────────────────────────────────────────────────────
+
+def test_collapse_indicator_renders_collapse_glyph():
+    """CollapseIndicator shows the fold affordance glyph, resolved via Icon."""
+    out = _capture(CollapseIndicator(), 20)
+    assert Icon.glyph(Icon.COLLAPSE) in out
+
+
+def test_collapse_indicator_uses_semantic_color():
+    """Color must come from SEMANTIC.text_muted — no hex literals, no named colors."""
+    out = _capture(CollapseIndicator(), 20)
+    r, g, b = SEMANTIC.text_muted.rgb
+    # SEMANTIC.text_muted (#7a7a7a) -> rgb (122, 122, 122)
+    assert f"38;2;{r};{g};{b}" in out
+
+
+def test_collapse_indicator_is_measurable():
+    """CollapseIndicator delegates width measurement to Rich via __rich_measure__."""
+    from rich.measure import Measurement
+    from rich.console import Console
+
+    console = Console()
+    indicator = CollapseIndicator()
+    assert hasattr(indicator, "__rich_measure__")
+    m = indicator.__rich_measure__(console, console.options)
+    assert isinstance(m, Measurement)
+    assert m.minimum > 0
+    assert m.maximum > 0
+
+
 # ── spinner: rate is a numeric VALUE ─────────────────────────────────────
 
 def test_spinner_accepts_every_profile():
@@ -229,7 +260,7 @@ def test_row_lays_out_horizontally():
 
 
 def test_composition_group_in_panel():
-    """All 8 atoms render inside a single Group inside a single Panel with
+    """All atoms render inside a single Group inside a single Panel with
     no manual width/height math anywhere (Rich owns layout/measurement)."""
     scene = Panel(
         Group(
@@ -239,6 +270,7 @@ def test_composition_group_in_panel():
             KeyValueRow("path:", "/workspace/ui/design/primitives"),
             Badge("ok", "success"),
             Divider(),
+            CollapseIndicator(),
             SectionPanel("block", Group(
                 Badge("warn", "warning"),
                 KeyValueRow("key:", "value"),
@@ -273,6 +305,7 @@ _THEME_DEPENDENTS = [
     "ui.design.primitives.section_panel",
     "ui.design.primitives.spinner",
     "ui.design.primitives.layout",
+    "ui.design.primitives.collapse_indicator",
     "ui.design.primitives",           # package __init__ rebinds all atoms
     "ui.widgets.tool_result",
     "ui.widgets.status_bar",

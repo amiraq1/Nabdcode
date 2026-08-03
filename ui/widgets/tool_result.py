@@ -2,11 +2,11 @@
 
 Rendering is composed exclusively from design atoms: StatusLine (result
 state), SectionPanel (container), Badge (tool label), KeyValueRow (metadata),
-Divider (separator), Row/Column (layout), Icon (every glyph). Colors arrive
-only via SEMANTIC; this file carries no hex values, no color names, and
-constructs no rich Style. Collapse state, line counting, and preview
-generation remain data owned by this widget; callers (e.g. ``repl_termux.py``)
-only instantiate and render.
+Divider (separator), CollapseIndicator (fold marker), Row/Column (layout).
+Colors arrive only via SEMANTIC; this file carries no hex values, no color
+names, and constructs no rich Style. Collapse state, line counting, and
+preview generation remain data owned by this widget; callers (e.g.
+``repl_termux.py``) only instantiate and render.
 
 # Navigation constraint:
 # Selection state is only meaningful after show_final_answer
@@ -22,9 +22,9 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from engine.ui_theme import map_tool_to_badge
-from ui.design.icons import Icon
 from ui.design.primitives import (
     Badge,
+    CollapseIndicator,
     Column,
     Divider,
     KeyValueRow,
@@ -253,10 +253,7 @@ class ToolResultWidget:
         """Header row: status/result line + tool badge (+ collapse marker)."""
         parts = []
         if collapsed:
-            parts.append(Text(
-                Icon.glyph(Icon.COLLAPSE),
-                style=SEMANTIC.text_muted.to_rich_style(),
-            ))
+            parts.append(CollapseIndicator())
         parts.append(StatusLine(self._state(), context=self._get_info()))
         parts.append(Badge(self._get_badge(), self._badge_meaning()))
         return Row(*parts)
