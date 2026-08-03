@@ -1198,7 +1198,7 @@ async def render_agent_events(status_bar=None) -> None:
             status_bar.stop()
 
 
-async def _toolbar_spinner_loop() -> None:
+async def _toolbar_spinner_loop(active: asyncio.Event) -> None:
     """Background task: rotate the toolbar spinner frame every 120ms.
 
     The prompt_toolkit bottom toolbar (``_get_toolbar``) reads the global
@@ -1208,6 +1208,7 @@ async def _toolbar_spinner_loop() -> None:
     global _STATUS_SPINNER_IDX
     try:
         while True:
+            await active.wait()
             await asyncio.sleep(0.12)
             _STATUS_SPINNER_IDX = (_STATUS_SPINNER_IDX + 1) % len(_STATUS_SPINNER_FRAMES)
             try:
@@ -1336,7 +1337,8 @@ async def run_repl(agent, agent_runner_func=None) -> None:
     status_bar.wire()
 
     consumer_task = asyncio.create_task(render_agent_events(status_bar))
-    spinner_task = asyncio.create_task(_toolbar_spinner_loop())
+    spinner_active = asyncio.Event()
+    spinner_task = asyncio.create_task(_toolbar_spinner_loop(spinner_active))
 
     try:
         # 5. Start the chat loop
@@ -1345,6 +1347,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
             # Explicitly stop Kinetic UI status and compressor before asking for user input
             status_bar.stop()
             thought_compressor.stop()
+            spinner_active.clear()
             try:
                 # Calculate width for the top separator
                 term_width = shutil.get_terminal_size().columns - 1
@@ -1358,6 +1361,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     prompt_message,
                     placeholder="Ask your question..."
                 )
+                spinner_active.set()
 
                 text = safe_strip(user_input)
 
