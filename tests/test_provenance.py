@@ -1,6 +1,7 @@
 """tests/test_provenance.py — foreign authorship must not enter this history."""
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,9 @@ QUARANTINE = REPO / "docs" / "provenance_quarantine.txt"
 # Pinned so the declared debt cannot grow in silence. Update only with an
 # explicit written decision recorded in the quarantine file itself.
 QUARANTINE_SIZE = 24
+
+ATTRIBUTION_CORRECTIONS = REPO / "docs" / "attribution_corrections.txt"
+_ATTRIBUTION_RECORD_RE = re.compile(r"^[0-9a-f]{7,40}\s*->\s*[0-9a-f]{7,40}")
 
 
 def _find_forbidden(text: str) -> list[str]:
@@ -121,3 +125,23 @@ def test_guard_detects_contamination_in_a_real_repository(tmp_path):
     )
     found = _contaminated(cwd=repo)
     assert found, "detector failed to catch a real contaminated commit"
+
+
+def _attribution_corrections() -> list[str]:
+    """Data records only; '#' header lines are documentation, not records."""
+    if not ATTRIBUTION_CORRECTIONS.exists():
+        return []
+    return [
+        line
+        for line in ATTRIBUTION_CORRECTIONS.read_text(encoding="utf-8").splitlines()
+        if _ATTRIBUTION_RECORD_RE.match(line)
+    ]
+
+
+def test_attribution_corrections_count_is_fixed() -> None:
+    """Recorded corrections are decisions; the count must stay exactly one."""
+    records = _attribution_corrections()
+    assert len(records) == 1, (
+        f"{ATTRIBUTION_CORRECTIONS.relative_to(REPO)} data-record count changed:\n"
+        + "\n".join(f"  {r}" for r in records)
+    )

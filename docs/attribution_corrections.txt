@@ -1,0 +1,7 @@
+# Attribution corrections - false co-authorship trailers removed post-guard.
+# Distinct from provenance_quarantine.txt (genuine pre-guard foreign authorship).
+# Each entry is a message-only amend: tree identical, author/committer unchanged.
+# Full rationale per entry is recoverable via: git log --format=%B <old_sha>.
+# Must not grow without a recorded decision. Count owned solely by the guard test.
+
+2f6b0e9ec95442e89a8642c367aec5114904f5ac -> 485786a9855b9c6df0b2a0457ae4284b0af78e64  # T-1e: removed injected build-bot co-authorship trailer
