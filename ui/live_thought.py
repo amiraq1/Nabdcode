@@ -13,6 +13,8 @@ import sys
 import time
 from typing import Dict, Optional
 
+from ui.design.theme.semantic import SEMANTIC
+
 
 def _supports_ansi() -> bool:
     """Best-effort: assume ANSI unless stdout is explicitly non-tty/plain."""
@@ -176,14 +178,18 @@ class LiveThoughtCompressor:
 
 # ── High-contrast bento badges ──────────────────────────────────────────
 # Color aliases resolved at render time; fall back to plain text if no ANSI.
+_badge_rgb = SEMANTIC.action_badge.rgb
+_badge_open = f"\033[48;2;{_badge_rgb[0]};{_badge_rgb[1]};{_badge_rgb[2]};38;2;255;255;255;1m"
+_thinking_rgb = SEMANTIC.thinking.rgb
+_thinking_open = f"\033[48;2;{_thinking_rgb[0]};{_thinking_rgb[1]};{_thinking_rgb[2]};38;2;255;255;255;1m"
 _BENTO_COLORS = {
-    "READ": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"),   # teal bg (#0891B2), white text
-    "SHELL": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"),  # teal bg (#0891B2), white text
-    "WRITE": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"),  # teal bg (#0891B2), white text
-    "SEARCH": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"), # teal bg (#0891B2), white text
-    "TODOS": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"),  # teal bg (#0891B2), white text
-    "AGENT": ("\033[48;2;105;67;255;38;2;255;255;255;1m", "\033[0m"), # violet bg (#6943FF), white text
-    "DEFAULT": ("\033[48;2;8;145;178;38;2;255;255;255;1m", "\033[0m"),# teal bg (#0891B2), white text
+    "READ": (_badge_open, "\033[0m"),
+    "SHELL": (_badge_open, "\033[0m"),
+    "WRITE": (_badge_open, "\033[0m"),
+    "SEARCH": (_badge_open, "\033[0m"),
+    "TODOS": (_badge_open, "\033[0m"),
+    "AGENT": (_thinking_open, "\033[0m"),
+    "DEFAULT": (_badge_open, "\033[0m"),
 }
 
 
@@ -192,6 +198,8 @@ def _tool_badge_label(tool_name: str) -> str:
     name = (tool_name or "").lower()
     if "shell" in name:
         return "SHELL"
+    if "todo" in name:
+        return "TODOS"
     if "reader" in name or "read" in name or "workspace" in name:
         return "READ"
     if "file_system" in name or "write" in name or "edit" in name:

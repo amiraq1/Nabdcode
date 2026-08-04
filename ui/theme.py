@@ -6,6 +6,8 @@ from rich.theme import Theme
 from rich.style import Style
 from rich import box
 
+from ui.design.theme.semantic import SEMANTIC
+
 # ───────────────────────────────────────────────────────
 # Existing & Core Palette Definitions
 # ───────────────────────────────────────────────────────
@@ -43,7 +45,7 @@ ACTION_COLORS: Dict[str, str] = {
     "EDIT": "#0891B2",        # ice blue / teal
     "SHELL": "#0891B2",       # ice blue / teal
     "SEARCH": "#0891B2",      # ice blue / teal
-    "TODOS": "#0891B2",       # ice blue / teal
+    "TODOS": str(SEMANTIC.action_badge),  # action badge teal
     "EXPLORE": "#0891B2",     # ice blue / teal
     "GIT": "#059669", # dark green / emerald
     "FINAL ANSWER": "#7C3AED", # violet / purple

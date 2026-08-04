@@ -38,7 +38,8 @@ class SemanticTheme:
     warning: Color       # warning (#e0b23c)
     danger: Color        # danger (#e0524a)
     error: Color         # error (#e0524a)
-    info: Color          # informational (#6fd3d6)
+    info: Color         # informational (#6fd3d6)
+    action_badge: Color  # action badge background (#0891B2)
 
     # execution / status states
     thinking: Color     # agent thinking (#6943FF)
@@ -70,6 +71,7 @@ SEMANTIC: SemanticTheme = SemanticTheme(
     danger=Color("#e0524a"),
     error=Color("#e0524a"),
     info=Color("#6fd3d6"),
+    action_badge=Color("#0891B2"),
     thinking=Color("#6943FF"),
     running=Color("#22d3ee"),
     idle=Color("#4d4d4d"),

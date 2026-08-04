@@ -30,6 +30,7 @@ from core.ui_bridge import get_bridge
 from ui.widgets.status_bar import AgentStatusBar
 from ui.widgets.tool_result import ToolResultWidget
 from ui.widgets.tool_result_list import ToolResultList
+from ui.design.theme.semantic import SEMANTIC
 from core.context_manager import RepositoryContextManager
 from core.permissions import ShellPermissions, PermissionEngine
 from core.kernel.state import RuntimeState
@@ -227,8 +228,8 @@ def _render_todo_from_plan(plan: list[dict]) -> None:
         return
 
     total = len(in_progress) + len(completed)
-    # TODOS badge using Rich markup (green background per _BADGE_STYLES).
-    badge_style = _BADGE_STYLES.get("TODOS", "bold white on #059669")
+    # TODOS badge uses the semantic action-badge color.
+    badge_style = _BADGE_STYLES.get("TODOS", f"bold white on {SEMANTIC.action_badge}")
     console.print()
     console.print(f"[{badge_style}] TODOS [/] [cyan]{total} items[/]")
     for task in in_progress:
@@ -718,14 +719,14 @@ cyberpunk_style = Style.from_dict({
 #   SHELL  → orange (#D97706)
 #   SEARCH → purple (#7C3AED)
 #   EXPLORE→ purple (#7C3AED)
-#   TODOS  → green  (#059669)
+#   TODOS  → action badge teal
 _BADGE_STYLES: dict[str, str] = {
     "READ":    "bold white on #0891B2",
     "EDIT":    "bold white on #0891B2",
     "SHELL":   "bold black on #D97706",
     "SEARCH":  "bold white on #7C3AED",
     "EXPLORE": "bold white on #7C3AED",
-    "TODOS":   "bold white on #059669",
+    "TODOS":   f"bold white on {SEMANTIC.action_badge}",
     "WRITE":   "bold white on #0891B2",
     "RAG":     "bold white on #7C3AED",
     "MEMORY":  "bold white on #7C3AED",
