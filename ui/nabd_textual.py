@@ -11,7 +11,7 @@ from textual.containers import ScrollableContainer
 from textual.widgets import Input, Static, Markdown
 from textual.binding import Binding
 
-from core.sanitize import sanitize, fix_arabic_reversal
+from core.sanitize import sanitize
 
 # Stateless components now live in their own modular packages,
 # sharing the central Design System (ui/theme.py).

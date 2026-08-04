@@ -22,6 +22,7 @@ from rich.console import Console, RenderableType
 from rich.syntax import Syntax
 from rich.text import Text
 
+from core.text_utils import display_width
 from engine.ui_theme import map_tool_to_badge
 from ui.design.primitives import (
     Badge,
@@ -151,7 +152,7 @@ class ToolResultWidget:
             if not line.strip():
                 continue
             # V-07a: each visual wrap adds a line to the visible count
-            lines += 1 + (len(line) // w)
+            lines += 1 + (display_width(line) // w)
 
         self._line_count = lines
 

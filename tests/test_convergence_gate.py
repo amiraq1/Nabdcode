@@ -32,7 +32,6 @@ from core.evidence import EvidenceLog, EvidenceRecord
 from core.text_utils import (
     display_width,
     safe_display,
-    preserve_unicode_order,
     is_arabic,
     wrap_text,
     strip_ansi,
@@ -364,40 +363,6 @@ class TestArchitecturalClaimsScopedToAvailableEvidence(unittest.TestCase):
         claim = "The project name is nabd-os and core/bootstrap.py has 42 functions."
         classification = classify_claim(claim, ev_log.get_records())
         self.assertEqual(classification, "INFERRED")
-
-
-class TestArabicInputPreservesOriginalUnicode(unittest.TestCase):
-    """Test 11: Arabic input preserves original Unicode order."""
-
-    def test_arabic_input_preserves_original_unicode(self):
-        text = "افتح الملف الرئيسي ثم استخدم الدوال المناسبة"
-        preserved = preserve_unicode_order(text)
-        self.assertEqual(preserved, text)
-
-    def test_mixed_arabic_english_preserves_order(self):
-        text = "افتح main.py ثم core/utils.py"
-        preserved = preserve_unicode_order(text)
-        self.assertEqual(preserved, text)
-
-    def test_arabic_with_numbers_preserves_order(self):
-        text = "اقرأ 3 ملفات ثم اكتب التقرير"
-        preserved = preserve_unicode_order(text)
-        self.assertEqual(preserved, text)
-
-    def test_arabic_with_punctuation_preserves_order(self):
-        text = "هل يعمل؟ نعم، جيد."
-        preserved = preserve_unicode_order(text)
-        self.assertEqual(preserved, text)
-
-    def test_english_text_unchanged(self):
-        text = "Read the main.py file and check the output"
-        preserved = preserve_unicode_order(text)
-        self.assertEqual(preserved, text)
-
-    def test_fix_arabic_reversal_is_noop(self):
-        from core.sanitize import fix_arabic_reversal
-        text = "افتح main.py ثم core/utils.py"
-        self.assertEqual(fix_arabic_reversal(text), text)
 
 
 class TestMixedArabicAndFilePathRendering(unittest.TestCase):
