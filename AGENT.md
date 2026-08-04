@@ -114,3 +114,12 @@ Correct approach:
 # ✅ Read the actual file first
 file_system with action=read, path=ui/repl_termux.py
 ```
+
+## §13 · GATE DISCIPLINE (بوّاباتٌ وُلدت من أخطاءٍ حقيقية)
+
+Four rules, each born from a real mistake. Each is mechanical, not a judgment call.
+
+1) الوكيل لا ينفّذ git commit أبدًا.
+2) البوابة تُقرن بـ `&&` وتُفرض آليًا، لا تُقرأ مخرجاتها ثم يُقرَّر.
+3) الحمرة `exit == 1` وحدها؛ `exit 4/5` توقّف لا دحض.
+4) كلُّ بوابةٍ تُبرهن قابلةً للاخضرار قبل فرضها.
