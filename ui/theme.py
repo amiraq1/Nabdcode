@@ -41,18 +41,18 @@ SELECTED_COLOR: str = "bright_cyan"
 FOOTER_COLOR: str = "grey50"
 
 ACTION_COLORS: Dict[str, str] = {
-    "READ": "#0891B2",        # ice blue / teal (cyan-600)
-    "EDIT": "#0891B2",        # ice blue / teal
-    "SHELL": "#0891B2",       # ice blue / teal
-    "SEARCH": "#0891B2",      # ice blue / teal
-    "TODOS": str(SEMANTIC.action_badge),  # action badge teal
-    "EXPLORE": "#0891B2",     # ice blue / teal
+    "READ": str(SEMANTIC.action_badge),
+    "EDIT": str(SEMANTIC.action_badge),
+    "SHELL": str(SEMANTIC.action_badge),
+    "SEARCH": str(SEMANTIC.action_badge),
+    "TODOS": str(SEMANTIC.action_badge),
+    "EXPLORE": str(SEMANTIC.action_badge),
     "GIT": "#059669", # dark green / emerald
     "FINAL ANSWER": "#7C3AED", # violet / purple
     "WARNING": "#D97706",     # orange
     "THINKING": "#6943FF",    # --agent-violet
     "KILL(shell)": "#5C0112", # --diff-del-bg
-    "USER": "#0891B2",        # ice blue / teal
+    "USER": str(SEMANTIC.action_badge),
     "SYSTEM": "#9d8cff",      # --accent-violet
 }
 

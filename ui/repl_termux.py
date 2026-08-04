@@ -714,25 +714,25 @@ cyberpunk_style = Style.from_dict({
 
 # ── Action badge colors (Stage 1: print_badge) ───────────────────────────
 # Color mapping per the UI overhaul spec:
-#   READ   → blue  (#0891B2 teal)
-#   EDIT   → blue  (#0891B2 teal)
+#   READ   → action badge teal
+#   EDIT   → action badge teal
 #   SHELL  → orange (#D97706)
 #   SEARCH → purple (#7C3AED)
 #   EXPLORE→ purple (#7C3AED)
 #   TODOS  → action badge teal
 _BADGE_STYLES: dict[str, str] = {
-    "READ":    "bold white on #0891B2",
-    "EDIT":    "bold white on #0891B2",
+    "READ":    f"bold white on {SEMANTIC.action_badge}",
+    "EDIT":    f"bold white on {SEMANTIC.action_badge}",
     "SHELL":   "bold black on #D97706",
     "SEARCH":  "bold white on #7C3AED",
     "EXPLORE": "bold white on #7C3AED",
     "TODOS":   f"bold white on {SEMANTIC.action_badge}",
-    "WRITE":   "bold white on #0891B2",
+    "WRITE":   f"bold white on {SEMANTIC.action_badge}",
     "RAG":     "bold white on #7C3AED",
     "MEMORY":  "bold white on #7C3AED",
     "GIT":     "bold white on #059669",
     "KILL":    "bold black on #EF4444",
-    "DEFAULT": "bold white on #0891B2",
+    "DEFAULT": f"bold white on {SEMANTIC.action_badge}",
 }
 
 # ── Prefixes stripped by _strip_tool_call_lines (module-level frozenset) ──

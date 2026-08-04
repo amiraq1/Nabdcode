@@ -38,7 +38,7 @@ class SemanticTheme:
     warning: Color       # warning (#e0b23c)
     danger: Color        # danger (#e0524a)
     error: Color         # error (#e0524a)
-    info: Color         # informational (#6fd3d6)
+    info: Color          # informational (#6fd3d6)
     action_badge: Color  # action badge background (#0891B2)
 
     # execution / status states
