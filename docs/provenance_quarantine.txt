@@ -1,0 +1,28 @@
+# Foreign authorship trailers present in history before the provenance guard existed.
+# Status: DECLARED DEBT. Removing it requires rewriting published history and an explicit human decision.
+# This file must not grow without a recorded decision.
+
+570cc5e  # feat(core): stabilize loop progress and resolve D11/F01 execution bugs
+97d9b1e  # freeze: real content of phases 2.1-2.6 incl. TUI (ui/)
+05bcc99  # release: engineering closure of phases 2.1-2.6 [RELEASE_2.x]
+1e441da  # refactor: architecture repair pass (P2/P3/P5 real; P1/P4 non-issues)
+17b5873  # test: fix malformed payload in test_canonical_json_still_preferred
+c790de2  # fix: single-file convergence exemption + relaxed GitPushArgs default
+963d261  # refactor: DRY verifier resolver + secure repl_termux standalone entry
+1b3dcf5  # step6: close phase 6 with live verifier-gate evidence + REPL gap log
+4b5cc7d  # refactor: centralized SubprocessGuard + loop.py decomposition + evidence complexity reduction
+f5588f5  # step6: introduce independent LLM checker (Maker ≠ Checker)
+46fcf50  # refactor(step5-d): extract _ConvergenceMixin to _convergence.py
+8d9b15c  # refactor(step5-c): extract _BudgetMixin to _budget.py
+681b5f8  # refactor(step5-b): extract _ContextMixin to _context.py
+e237d9f  # refactor(step5-a): extract _LoopCtx/_LoopSignal/_ToolInteraction to _loop_types.py
+fb809ea  # test: add graphify_graph fixture for _graph_ok gate + sync evidence-gate tests
+495ebc7  # refactor: step 4 — final_answer as explicit _LoopSignal type
+beb116a  # refactor: steps 1-3 (rename, logging, static ctx cache)
+c5370d3  # Initial release of NABD OS (nabdcode)
+e24e89f  # chore: gitignore provider state files
+97b7829  # Phase UI-2: toolbar, live status chip, ctrl+o expand, plan_mode toggle
+f705c70  # fix: add missing state = RuntimeState(...) init after signal handlers
+0a976ba  # Phase 0–UI: input gateway hardening, evidence verification, persistence, streaming, TUI theme
+b0b6251  # Architectural refactor: evidence verification, AppContext, TODO system, deep agent fix, thread safety
+8626975  # refactor: complete 10-step master architectural blueprint (self-healing & security)
