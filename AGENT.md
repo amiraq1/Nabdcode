@@ -43,6 +43,20 @@ These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw
 6. Only read source files when (a) modifying/debugging specific code, (b) the graph lacks the needed detail, or (c) the graph is missing or stale.
 7. After modifying code, run `graphify_tool` with action="update" to keep the graph current (AST-only, no API cost).
 
+## §12 · VISUAL WORK
+
+For anything rendered to a terminal or screen, the courtroom is the screen.
+Commit before/after captures as tracked files.
+
+The decoding level must match the property under test:
+- position, width, alignment, character content -> strip ANSI
+- color, weight, style, attribute -> preserve raw escape sequences and render them visibly with `cat -v`, never strip
+- timing, order, frame sequence -> neither; capture the ordered sequence of emissions
+
+A `before` capture generated after the change is not a before. Produce it from the pre-change tree, or declare that you could not.
+
+Two captures that are byte-identical prove that the instrument did not measure the property under test.
+
 ## Self-Repair Context (Bootstrapping)
 When modifying your own code, you suffer from the **Surgeon Operating on Himself** problem — you are the agent running inside the code you need to edit.
 
