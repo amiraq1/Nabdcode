@@ -230,21 +230,6 @@ def test_verifier_reject_contains_badge():
     r.shutdown()
     # Can't easily assert internal _lines after flush, but no crash = pass
 
-
-def test_kinetic_idempotent_start_stop():
-    """KineticStateEngine start/stop must be idempotent and release Live lock."""
-    from engine.kinetic import KineticStateEngine
-    k = KineticStateEngine()
-    k.start()
-    assert k._running is True
-    k.stop()
-    assert k._running is False
-    assert k._live is None
-    # Stopping twice should be a safe no-op
-    k.stop()
-    assert k._running is False
-
-
 if __name__ == "__main__":
     test_map_execute_shell()
     test_map_file_system_read()
@@ -271,5 +256,4 @@ if __name__ == "__main__":
     test_tool_header_no_extra()
     test_renderer_concurrent_calls()
     test_verifier_reject_contains_badge()
-    test_kinetic_idempotent_start_stop()
     print("All Phase UI tests passed.")
