@@ -400,7 +400,7 @@ class _ContextMixin:
 
         Small/fallback models (ORCA-FLASH) frequently skip tool calls and
         hallucinate. When the latest user message names a symbol that exists in
-        the local knowledge base (e.g. "EventBus", "KineticStateEngine"), we
+        the local knowledge base (e.g. "EventBus"), we
         inject a forced search_knowledge_base call so the model is anchored to
         real code before it answers.
         """
@@ -428,11 +428,11 @@ class _ContextMixin:
         # (those are caught by the Small-Talk guard in main.py before the loop
         # runs, so we add a second safety net here).
         triggers = (
-            "eventbus", "kineticstateengine", "renderer class", "dispatcher class",
+            "eventbus", "renderer class", "dispatcher class",
             "evidence log", "executionloop", "memorymanager", "toolregistry",
             "hybridretriever", "rag search", "embedding model", "vector index",
-            "how does the eventbus", "how does the kinetic", "how does the renderer",
-            "explain the eventbus", "explain the kinetic", "architecture of the",
+            "how does the eventbus", "how does the renderer",
+            "explain the eventbus", "architecture of the",
         )
         _norm_user = user_msg.lower()
         # Exclude pure greetings / short inputs.

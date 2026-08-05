@@ -61,3 +61,37 @@ This is because the `loop.py` engine currently does not emit these state pieces 
 V-07a introduced visual line estimation in `ToolResultWidget._count_visible_lines` (folding long lines into multiple visual lines based on console width). This means very long single-line outputs (e.g. minified JSON, base64, long stack traces) now collapse by default.
 
 **Contract change:** Truncation testing for long outputs must explicitly set `w._collapsed = False` to force the expanded rendering path, as the default behavior for long visual lines is now collapsed.
+
+## Am+8 D-7b — State Colors Moved to the Semantic Layer (CLOSED)
+
+**الحالة:** Closed — commit `0e036ae` (Am+8 D-7b). Human ruling (D-7d):
+semantic.py owns `success` / `error` / `warning` / `info`.
+
+- Ownership count: 48 -> 44 (-4 violations) measured by
+  `scripts/verify_protocol.sh` after the surgery.
+- Scope: Class B ONLY — the four shared state colors in `ui/theme.py`
+  (`PALETTE["success"]`, `PALETTE["error"]`, `PALETTE["warning"]`,
+  `PALETTE["info"]`) became references to `SEMANTIC.*.hex`.
+- NOT included (by ruling): dead-owner removal (that was D-7a / D-7c),
+  brand/neon values (`neon_green` #00ff9d, `neon_cyan` #00fff7,
+  `neon_amber` #ffcc00) stay literal brand spellings,
+  and no remaining value migration.
+- Guard: `tests/test_theme_state_colors_are_semantic.py` (3 contracts,
+  including `test_brand_spellings_are_not_migrated` which pins the
+  ruling boundary).
+- Visible change, authorised and declared: neon green -> mint
+  (#3ecf8e), vivid red -> brick (#e0524a), cyan -> turquoise (#6fd3d6)
+  on the repl_termux path only.
+
+## Declared Debt — core/test_runner_wrapper.py:21 hard-codes "python3"
+
+**الحالة:** OPEN — declared in D-7b sheet LAW 0b. Owned by another commit.
+
+`run_tests_as_evidence` spawns `["python3", "-m", "unittest", ...]` with a
+literal interpreter name. On a PATH whose first `python3` lacks `rich`
+(e.g. a container where `/usr/bin/python3` shadows the Termux interpreter),
+the subprocess fails with `ModuleNotFoundError` and the test
+`test_run_tests_as_evidence` fails. Proven environmental: the node fails
+alone in 3.03s and the root cause is the hard-coded name, not test logic.
+
+Do not fix here; fix with the interpreter-pinning commit.

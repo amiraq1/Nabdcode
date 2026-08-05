@@ -109,8 +109,18 @@ def test_tool_name_contract_resolves_canonical_key():
         viz.on_tool_completed({"tool": "file_system", "success": True})
 
     # The printed completion line must contain the real names, not "None".
+    # D-2: render() returns the D-1 SectionPanel (a native Rich renderable),
+    # so capture text by rendering through a real Console instead of reading
+    # the old rich Panel's `.renderable` attribute. D-3b: the canonical
+    # pinned console helper (tests/support/render) replaces the inline
+    # width-only Console here.
+    from tests.support.render import render_to_text
+
+    def _text_of(renderable: object) -> str:
+        return render_to_text(renderable)
+
     printed = "".join(
-        str(getattr(call.args[0], "renderable", call.args[0]))
+        _text_of(call.args[0])
         for call in mock_console.print.call_args_list
     )
     assert "web_search" in printed, "canonical 'tool' key not resolved"

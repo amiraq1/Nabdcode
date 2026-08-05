@@ -10,6 +10,8 @@ import difflib
 import shutil
 from typing import Any, Optional
 
+from ui.design.theme.semantic import SEMANTIC
+
 # ── ANSI shortcuts ──────────────────────────────────────────────────────────
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
@@ -31,7 +33,7 @@ def bg(*rgb: int) -> str:
 
 # ── Palette ─────────────────────────────────────────────────────────────────
 P: dict[str, tuple[int, int, int]] = {
-    "badge_bg":     (8, 145, 178),     # ice blue / teal (#0891B2)
+    "badge_bg":     SEMANTIC.action_badge.rgb,
     "badge_fg":     (255, 255, 255),
     "path":         (180, 180, 190),
     "meta":         (120, 120, 130),

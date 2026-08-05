@@ -14,7 +14,6 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from rich.align import Align
 from rich.box import ROUNDED
 from rich.console import Console
 from rich.live import Live
@@ -31,6 +30,7 @@ from core.ui_bridge import get_bridge
 from ui.widgets.status_bar import AgentStatusBar
 from ui.widgets.tool_result import ToolResultWidget
 from ui.widgets.tool_result_list import ToolResultList
+from ui.design.theme.semantic import SEMANTIC
 from core.context_manager import RepositoryContextManager
 from core.permissions import ShellPermissions, PermissionEngine
 from core.kernel.state import RuntimeState
@@ -228,8 +228,8 @@ def _render_todo_from_plan(plan: list[dict]) -> None:
         return
 
     total = len(in_progress) + len(completed)
-    # TODOS badge using Rich markup (green background per _BADGE_STYLES).
-    badge_style = _BADGE_STYLES.get("TODOS", "bold white on #059669")
+    # TODOS badge uses the semantic action-badge color.
+    badge_style = _BADGE_STYLES.get("TODOS", f"bold white on {SEMANTIC.action_badge}")
     console.print()
     console.print(f"[{badge_style}] TODOS [/] [cyan]{total} items[/]")
     for task in in_progress:
@@ -268,56 +268,6 @@ _SESSION_PERMS_STATE = None
 # 0 = normal, 1 = plan mode, 2 = accept edits
 _mode_state: int = 0
 _plan_mode: bool = False
-
-# ── Status spinner state (Stage 2) ──────────────────────────────────────────
-# Rotated in the bottom toolbar at 120ms. Phase is set by render_agent_events.
-_STATUS_SPINNER_FRAMES: list[str] = ["◇", "◈", "◆", "☆", "★", "○", "●"]
-_STATUS_SPINNER_IDX: int = 0
-
-_STATUS_PHASE_VERBS: dict[str, str] = {
-    "thinking": "Sketching",
-    "reading":  "Reviewing",
-    "writing":  "Channeling",
-    "shell":    "Resolving",
-    "search":   "Contemplating",
-    "reasoning":"Threading",
-    "git":      "Inspecting",
-    "finish":   "Articulating",
-    "idle":     "Drafting",
-}
-
-_status_phase: str = "idle"
-_status_tokens: int = 0
-
-
-def _set_status_phase(phase: str) -> None:
-    """Update the bottom-toolbar spinner phase."""
-    global _status_phase
-    _status_phase = phase
-
-
-def _add_status_tokens(count: int) -> None:
-    """Accumulate token count for the bottom-toolbar display."""
-    global _status_tokens
-    _status_tokens += count
-
-
-def _action_to_phase(action: str) -> str:
-    """Map a print_badge action to a status spinner phase verb."""
-    a = action.upper().strip()
-    if a in ("READ", "EXPLORE"):
-        return "reading"
-    if a in ("EDIT", "WRITE"):
-        return "writing"
-    if a == "SHELL":
-        return "shell"
-    if a in ("SEARCH", "RAG", "MEMORY"):
-        return "search"
-    if a == "TODOS":
-        return "reading"
-    if a == "GIT":
-        return "git"
-    return "thinking"
 
 # ── Arabic scan keywords — auto-trigger EXPLORE tool ────────────────────
 # When the user types "فحر مستودع" (or similar), the agent may not
@@ -362,7 +312,6 @@ def _maybe_auto_scan(text: str, agent: Any) -> bool:
         return False
 
     console.print(f"  [info]⟳ Auto-scan triggered — listing workspace...[/]")
-    _set_status_phase("reading")
 
     try:
         # List the workspace root using stdlib (no tools-layer dependency).
@@ -467,14 +416,12 @@ def _resolve_runtime_state(agent) -> RuntimeState:
 def _erase_live_line() -> None:
     """Cleanly clear the single live status row before a full-width print.
 
-    The Kinetic status line (and the LiveThought compressor) own one terminal
+    The AgentStatusBar and LiveThought compressor own one terminal
     row written via raw ``sys.stdout``. A ``console.print`` of a Rich
     Panel for a config command (/goal, /skill, /allow) lands on the
     scrollback *under* that live row and can momentarily collide with
-    it. Erasing the row first (``\\r\\033[K``) lets the panel print
-    onto a clean line; the Kinetic spinner thread redraws its own row
-    on the next 100ms tick, so there is no deadlock and no shared-lock
-    contention — both writers use the same primitive stdout write.
+    it. Erasing the row first (``\r\033[K``) lets the panel print
+    onto a clean line; both writers use the same primitive stdout write.
     """
     try:
         sys.stdout.write("\r\033[K")
@@ -767,25 +714,25 @@ cyberpunk_style = Style.from_dict({
 
 # ── Action badge colors (Stage 1: print_badge) ───────────────────────────
 # Color mapping per the UI overhaul spec:
-#   READ   → blue  (#0891B2 teal)
-#   EDIT   → blue  (#0891B2 teal)
+#   READ   → action badge teal
+#   EDIT   → action badge teal
 #   SHELL  → orange (#D97706)
 #   SEARCH → purple (#7C3AED)
 #   EXPLORE→ purple (#7C3AED)
-#   TODOS  → green  (#059669)
+#   TODOS  → action badge teal
 _BADGE_STYLES: dict[str, str] = {
-    "READ":    "bold white on #0891B2",
-    "EDIT":    "bold white on #0891B2",
+    "READ":    f"bold white on {SEMANTIC.action_badge}",
+    "EDIT":    f"bold white on {SEMANTIC.action_badge}",
     "SHELL":   "bold black on #D97706",
     "SEARCH":  "bold white on #7C3AED",
     "EXPLORE": "bold white on #7C3AED",
-    "TODOS":   "bold white on #059669",
-    "WRITE":   "bold white on #0891B2",
+    "TODOS":   f"bold white on {SEMANTIC.action_badge}",
+    "WRITE":   f"bold white on {SEMANTIC.action_badge}",
     "RAG":     "bold white on #7C3AED",
     "MEMORY":  "bold white on #7C3AED",
     "GIT":     "bold white on #059669",
     "KILL":    "bold black on #EF4444",
-    "DEFAULT": "bold white on #0891B2",
+    "DEFAULT": f"bold white on {SEMANTIC.action_badge}",
 }
 
 # ── Prefixes stripped by _strip_tool_call_lines (module-level frozenset) ──
@@ -1072,7 +1019,6 @@ async def render_agent_events(status_bar=None) -> None:
         nonlocal token_buf, held_buf, _stream_line_buf
         if status_bar:
             status_bar.stop()
-        _set_status_phase("idle")
         _flush_local_stream()
         token_buf = ""
         held_buf = ""
@@ -1084,7 +1030,6 @@ async def render_agent_events(status_bar=None) -> None:
         compressor.start()
         if status_bar:
             status_bar.start()
-        _set_status_phase("thinking")
         token_buf = ""
         held_buf = ""
         _stream_line_buf = ""
@@ -1097,12 +1042,10 @@ async def render_agent_events(status_bar=None) -> None:
         _display_thought_content(compressor)
         if status_bar:
             status_bar.stop()
-        _set_status_phase("idle")
 
     def _on_thought_chunk(content: str) -> None:
         """Accumulate a raw reasoning chunk."""
         compressor.feed(content)
-        _set_status_phase("reasoning")
 
     def _on_tool_start(name: str, args: dict) -> None:
         """Flush stream, stop thought, print action badge."""
@@ -1114,7 +1057,6 @@ async def render_agent_events(status_bar=None) -> None:
         _stream_line_buf = ""
         action, label, meta = _parse_tool_event(name, args or {})
         print_badge(action, label, meta)
-        _set_status_phase(_action_to_phase(action))
 
     def _on_tool_end(event: dict) -> None:
         """Flush stream, render tool result via ToolResultWidget."""
@@ -1150,7 +1092,6 @@ async def render_agent_events(status_bar=None) -> None:
             return
         nonlocal token_buf, held_buf, _stream_line_buf
         compressor.add_tokens(len(content))
-        _add_status_tokens(len(content))
         token_buf += content
         stripped = token_buf.lstrip()
         if stripped.startswith("{") or stripped.startswith("final_answer"):
@@ -1167,7 +1108,6 @@ async def render_agent_events(status_bar=None) -> None:
             clean_line = _strip_tool_call_lines(line)
             if clean_line:
                 compressor.stop()
-                _set_status_phase("finish")
                 if hasattr(bridge, "_tokens_streamed"):
                     bridge._tokens_streamed = True
                 _erase_live_line()
@@ -1197,27 +1137,6 @@ async def render_agent_events(status_bar=None) -> None:
         compressor.stop()
         if status_bar:
             status_bar.stop()
-
-
-async def _toolbar_spinner_loop() -> None:
-    """Background task: rotate the toolbar spinner frame every 120ms.
-
-    The prompt_toolkit bottom toolbar (``_get_toolbar``) reads the global
-    ``_STATUS_SPINNER_IDX`` to determine which icon to show. This loop
-    advances the index and invalidates the app so the toolbar redraws.
-    """
-    global _STATUS_SPINNER_IDX
-    try:
-        while True:
-            await asyncio.sleep(0.12)
-            _STATUS_SPINNER_IDX = (_STATUS_SPINNER_IDX + 1) % len(_STATUS_SPINNER_FRAMES)
-            try:
-                from prompt_toolkit.application import get_app
-                get_app().invalidate()
-            except Exception:
-                pass
-    except asyncio.CancelledError:
-        pass
 
 
 def _setup_repl_keybindings() -> KeyBindings:
@@ -1254,55 +1173,6 @@ def _setup_repl_keybindings() -> KeyBindings:
     return bindings
 
 
-def _get_repl_toolbar_html() -> HTML:
-    """Dynamic bottom toolbar: status spinner + phase + token count + mode.
-
-    Extracted from ``run_repl`` to reduce its cyclomatic complexity.
-    Uses module-level globals for state (CC <= 5).
-    """
-    frame = _STATUS_SPINNER_FRAMES[_STATUS_SPINNER_IDX]
-    verb = _STATUS_PHASE_VERBS.get(_status_phase, _STATUS_PHASE_VERBS["idle"])
-    token_str = ""
-    if _status_tokens > 0:
-        if _status_tokens >= 1000:
-            token_str = f"  {_status_tokens/1000:.1f}k"
-        else:
-            token_str = f"  {_status_tokens}"
-
-    if _mode_state == 1:
-        mode_html = '<style bg="ansicyan" fg="black"> plan mode </style>'
-    elif _mode_state == 2:
-        # Derive from actual session state: show "accept edits on" ONLY when
-        # there are pending edits in the queue. This prevents stale footer
-        # state from leaking between sessions or tasks.
-        import core.accept_edits_state as _ae_state
-        if _ae_state.has_pending_edits():
-            mode_html = '<style bg="ansicyan" fg="black"> accept edits on </style>'
-        else:
-            mode_html = ''
-    else:
-        mode_html = ''
-
-    warn_html = ""
-    if _status_tokens > 150_000:
-        est_k = _status_tokens // 1000
-        warn_html = (
-            f'  <style bg="yellow" fg="black"> ⚠ {est_k}k tokens </style>'
-            '  <style fg="#ffcc00">run /compact</style>'
-        )
-    elif _status_tokens > _CONTEXT_WARN_THRESHOLD:
-        est_k = _status_tokens // 1000
-        warn_html = (
-            f'  <style bg="yellow" fg="black"> ⚠ {est_k}k tokens </style>'
-            '  <style fg="#ffcc00">try /compact</style>'
-        )
-
-    if _status_phase == "idle":
-        return HTML(f'<b>» {mode_html}{warn_html} [shift+tab]  ? for shortcuts</b>')
-
-    return HTML(f'<b>{frame} {verb}{token_str}  |  {mode_html}{warn_html} [shift+tab]  ? for shortcuts</b>')
-
-
 async def run_repl(agent, agent_runner_func=None) -> None:
     """Launch the Termux-optimized Sequential Cyberpunk REPL session.
 
@@ -1313,15 +1183,10 @@ async def run_repl(agent, agent_runner_func=None) -> None:
     # 1. Hard clear terminal (Termux specific)
     print("\033c", end="")
 
-    # 2. Print Logo exactly once
-    logo_ascii = "[#ffffff]█▄ █ ▄▀█ █▄▀ █▀▄ █▀▀ █▀█ █▀▄ █▀▀[/]\n[#808080]█ ▀█ █▀█ █▄█ █▄▀ █▄▄ █▄█ █▄▀ ██▄[/]"
-    console.print(Align.center(logo_ascii))
-    console.print()
-
-    # 3. Print Status exactly once
-    workspace_name = os.path.basename(os.getcwd())
-    status_line = f"[#ffffff]System Ready[/] | [#808080]Model: gemini-1.5-pro[/] | [#808080]Workspace: {workspace_name}[/]"
-    console.print(Align.center(status_line))
+    # 2. Header exactly once (D-3b: AppHeader atoms replace manual logo/status
+    # Panel printing)
+    from ui.widgets.header import AppHeader
+    console.print(AppHeader().render())
     console.print()
 
     bridge = get_bridge()
@@ -1335,14 +1200,17 @@ async def run_repl(agent, agent_runner_func=None) -> None:
     # subscribed directly on the EventBus so navigation is only active after
     # the agent finishes execution.
     from core.kernel.events import bus as _event_bus
-    from ui.keybindings import create_navigation_keybindings
-    from ui.widgets.footer import NavigationFooter
+    from ui.keybindings import (
+        create_navigation_keybindings,
+        create_shift_enter_keybindings,
+    )
+    from ui.widgets.footer import AppFooter
     from prompt_toolkit.key_binding import merge_key_bindings
 
     _nav_visualizer = TerminalVisualizer(
         event_bus=_event_bus, state=None, register_listeners=False
     )
-    _footer = NavigationFooter()
+    _footer = AppFooter()
 
     # Wrap show_final_answer so the footer hint bar appears after the
     # final-answer card is rendered.
@@ -1360,14 +1228,15 @@ async def run_repl(agent, agent_runner_func=None) -> None:
         set_navigation_enabled=lambda v: setattr(_nav_visualizer, "_navigation_enabled", v),
         on_exit=lambda: console.print(_footer.render(active=False)),
     )
-    _merged_bindings = merge_key_bindings([bindings, _nav_bindings])
+    _shift_enter = create_shift_enter_keybindings(
+        lambda: _nav_visualizer._navigation_enabled
+    )
+    _merged_bindings = merge_key_bindings([bindings, _nav_bindings, _shift_enter])
 
-    # Bottom toolbar (extracted to module-level function for CC reduction).
     session = PromptSession(
         style=cyberpunk_style,
         history=FileHistory(HISTORY_FILE),
         key_bindings=_merged_bindings,
-        bottom_toolbar=_get_repl_toolbar_html,
         input_processors=[],
     )
 
@@ -1382,18 +1251,17 @@ async def run_repl(agent, agent_runner_func=None) -> None:
             _hr_cache[width] = line
         return line
 
-    # Kinetic State Engine shared instance for REPL session
+    # AgentStatusBar shared instance for REPL session
     status_bar = AgentStatusBar(console=console)
     status_bar.wire()
 
     consumer_task = asyncio.create_task(render_agent_events(status_bar))
-    spinner_task = asyncio.create_task(_toolbar_spinner_loop())
 
     try:
         # 5. Start the chat loop
         while True:
             # NO logo printing inside this loop!
-            # Explicitly stop Kinetic UI status and compressor before asking for user input
+            # Stop the live status and compressor before asking for user input
             status_bar.stop()
             thought_compressor.stop()
             try:
@@ -1409,7 +1277,6 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     prompt_message,
                     placeholder="Ask your question..."
                 )
-
                 text = safe_strip(user_input)
 
                 if text.lower() in ["exit", "quit"]:
@@ -1607,18 +1474,13 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 console.print("\n[bold red]Session terminated cleanly.[/bold red]")
                 break
     finally:
-        # Graceful shutdown: stop the streaming consumer + spinner.
+        # Graceful shutdown: stop the streaming consumer.
         consumer_task.cancel()
-        spinner_task.cancel()
         try:
             await consumer_task
         except asyncio.CancelledError:
             pass
-        try:
-            await spinner_task
-        except asyncio.CancelledError:
-            pass
-        # Tear down the Kinetic State Engine (clears the live status line).
+        # Tear down the AgentStatusBar (clears the live status line).
         try:
             status_bar.set_complete()
         except Exception:

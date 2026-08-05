@@ -1,58 +1,17 @@
 # ui/theme.py
 """Centralized Design System and Neon-Cyberpunk Theme for NABD OS Terminal UI."""
 
-from typing import Dict
 from rich.theme import Theme
 from rich.style import Style
 from rich import box
 
-# ───────────────────────────────────────────────────────
-# Existing & Core Palette Definitions
-# ───────────────────────────────────────────────────────
-
-COLORS: Dict[str, str] = {
-    "background": "#000000",        # --bg
-    "surface": "#0a0a0a",           # --bg-elevated
-    "primary": "#5945B1",           # --purple (شارات EDIT / READ / SHELL / SEARCH / TODOS)
-    "primary_dim": "#4a3a94",       # --purple-dim
-    "agent_violet": "#6943FF",      # --agent-violet
-    "success": "#3ecf8e",           # --success
-    "warning": "#e0b23c",           # pending/warning
-    "danger": "#e0524a",            # error glyph
-    "error": "#e0524a",             # error glyph
-    "text_main": "#f2f2f2",         # --text-primary
-    "text_muted": "#7a7a7a",        # --text-dim
-    "text_dim": "#4d4d4d",          # --text-faint
-    "accent_cyan": "#6fd3d6",       # --accent-cyan
-    "accent_violet": "#9d8cff",     # --accent-violet
-    "diff_add_bg": "#04473A",       # --diff-add-bg
-    "diff_add_fg": "#4CC88E",       # --diff-add-fg
-    "diff_del_bg": "#5C0112",       # --diff-del-bg
-    "diff_del_fg": "#E16B7A",       # --diff-del-fg
-    "border": "#1a1a1a",
-}
+from ui.design.theme.semantic import SEMANTIC
 
 # Selection highlight for keyboard navigation (Phase 1)
 SELECTED_COLOR: str = "bright_cyan"
 
 # Footer hint text color (Phase 4)
 FOOTER_COLOR: str = "grey50"
-
-ACTION_COLORS: Dict[str, str] = {
-    "READ": "#0891B2",        # ice blue / teal (cyan-600)
-    "EDIT": "#0891B2",        # ice blue / teal
-    "SHELL": "#0891B2",       # ice blue / teal
-    "SEARCH": "#0891B2",      # ice blue / teal
-    "TODOS": "#0891B2",       # ice blue / teal
-    "EXPLORE": "#0891B2",     # ice blue / teal
-    "GIT": "#059669", # dark green / emerald
-    "FINAL ANSWER": "#7C3AED", # violet / purple
-    "WARNING": "#D97706",     # orange
-    "THINKING": "#6943FF",    # --agent-violet
-    "KILL(shell)": "#5C0112", # --diff-del-bg
-    "USER": "#0891B2",        # ice blue / teal
-    "SYSTEM": "#9d8cff",      # --accent-violet
-}
 
 # 🎨 1. لوحة ألوان النيون (Neon Palette)
 PALETTE = {
@@ -65,10 +24,10 @@ PALETTE = {
     "neon_blue": "#00a8ff",
     
     # Semantic colors
-    "success": "#00ff9d",
-    "error": "#ff3333",
-    "warning": "#ffcc00",
-    "info": "#00fff7",
+    "success": SEMANTIC.success.hex,
+    "error": SEMANTIC.error.hex,
+    "warning": SEMANTIC.warning.hex,
+    "info": SEMANTIC.info.hex,
     
     # Backgrounds
     "panel_bg": "#0d1117",      # GitHub dark

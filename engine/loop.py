@@ -1081,7 +1081,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         decision, reason = PermissionEngine.evaluate(command, self.state.shell_permissions)
         if decision is PermissionDecision.ALLOW:
             # Silent auto-approval — MUST NOT touch the live status line so the
-            # KineticStateEngine never flickers. Emitted as a structured,
+            # AgentStatusBar never flickers. Emitted as a structured,
             # non-interactive security log the renderer can consume quietly.
             bus.emit("security_log", {"level": "info", "message": f"Auto-approved by policy: {command}"})
             ctx.approved_shell.add(command)

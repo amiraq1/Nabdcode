@@ -463,15 +463,11 @@ def _process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str
     if user_input.strip() in ("فحص", "فحص مستودع", "scan", "scan repo", "/deep-scan"):
         from core.repo_scanner import SECURE_REPO_SCANNER
         try:
-            import json as _json
-            sys.stdout.write(
-                "\n"
-                + _json.dumps(
-                    SECURE_REPO_SCANNER()._deep_scan(get_workspace_root()),
-                    indent=2,
-                    ensure_ascii=False,
-                )
-                + "\n\n"
+            from rich.console import Console
+            from ui.widgets.scan_display import render_scan_result
+            render_scan_result(
+                Console(),
+                SECURE_REPO_SCANNER()._deep_scan(get_workspace_root()),
             )
         except Exception as _scan_exc:
             sys.stdout.write(f"\n\033[91m⚠ deep scan failed: {_scan_exc}\033[0m\n\n")

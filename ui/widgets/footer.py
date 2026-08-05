@@ -1,30 +1,38 @@
-"""Navigation footer help widget (Phase 4).
-
-Renders a short hint bar showing the available keyboard shortcuts when
-navigation is active (after ``show_final_answer``).  When navigation is
-inactive the footer renders as an empty ``Text`` so nothing is printed.
-"""
+"""AppFooter — navigation hint bar composed from D-1 atoms (Am+8 D-3b)."""
 
 from __future__ import annotations
 
-from rich.text import Text
 from rich.console import RenderableType
+from rich.padding import Padding
 
-from ui.theme import FOOTER_COLOR
+from ui.design.primitives import Row, KeyValueRow
+from ui.design.tokens import GAP, SEPARATOR
 
 
-class NavigationFooter:
-    """Minimal footer that shows/hides navigation hint text."""
+class AppFooter:
+    """Footer displaying active keybindings/hints via atoms."""
 
-    def render(self, active: bool) -> RenderableType:
-        """Return the footer renderable.
-
-        When *active* is ``False`` an empty ``Text`` is returned so the
-        caller can safely ``console.print()`` without producing output.
-        """
-        if not active:
-            return Text("")
-        return Text(
-            "  Navigate: j/k \u2191\u2193   Expand: Enter   Exit: Esc",
-            style=FOOTER_COLOR,
+    def _row(self, active: bool) -> Row:
+        if active:
+            return Row(
+                KeyValueRow("Navigate", "j/k ↑↓"),
+                KeyValueRow("Expand", "Enter"),
+                KeyValueRow("Exit", "Esc"),
+                separator=SEPARATOR.group,
+            )
+        return Row(
+            KeyValueRow("Input", "[shift+tab]"),
+            KeyValueRow("Help", "? for shortcuts"),
+            separator=SEPARATOR.group,
         )
+
+    def render(self, active: bool = False) -> RenderableType:
+        """Return the footer renderable (group separators + leading indent
+        come from tokens, never literals).
+
+        When *active* is True, shows navigation hints for the result list.
+        When *active* is False, shows general REPL hints instead of an empty
+        line (behavior change vs NavigationFooter: documented in the D-3b
+        commit body).
+        """
+        return Padding(self._row(active), (0, 0, 0, GAP.footer_indent))

@@ -11,6 +11,10 @@ Design principles:
      measured correctly.
   4. ANSI escape codes are stripped before width calculation so they never
      inflate the measured width or corrupt cursor positioning.
+
+RTL constraint (Am+8 D-6): full bidi shaping is NOT implemented here. Width is
+measured in display columns; visual ordering is delegated to the terminal. The
+data layer never reorders text and never injects RLM/LRM to fake support.
 """
 
 from __future__ import annotations
@@ -74,23 +78,6 @@ def display_width(text: str) -> int:
     return width
 
 
-def preserve_unicode_order(text: str) -> str:
-    """Return text with its original Unicode code-point order preserved.
-
-    This is a no-op for the data layer — it exists as an explicit contract
-    that the input buffer and RuntimeState MUST NOT reverse or reorder
-    Arabic text. The renderer applies display-only processing separately.
-
-    If the text has been accidentally reversed (e.g. by a buggy input
-    handler), this function detects and restores the original order by
-    checking if the reversed version has more valid Arabic word sequences.
-    """
-    if not text:
-        return text
-    # The text should already be in original Unicode order. We return it
-    # as-is — the contract is that the data layer never touches ordering.
-    return text
-
 
 def safe_display(text: str) -> str:
     """Apply display-only bidi isolation to text for terminal rendering.
@@ -101,9 +88,6 @@ def safe_display(text: str) -> str:
       are added for the terminal's BiDi algorithm.
     - ANSI codes are preserved (they are not stripped here; the renderer
       handles them).
-
-    This function is for the RENDERER layer only. The data layer must use
-    ``preserve_unicode_order()`` instead.
     """
     lrm = "\u200E"  # Left-to-Right Mark
     rlm = "\u200F"  # Right-to-Left Mark

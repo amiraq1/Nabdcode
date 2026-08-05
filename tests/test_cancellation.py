@@ -22,6 +22,10 @@ def test_cancel_and_check() -> None:
     tok.cancel(reason="user")
     assert tok.is_cancelled() is True
     assert tok.reason == "user"
+    # Hygiene: the token is a process-wide singleton; leaving it cancelled
+    # poisons later streaming tests in the same process (D10 stream yields
+    # nothing once is_cancelled() is True). Always clear after the check.
+    tok.clear()
 
 
 def test_clear_cycle() -> None:

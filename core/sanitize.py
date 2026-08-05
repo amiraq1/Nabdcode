@@ -206,25 +206,3 @@ def strip_goal_complete_marker(text: str | None) -> str:
     text = re.sub(r"<!--\s*GOAL_COMPLETE\s*-->\n?", "", text)
     text = re.sub(r"<!--\s*GOAL_CANCELLED\s*-->\n?", "", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
-
-
-def fix_arabic_reversal(text: str | None) -> str:
-    """
-    Preserve Arabic text in its ORIGINAL Unicode code-point order.
-
-    Contract (RTL/BiDi discipline):
-      1. Arabic text is NEVER reversed or reordered in the data layer.
-      2. Display-only processing (directional isolation marks) is applied
-         exclusively in the renderer layer via ``core.text_utils.safe_display``.
-      3. Mixed Arabic/English text must not be broken — only Arabic-specific
-         tokens are isolated, never reordered.
-
-    This function is a no-op that returns the text unchanged. It exists for
-    backward compatibility with callers that imported it; the actual
-    bidirectional handling is in ``core.text_utils.safe_display``.
-    """
-    if not text:
-        return ""
-    # Preserve original Unicode order — do NOT reverse tokens.
-    # Display-only processing is handled by the renderer.
-    return text

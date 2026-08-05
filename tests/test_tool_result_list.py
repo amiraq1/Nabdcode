@@ -2,23 +2,20 @@
 
 import os
 import sys
-from io import StringIO
-
-from rich.console import Console
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ui.widgets.tool_result import ToolResultWidget
 from ui.widgets.tool_result_list import ToolResultList
 from ui.theme import CUSTOM_THEME
+from tests.support.render import make_console
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _make_list() -> ToolResultList:
-    """Create a ToolResultList with a silent (StringIO) console."""
-    buf = StringIO()
-    console = Console(file=buf, width=120, force_terminal=False, color_system=None, theme=CUSTOM_THEME)
+    """Create a ToolResultList with a silent, dimension-pinned console."""
+    console = make_console(width=120, height=25, theme=CUSTOM_THEME)
     return ToolResultList(console=console)
 
 
@@ -233,14 +230,15 @@ def test_after_clear_next_no_exception():
 # ── redraw() ─────────────────────────────────────────────────────────────────
 
 def test_redraw_prints_all_widgets():
-    """redraw() must print every widget's render() to the console."""
-    buf = StringIO()
-    console = Console(file=buf, width=120, force_terminal=False, color_system=None, theme=CUSTOM_THEME)
+    """redraw() must compose every widget's render() through the Column
+    atom (D-3c.2: the list renders via atoms, not a manual print loop)."""
+    console = make_console(width=120, height=25, theme=CUSTOM_THEME)
     lst = ToolResultList(console=console)
     lst.add(_make_widget("read", "first"))
     lst.add(_make_widget("read", "second"))
 
-    output = buf.getvalue()
+    lst.redraw(console)
+    output = console.file.getvalue()
     assert "first" in output
     assert "second" in output
 

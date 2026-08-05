@@ -1,17 +1,8 @@
 import pytest
 from unittest.mock import MagicMock
 from engine.state import GoalSpec, parse_goal_command, build_goal_block, RuntimeState
-from engine.kinetic import KineticStateEngine
 from ui.repl_termux import REPL
 from engine.loop import ExecutionLoop
-
-def test_goal_verb_precedence_over_generic():
-    """Goal verbs override generic auditing verbs when goal is active"""
-    kinetic = KineticStateEngine()
-    kinetic._phase = "goal"
-    kinetic._on_goal_set("test goal")
-    assert "Pursuing Objective" in kinetic._verb
-    assert kinetic._phase == "goal"
 
 def test_repl_goal_panel_rendering():
     """REPL renders a non-transient goal panel"""
