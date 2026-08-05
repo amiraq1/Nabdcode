@@ -49,19 +49,28 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 }
 cd "$ROOT" || exit 2
 
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    printf '%s\n' "verify_protocol: not a git work tree" >&2
+    exit 2
+}
+
+# Single owner of the file list: the tracked tree, never the disk.
+# An ignored build/ copy must never change the count.
+tracked_py() {
+    git ls-files -z -- '*.py' ':(exclude)tests/*'
+}
+
 REPORT_COUNT=0
 emit() { printf '%s\n' "$1"; REPORT_COUNT=$((REPORT_COUNT + 1)); }
 
 # --- color scan (contract 5): all *.py except tests/ and semantic.py ------
 # Patterns anchored on 38|48 keep key sequences (27;2;13…) out of the scan.
 color_scan() {
-    grep -rEn \
+    tracked_py \
+        | xargs -0 -r grep -EnI \
         '#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{3}\b|\b(38|48);2;[0-9]+;[0-9]+;[0-9]+|\b(38|48);5;[0-9]+' \
-        --include='*.py' \
-        --exclude-dir=tests \
-        --exclude-dir=.git \
-        --exclude-dir=__pycache__ \
-        . 2>/dev/null \
+        2>/dev/null \
+        | sed -E 's#^#./#' \
         | grep -v '^\./ui/design/theme/semantic\.py:' \
         | sed -E 's#^\./([^:]+):([0-9]+):(.*)$#- \1:\2: raw color: \3#' \
         | cut -c1-160
@@ -69,9 +78,9 @@ color_scan() {
 
 # --- fallback scan (contract 7): literal identifier only ------------------
 fallback_scan() {
-    grep -RIn '_subscribe_with_fallback' --include='*.py' \
-        --exclude-dir=tests --exclude-dir=.git --exclude-dir=__pycache__ \
-        . 2>/dev/null \
+    tracked_py | xargs -0 -r grep -nI '_subscribe_with_fallback' \
+        2>/dev/null \
+        | sed -E 's#^#./#' \
         | sed -E 's#^\./([^:]+):([0-9]+):(.*)$#- \1:\2: live _subscribe_with_fallback#'
 }
 
@@ -89,7 +98,9 @@ snapshot_scan() {
 
 # --- subscriber scan (contract 6): path:line per subscriber, not wc -l ----
 subscriber_scan() {
-    grep -RIn 'show_final_answer' --include='*.py' ui/ 2>/dev/null \
+    git ls-files -z -- 'ui/*.py' \
+        | xargs -0 -r grep -nI 'show_final_answer' 2>/dev/null \
+        | sed -E 's#^#./#' \
         | grep -E 'subscribe|on_final_answer' \
         | awk -F: 'NR > 1 { print "- " $1 ":" $2 ": extra show_final_answer subscriber" }'
 }
@@ -138,8 +149,12 @@ enforce_mode() {
 PLANT=""
 self_test() {
     local step="" base="" planted="" ec=""
-    PLANT="$ROOT/verify_protocol_selftest_probe.py"
-    cleanup() { rm -f "$PLANT"; }
+    # The plant must be a TRACKED file: the scans read git ls-files, not
+    # the disk, so an untracked probe is invisible and proves nothing.
+    PLANT="$ROOT/hello_nabd.py"
+    BACKUP="${TMPDIR:-/tmp}/verify_protocol_plant.bak"
+    cp "$PLANT" "$BACKUP" || exit 2
+    cleanup() { cp "$BACKUP" "$PLANT" 2>/dev/null; rm -f "$BACKUP"; }
     trap cleanup EXIT INT TERM
 
     # (a) base report count
@@ -149,8 +164,9 @@ self_test() {
 
     # (b) plant a real violation inside the scan scope
     step="plant"
-    printf '# selftest probe: raw color #059669\n' > "$PLANT"
-    [ -f "$PLANT" ] || { echo "self-test FAIL: step=$step (plant not created)"; exit 1; }
+    printf '# selftest probe: raw color #059669\n' >> "$PLANT"
+    grep -q 'selftest probe' "$PLANT" || {
+        echo "self-test FAIL: step=$step (plant not written)"; exit 1; }
 
     # (c) same report function: count must increase by exactly one
     step="count-increased"
@@ -172,8 +188,11 @@ self_test() {
 
     # (e) delete the plant; verify gone and count back to base
     step="cleanup"
-    rm -f "$PLANT"
-    [ -e "$PLANT" ] && { echo "self-test FAIL: step=$step (plant still exists)"; exit 1; }
+    cp "$BACKUP" "$PLANT" || exit 2
+    cmp -s "$BACKUP" "$PLANT" || {
+        echo "self-test FAIL: step=$step (restore not byte-identical)"; exit 1; }
+    grep -q 'selftest probe' "$PLANT" && {
+        echo "self-test FAIL: step=$step (plant survived)"; exit 1; }
     step="count-returned"
     run_checks >/dev/null
     if [ "$REPORT_COUNT" -ne "$base" ]; then
