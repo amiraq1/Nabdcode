@@ -5,6 +5,8 @@ from rich.theme import Theme
 from rich.style import Style
 from rich import box
 
+from ui.design.theme.semantic import SEMANTIC
+
 # Selection highlight for keyboard navigation (Phase 1)
 SELECTED_COLOR: str = "bright_cyan"
 
@@ -22,10 +24,10 @@ PALETTE = {
     "neon_blue": "#00a8ff",
     
     # Semantic colors
-    "success": "#00ff9d",
-    "error": "#ff3333",
-    "warning": "#ffcc00",
-    "info": "#00fff7",
+    "success": SEMANTIC.success.hex,
+    "error": SEMANTIC.error.hex,
+    "warning": SEMANTIC.warning.hex,
+    "info": SEMANTIC.info.hex,
     
     # Backgrounds
     "panel_bg": "#0d1117",      # GitHub dark
