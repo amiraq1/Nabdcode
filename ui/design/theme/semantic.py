@@ -1,9 +1,10 @@
 """Semantic color tokens.
 
 Single source of truth for *meaning* of color. Widgets must never reference a
-raw hex value; they read SEMANTIC.surface / SEMANTIC.primary / etc. Concrete
-values are aligned to the legacy palette (see ui/theme.py) so D-0 introduces no
-visual redesign — they are simply re-homed here going forward.
+raw hex value; they read SEMANTIC.surface / SEMANTIC.primary / etc. The legacy
+Rich palette (ui/theme.py) derives FROM these tokens — its PALETTE state
+entries resolve SEMANTIC.*.hex at import time, never the reverse. Token values
+were re-homed here during D-0.
 """
 from __future__ import annotations
 

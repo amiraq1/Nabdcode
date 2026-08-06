@@ -14,7 +14,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from rich.box import ROUNDED
+from typing import Any, Optional
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
@@ -32,20 +32,15 @@ from ui.widgets.tool_result import ToolResultWidget
 from ui.widgets.tool_result_list import ToolResultList
 from ui.design.theme.semantic import SEMANTIC
 from core.context_manager import RepositoryContextManager
-from core.permissions import ShellPermissions, PermissionEngine
+from core.permissions import ShellPermissions
 from core.kernel.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor
 from core.utils import safe_strip
 from ui.theme import (
-    nabd_theme,
-    BOX_THOUGHT,
     BOX_EXECUTION,
-    BOX_EVIDENCE,
     BOX_FINAL,
-    PALETTE,
     PANEL_STYLES,
     CUSTOM_THEME,
-    PROMPT_STYLE,
 )
 
 console = Console(theme=CUSTOM_THEME)
