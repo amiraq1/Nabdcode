@@ -1746,7 +1746,7 @@ class TerminalVisualizer:
         console.print("\n")
 
         words = output.split(" ")
-        chunk_size = 3
+        chunk_size = 10  # V3: was 3 — 10 words/update × 0.01s = <1s for 600w (was ~8s)
 
         with Live(panel, console=console, auto_refresh=False) as live:
             for i in range(0, len(words), chunk_size):
@@ -1755,7 +1755,7 @@ class TerminalVisualizer:
 
                 panel.renderable = Markdown(current_text)
                 live.update(panel, refresh=True)
-                time.sleep(0.04)
+                time.sleep(0.01)  # V3: was 0.04 — reduced alongside chunk_size increase
 
         console.print("\n")
 
