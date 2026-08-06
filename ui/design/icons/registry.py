@@ -33,6 +33,7 @@ class Icon(Enum):
     STOP = "\u23f9"         # double vertical bar
     CANCEL = "\u2715"       # multiplication x
     LOADING = "\u21bb"      # loading spinner glyph (distinct member)
+    DISABLED = "\u2298"     # prohibited / disabled (circled slash)
 
     # entities / actions
     FOLDER = "\U0001f4c1"

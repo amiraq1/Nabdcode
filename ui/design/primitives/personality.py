@@ -1,6 +1,6 @@
 """D-1 personality resolver.
 
-Maps all 14 UIStates onto 5 StatusLine personalities so StatusLine stays ONE
+Maps all 14 UIStates onto 6 StatusLine personalities so StatusLine stays ONE
 component while every state is rendered with explicit, tested styling (no state
 falls through unstyled).
 
@@ -20,13 +20,14 @@ from ui.design.state import UIState, UI_STATES
 
 
 class Personality(Enum):
-    """The five StatusLine personalities (one component, five faces)."""
+    """The six StatusLine personalities (one component, six faces)."""
 
     THINKING = "thinking"
     RUNNING = "running"
     SUCCESS = "success"
     WARNING = "warning"
     ERROR = "error"
+    DISABLED = "disabled"
 
 
 @dataclass(frozen=True)
@@ -64,7 +65,7 @@ _PERSONALITY_OF: dict[UIState, Personality] = {
     UIState.LOADING:      Personality.WARNING,
     UIState.ERROR:        Personality.ERROR,
     UIState.CANCELLED:    Personality.ERROR,
-    UIState.DISABLED:     Personality.ERROR,   # fixed: was a NameError in draft
+    UIState.DISABLED:     Personality.DISABLED,
 }
 
 _PERSONALITY_STYLE: dict[Personality, PersonalityStyle] = {
@@ -87,6 +88,10 @@ _PERSONALITY_STYLE: dict[Personality, PersonalityStyle] = {
     Personality.ERROR: PersonalityStyle(
         Personality.ERROR, "error", SEMANTIC.error, Icon.ERROR,
         "bold", "static", SpinnerEnum.NONE, False,
+    ),
+    Personality.DISABLED: PersonalityStyle(
+        Personality.DISABLED, "disabled", SEMANTIC.disabled, Icon.DISABLED,
+        "dim", "static", SpinnerEnum.NONE, False,
     ),
 }
 
