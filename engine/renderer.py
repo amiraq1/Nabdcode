@@ -41,7 +41,6 @@ _COLORS: dict[str, str] = {
     "red":    "\033[31m",
     "dim":    "\033[90m",
     "white":  "\033[97m",
-    "bg_gray": "\033[48;5;236m",
     "reset":  "\033[0m",
 }
 _ERASE_LINE = "\r\033[K"
