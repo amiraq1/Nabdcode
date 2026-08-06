@@ -11,6 +11,12 @@ import shutil
 from typing import Any, Optional
 
 from ui.design.theme.semantic import SEMANTIC
+from ui.design.icons import Icon
+from ui.design.primitives.personality import style_of
+from ui.design.state import UIState
+
+# W-1: the waiting line's single source of truth — wired to the design layer.
+_STYLE = style_of(UIState.THINKING)
 
 # ── ANSI shortcuts ──────────────────────────────────────────────────────────
 _RESET = "\033[0m"
@@ -100,12 +106,12 @@ def strike(s: str) -> str:
 # ── Thought line ────────────────────────────────────────────────────────────
 def think_line(seconds: float | None = None) -> str:
     if seconds is None:
-        body = "Thinking"
+        body = _STYLE.verb
     else:
         sec = max(1, int(round(seconds)))
         unit = "second" if sec == 1 else "seconds"
-        body = f"Thinking  {sec} {unit}"
-    return f"{fg(*P['think'])}* {body}{_RESET}"
+        body = f"{_STYLE.verb}  {sec} {unit}"
+    return f"{fg(*_STYLE.color.rgb)}{Icon.glyph(_STYLE.icon)} {body}{_RESET}"
 
 
 # ── Status chip (Examining / Sculpting) ────────────────────────────────────

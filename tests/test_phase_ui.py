@@ -26,6 +26,10 @@ from engine.ui_theme import (
     tool_header,
 )
 from engine.renderer import Renderer
+from ui.design.primitives.personality import style_of
+from ui.design.state import UIState
+
+_STYLE = style_of(UIState.THINKING)
 
 
 # ── map_tool_to_badge ────────────────────────────────────────────────────
@@ -135,14 +139,14 @@ def test_render_diff_empty():
 
 def test_think_line_with_duration():
     line = think_line(2.7)
-    assert "Thinking" in line
+    assert _STYLE.verb in line
     assert "3" in line  # rounded up
     assert "seconds" in line
 
 
 def test_think_line_no_duration():
     line = think_line(None)
-    assert "Thinking" in line
+    assert _STYLE.verb in line
     assert "ctrl+o" not in line
 
 

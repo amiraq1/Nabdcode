@@ -63,6 +63,12 @@ from engine.ui_theme import (
     P,
     tree_prefix,
 )
+from ui.design.primitives.personality import style_of
+from ui.design.state import UIState
+
+# W-1: the thought line is identified by the ruled Arabic verb, never the
+# English word — otherwise thought_end() would not find its own line.
+_STYLE = style_of(UIState.THINKING)
 
 
 # ── Renderer ────────────────────────────────────────────────────────────────
@@ -345,7 +351,7 @@ class Renderer:
         dt = (time.time() - self._think_t0) if self._think_t0 else 1.0
         self._think_t0 = None
         new_line = think_line(dt)
-        if self._lines and "Thinking" in self._lines[-1]:
+        if self._lines and _STYLE.verb in self._lines[-1]:
             self._lines[-1] = new_line
         else:
             self._lines_append(new_line)
