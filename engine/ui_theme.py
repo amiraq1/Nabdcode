@@ -43,7 +43,6 @@ P: dict[str, tuple[int, int, int]] = {
     "badge_fg":     (255, 255, 255),
     "path":         (180, 180, 190),
     "meta":         (120, 120, 130),
-    "think":        (196, 181, 253),   # light violet
     "status_bg":    (30, 58, 95),      # dark blue
     "ok":           (74, 222, 128),
     "err":          (248, 113, 113),
