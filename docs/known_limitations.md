@@ -83,6 +83,32 @@ semantic.py owns `success` / `error` / `warning` / `info`.
   (#3ecf8e), vivid red -> brick (#e0524a), cyan -> turquoise (#6fd3d6)
   on the repl_termux path only.
 
+## Am+8 D-7b — Debt Discovered While Measuring (OPEN)
+
+Found by measurement during D-7b. None is D-7b's material; each
+carries its location so it is never rediscovered from scratch.
+
+- Two names, one meaning: `SEMANTIC.danger` and `SEMANTIC.error` are
+  both `#e0524a` (semantic.py:71,72). Readers disagree:
+  `badge.py:13` reads `danger`, `personality.py:88` and
+  `ui_state.py:59` read `error`. One meaning must have one name.
+- Two names, one meaning: `SEMANTIC.info` and `SEMANTIC.accent` are
+  both `#6fd3d6` (semantic.py:68,73).
+- False docstring: `semantic.py:5-6` claims the values are aligned to
+  the legacy palette so D-0 introduces no visual redesign. Untrue
+  since D-0 (`#3ecf8e` vs `#00ff9d`), and void after D-7b.
+- Brand has no token: `main.py:876,877` and `ui/repl_termux.py:1274`
+  spell the prompt colors by hand. The second copy is the dual-REPL
+  divergence made physical. Collapsing them requires a brand token,
+  which does not exist (measured: NO_BRAND_TOKEN).
+- Badge background has no token: `ui/repl_termux.py:733` `#059669`,
+  beside `#D97706`, `#7C3AED`, `#EF4444` at :726-734.
+- Correction to an earlier claim: `CUSTOM_THEME` was repeatedly said
+  to have nine readers. Measured: one live reader
+  (`ui/repl_termux.py:51`), plus its definition and the `nabd_theme`
+  alias in `ui/theme.py`. `main.py` does not read it at all, which is
+  why D-7b changed only one surface.
+
 ## Declared Debt — core/test_runner_wrapper.py:21 hard-codes "python3"
 
 **الحالة:** OPEN — declared in D-7b sheet LAW 0b. Owned by another commit.
