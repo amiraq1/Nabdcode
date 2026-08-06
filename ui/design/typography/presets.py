@@ -32,7 +32,6 @@ CAPTION = TypographyPreset("caption", Scale.tiny, dim=True, color=SEMANTIC.capti
 CODE = TypographyPreset("code", Scale.small, color=SEMANTIC.code)
 SUCCESS = TypographyPreset("success", Scale.small, bold=True, color=SEMANTIC.success)
 WARNING = TypographyPreset("warning", Scale.small, bold=True, color=SEMANTIC.warning)
-DANGER = TypographyPreset("danger", Scale.small, bold=True, color=SEMANTIC.error)
 THINKING = TypographyPreset("thinking", Scale.small, dim=True, color=SEMANTIC.thinking)
 RUNNING = TypographyPreset("running", Scale.small, bold=True, color=SEMANTIC.running)
 ERROR = TypographyPreset("error", Scale.small, bold=True, color=SEMANTIC.error)
@@ -46,7 +45,6 @@ PRESETS: dict[str, TypographyPreset] = {
     "code": CODE,
     "success": SUCCESS,
     "warning": WARNING,
-    "danger": DANGER,
     "thinking": THINKING,
     "running": RUNNING,
     "error": ERROR,

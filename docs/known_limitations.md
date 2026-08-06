@@ -122,7 +122,7 @@ alone in 3.03s and the root cause is the hard-coded name, not test logic.
 
 Do not fix here; fix with the interpreter-pinning commit.
 
-## Am+8 D-7d - Twin Preset Names (OPEN, human ruling 2B, 2026-08-06 11:15)
+## Am+8 D-7d - Twin Preset Names (CLOSED, human ruling GO, 2026-08-06 11:35)
 
 `ui/design/typography/presets.py:35` defines DANGER and `:38` defines ERROR.
 Both now resolve to SEMANTIC.error: one meaning carrying two preset names -
@@ -130,3 +130,10 @@ the same defect the 10:08 token ruling removed one layer below. It was NOT
 deleted here because its readers were never measured; the registry keys at
 `:49` and `:52` are the only ones known. Measure the readers, then delete
 DANGER in a commit of its own.
+
+Closed in the same session: the readers were measured and found to be
+`presets.py:35,:49` and `typography/__init__.py:5,:11` only - no dynamic
+PRESETS lookup, and no UI state label spelled "danger". The reason for
+deferring fell, so DANGER was deleted. The census contract
+test_typography_presets_complete went red on the deletion before it was
+updated. The OPEN wording above is left exactly as published in b338e43.

@@ -110,7 +110,7 @@ def test_animation_profiles_complete():
 
 def test_typography_presets_complete():
     required = {"terminal_title", "section_title", "normal", "muted", "caption",
-                "code", "success", "warning", "danger", "thinking", "running", "error"}
+                "code", "success", "warning", "thinking", "running", "error"}
     assert set(PRESETS) == required
     for p in PRESETS.values():
         assert isinstance(p, TypographyPreset)
