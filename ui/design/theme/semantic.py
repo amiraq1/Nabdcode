@@ -3,8 +3,7 @@
 Single source of truth for *meaning* of color. Widgets must never reference a
 raw hex value; they read SEMANTIC.surface / SEMANTIC.primary / etc. The legacy
 Rich palette (ui/theme.py) derives FROM these tokens — its PALETTE state
-entries resolve SEMANTIC.*.hex at import time, never the reverse. Token values
-were re-homed here during D-0.
+entries resolve SEMANTIC.*.hex at import time, never the reverse.
 """
 from __future__ import annotations
 
@@ -35,11 +34,10 @@ class SemanticTheme:
     primary_dim: Color  # muted primary (#4a3a94)
     secondary: Color     # secondary accent (#6943FF)
     accent: Color        # complementary accent (#6fd3d6)
+    info: Color          # informational (#6fd3d6)
     success: Color       # success (#3ecf8e)
     warning: Color       # warning (#e0b23c)
-    danger: Color        # danger (#e0524a)
-    error: Color         # error (#e0524a)
-    info: Color          # informational (#6fd3d6)
+    error: Color         # error-state hue (#e0524a)
     action_badge: Color  # action badge background (#0891B2)
 
     # execution / status states
@@ -67,11 +65,10 @@ SEMANTIC: SemanticTheme = SemanticTheme(
     primary_dim=Color("#4a3a94"),
     secondary=Color("#6943FF"),
     accent=Color("#6fd3d6"),
+    info=Color("#6fd3d6"),
     success=Color("#3ecf8e"),
     warning=Color("#e0b23c"),
-    danger=Color("#e0524a"),
     error=Color("#e0524a"),
-    info=Color("#6fd3d6"),
     action_badge=Color("#0891B2"),
     thinking=Color("#6943FF"),
     running=Color("#22d3ee"),

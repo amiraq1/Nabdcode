@@ -71,7 +71,7 @@ def test_semantic_theme_has_every_category():
         "background", "surface", "panel", "header", "footer", "border",
         "text", "text_muted", "text_dim", "caption", "code",
         "primary", "primary_dim", "secondary", "accent",
-        "success", "warning", "danger", "error", "info",
+        "success", "warning", "error", "info",
         "thinking", "running", "idle", "selection", "focus", "disabled",
     }
     missing = required - set(SemanticTheme.__dataclass_fields__)

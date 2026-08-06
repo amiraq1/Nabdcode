@@ -10,7 +10,7 @@ _MEANING_COLOR = {
     "info":    SEMANTIC.info,
     "success": SEMANTIC.success,
     "warning": SEMANTIC.warning,
-    "error":   SEMANTIC.danger,
+    "error":   SEMANTIC.error,
     "muted":   SEMANTIC.text_muted,
 }
 

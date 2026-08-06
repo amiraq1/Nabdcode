@@ -1,7 +1,16 @@
 """D-7b: state colors in ui/theme.py are owned by the semantic layer.
 
-The ruling (human, D-7d): semantic.py owns success / error / warning / info.
-The neon spellings survive only as *brand* names, never as state owners.
+Human ruling (Am, 2026-08-06 10:08 — "وافقت"), quoted verbatim:
+  error stays.  danger is deleted.  info and accent BOTH stay.
+Reasoning (assistant, accepted by that ruling):
+  - danger and error are one meaning with two names. They must never
+    diverge; a guard forbids the dead spelling returning.
+  - info and accent are TWO meanings that happen to share #6fd3d6
+    today. They are allowed to diverge tomorrow. Nothing may pin
+    them equal.
+
+This guard pins PALETTE's state keys to the semantic tokens the ruling
+names: error -> SEMANTIC.error, info -> SEMANTIC.info, danger absent.
 """
 import pathlib
 import unittest

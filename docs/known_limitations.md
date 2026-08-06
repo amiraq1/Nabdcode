@@ -121,3 +121,12 @@ the subprocess fails with `ModuleNotFoundError` and the test
 alone in 3.03s and the root cause is the hard-coded name, not test logic.
 
 Do not fix here; fix with the interpreter-pinning commit.
+
+## Am+8 D-7d - Twin Preset Names (OPEN, human ruling 2B, 2026-08-06 11:15)
+
+`ui/design/typography/presets.py:35` defines DANGER and `:38` defines ERROR.
+Both now resolve to SEMANTIC.error: one meaning carrying two preset names -
+the same defect the 10:08 token ruling removed one layer below. It was NOT
+deleted here because its readers were never measured; the registry keys at
+`:49` and `:52` are the only ones known. Measure the readers, then delete
+DANGER in a commit of its own.
