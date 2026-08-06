@@ -1390,6 +1390,9 @@ async def run_repl(agent, agent_runner_func=None) -> None:
 
                 # Offload the blocking agent.run to a worker thread so the
                 # event loop keeps streaming tool/token events concurrently.
+                # V1: arm the re-entrancy guard BEFORE the turn; the finally
+                # below releases it on success, failure, or cancellation.
+                _agent_busy = True
                 try:
                     if agent_runner_func and agent is not None:
                         response_text = await asyncio.to_thread(
@@ -1414,6 +1417,8 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     )
                     continue
                 finally:
+                    # V1: release the re-entrancy guard regardless of outcome.
+                    _agent_busy = False
                     # Restore original system prompt after the turn completes.
                     if _plan_snapshot is not None:
                         _msgs = getattr(agent, "messages", None) or getattr(
@@ -1455,7 +1460,9 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 # ── Process pending edits (accept-edits mode) ────────────
                 # After the agent turn, if accept-edits mode was active and
                 # edits were queued, show them and ask for user approval.
-                _process_pending_edits()
+                # V2: offload the blocking input() prompt to a worker thread
+                # so the event loop keeps streaming while edits are reviewed.
+                await asyncio.to_thread(_process_pending_edits)
 
                 # Call 2 (Finish): transition the task to Completed immediately
                 # after the agent's response is rendered. Best-effort + guarded.
