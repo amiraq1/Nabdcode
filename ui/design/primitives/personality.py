@@ -70,27 +70,27 @@ _PERSONALITY_OF: dict[UIState, Personality] = {
 
 _PERSONALITY_STYLE: dict[Personality, PersonalityStyle] = {
     Personality.THINKING: PersonalityStyle(
-        Personality.THINKING, "thinking", SEMANTIC.thinking, Icon.THINKING,
+        Personality.THINKING, "يفكّر", SEMANTIC.thinking, Icon.THINKING,
         "dim", "stream", SpinnerEnum.DOTS, True,
     ),
     Personality.RUNNING: PersonalityStyle(
-        Personality.RUNNING, "running", SEMANTIC.running, Icon.RUNNING,
+        Personality.RUNNING, "يُنفّذ", SEMANTIC.running, Icon.RUNNING,
         "bold", "stream", SpinnerEnum.LINE, True,
     ),
     Personality.SUCCESS: PersonalityStyle(
-        Personality.SUCCESS, "ok", SEMANTIC.success, Icon.SUCCESS,
+        Personality.SUCCESS, "تمّ", SEMANTIC.success, Icon.SUCCESS,
         "bold", "static", SpinnerEnum.NONE, False,
     ),
     Personality.WARNING: PersonalityStyle(
-        Personality.WARNING, "warn", SEMANTIC.warning, Icon.WARNING,
+        Personality.WARNING, "تحذير", SEMANTIC.warning, Icon.WARNING,
         "bold", "pulse", SpinnerEnum.PULSE, True,
     ),
     Personality.ERROR: PersonalityStyle(
-        Personality.ERROR, "error", SEMANTIC.error, Icon.ERROR,
+        Personality.ERROR, "فشل", SEMANTIC.error, Icon.ERROR,
         "bold", "static", SpinnerEnum.NONE, False,
     ),
     Personality.DISABLED: PersonalityStyle(
-        Personality.DISABLED, "disabled", SEMANTIC.disabled, Icon.DISABLED,
+        Personality.DISABLED, "معطّل", SEMANTIC.disabled, Icon.DISABLED,
         "dim", "static", SpinnerEnum.NONE, False,
     ),
 }

@@ -145,11 +145,11 @@ def test_personalities_are_visually_distinct():
 
 def test_statusline_snapshot_per_personality():
     cases = [
-        (Personality.THINKING, UIState.THINKING, "\u2026  thinking  thinking"),
-        (Personality.RUNNING,  UIState.RUNNING,  "\u25b6  running  running"),
-        (Personality.SUCCESS,  UIState.SUCCESS,  "✓  ok  success"),
-        (Personality.WARNING,  UIState.WARNING,  "⚠  warn  warning"),
-        (Personality.ERROR,    UIState.ERROR,    "✖  error  error"),
+        (Personality.THINKING, UIState.THINKING, "\u2026  يفكّر  thinking"),
+        (Personality.RUNNING,  UIState.RUNNING,  "\u25b6  يُنفّذ  running"),
+        (Personality.SUCCESS,  UIState.SUCCESS,  "✓  تمّ  success"),
+        (Personality.WARNING,  UIState.WARNING,  "⚠  تحذير  warning"),
+        (Personality.ERROR,    UIState.ERROR,    "✖  فشل  error"),
     ]
     for p, state, expected in cases:
         got = _visible(StatusLine(state))
@@ -328,7 +328,7 @@ def test_composition_group_in_panel():
     out = _capture(scene, 80)
     assert out
     assert "compose" in out
-    assert "running" in out
+    assert "يُنفّذ" in out
 
 
 # ── D-2: theme swap seam + structural equality + widget style guard ───────
@@ -480,8 +480,8 @@ def test_success_error_share_skeleton():
     def norm(s: str) -> str:
         s = (s.replace(Icon.glyph(Icon.SUCCESS), "O")
               .replace(Icon.glyph(Icon.ERROR), "O")
-              .replace("ok", "V")
-              .replace("error", "V"))
+              .replace(style_of(UIState.SUCCESS).verb, "V")
+              .replace(style_of(UIState.ERROR).verb, "V"))
         # collapse width-fill whitespace runs (Rich pads every row to the
         # panel width); the skeleton comparison ignores fill, not tokens
         return re.sub(r" +", " ", s).strip()
@@ -505,13 +505,13 @@ def test_status_line_hide_verb():
     # Normal: icon + gap + verb + gap + context
     normal = StatusLine(UIState.SUCCESS, "Thinking")
     normal_text = _visible(normal, 80)
-    assert "ok" in normal_text
+    assert style_of(UIState.SUCCESS).verb in normal_text
     assert "Thinking" in normal_text
     
     # Hidden verb: icon + gap + context
     compact = StatusLine(UIState.SUCCESS, "Thinking", hide_verb=True)
     compact_text = _visible(compact, 80)
-    assert "ok" not in compact_text
+    assert style_of(UIState.SUCCESS).verb not in compact_text
     assert "Thinking" in compact_text
 
 @pytest.mark.parametrize("state", list(UIState))
