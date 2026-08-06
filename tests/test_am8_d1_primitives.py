@@ -5,7 +5,7 @@ Invariant guarantees (mirrored from D-0, extended to all primitives):
   - no hex literals, no rich Style(...) construction, no icon-glyph literals
   - glyphs resolve exclusively through Icon.glyph
   - every one of the 14 UIStates maps to a personality (total, no fallthrough)
-  - the five personalities are VISUALLY DISTINCT (permanent guard)
+  - the six personalities are VISUALLY DISTINCT (permanent guard)
   - Spinner keeps exposing the rate as a numeric VALUE (no loop/polling)
 Snapshots are captured with the mandated fixed console (width and height
 both pinned — a width-only console falls back to the real terminal):
@@ -127,7 +127,7 @@ def test_statusline_renders_all_fourteen_states():
         assert style_of(state).verb in visible
 
 
-# ── PERMANENT guard: five personalities are visually distinct ────────────
+# ── PERMANENT guard: six personalities are visually distinct ────────────
 
 def test_personalities_are_visually_distinct():
     """No two personalities share a (color, icon) pair; RUNNING vs SUCCESS differ."""
@@ -156,7 +156,7 @@ def test_statusline_snapshot_per_personality():
         assert got == expected, f"{p.name}: {got!r} != {expected!r}"
 
 
-def test_five_personalities_have_distinct_renders():
+def test_six_personalities_have_distinct_renders():
     states = [UIState.THINKING, UIState.RUNNING, UIState.SUCCESS,
               UIState.WARNING, UIState.ERROR]
     renders = {s.name: _visible(StatusLine(s)) for s in states}
