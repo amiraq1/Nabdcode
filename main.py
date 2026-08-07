@@ -319,6 +319,7 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         renderer.flush()
 
     bus.subscribe("llm_request_started", _on_llm_started)
+    status_bar.wire()  # السهم: الشريط يسمع الناقل
     bus.subscribe("llm_token", _on_llm_token)
     bus.subscribe("llm_request_completed", _on_llm_completed)
     bus.subscribe("tool_started", _on_tool_started)
