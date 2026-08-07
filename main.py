@@ -904,6 +904,18 @@ def main() -> None:
     """NABD Agent OS entry point — CLI flags, SIGINT, then dispatch."""
     sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
+    # A.2: Termux Environment Guard (Replaces taste.md prompt rule)
+    if "com.termux" not in os.environ.get("PREFIX", ""):
+        from rich.console import Console
+        from rich.panel import Panel
+        Console().print(
+            Panel(
+                "[bold red]❌ SECURITY VIOLATION: NABD OS requires a Termux environment (PREFIX).[/]",
+                border_style="red"
+            )
+        )
+        sys.exit(1)
+
     if _check_cli_flags():
         return
 
