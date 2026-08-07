@@ -453,50 +453,6 @@ def _handle_goal_command(text: str, agent=None) -> Any:
     return f"Goal set: {spec.raw_prompt}"
 
 
-class REPL:
-    """REPL interface wrapper supporting object-oriented handlers and bridge events."""
-    def __init__(self, bridge: Any = None, loop: Any = None):
-        self._bridge = bridge
-        self._loop = loop
-
-    def _handle_goal_command(self, cmd: str) -> Optional[str]:
-        """Enhanced goal command with rich panel feedback"""
-        from core.kernel.state import parse_goal_command
-        goal = parse_goal_command(cmd)
-        if not goal:
-            return None
-
-        if self._loop and hasattr(self._loop, "state") and self._loop.state:
-            self._loop.state.active_goal = goal
-
-        if self._bridge and hasattr(self._bridge, "emit"):
-            self._bridge.emit("goal_set", goal_desc=goal.raw_prompt)
-
-        panel_content = Text()
-        panel_content.append("🎯 Objective: ", style="bold cyan")
-        panel_content.append(goal.raw_prompt + "\n\n")
-
-        if goal.success_criteria:
-            panel_content.append("✅ Criteria (done_when):\n", style="bold yellow")
-            panel_content.append(goal.success_criteria)
-        else:
-            panel_content.append("⚠️  No explicit criteria. Agent will determine success.", style="dim")
-
-        panel_content.append("\n\n")
-        panel_content.append("The agent won't report Success until criteria are proven.", style="italic dim")
-
-        console.print(Panel(panel_content, title="[bento.execution.title] 🎯 Goal Active [/bento.execution.title]", border_style="bento.execution.border", box=BOX_EXECUTION, padding=(1, 2)))
-        return f"Goal set: {goal.raw_prompt}"
-
-    def _render_prompt_with_goal(self) -> str:
-        """Enhanced prompt showing active goal status"""
-        if not self._loop or not hasattr(self._loop, "state") or not self._loop.state:
-            return "❯ "
-        goal = self._loop.state.active_goal
-        if goal and not goal.is_met:
-            return f"❯ [Goal: {goal.raw_prompt[:20]}...] "
-        return "❯ "
-
 
 def _resolve_evidence_log(agent) -> Any:
     """Best-effort resolve the live EvidenceLog driving the agent (or None)."""
