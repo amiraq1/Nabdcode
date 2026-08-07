@@ -49,7 +49,17 @@ from ui.theme import (
 
 console = Console(theme=CUSTOM_THEME)
 
-_streaming_final: bool = False  # V9: _last_echoed_input + echo_user_input removed
+import threading
+
+# V6: _streaming_final guards which tokens reach the final-answer display.
+# Written from event handlers (on_llm_request_started, on_final_answer) that
+# MAY be called from asyncio.to_thread worker threads, and read by
+# _on_token_chunk on the event loop thread.
+#
+# threading.Event provides explicit, documented thread-safe set()/clear()/is_set()
+# semantics (no reliance on CPython GIL atomicity for future compatibility).
+_streaming_final: threading.Event = threading.Event()
+
 tool_result_list: ToolResultList = ToolResultList()
 
 
@@ -913,11 +923,11 @@ async def render_agent_events(status_bar=None) -> None:
     def _on_token_chunk(content: str) -> None:
         """Streaming filter: buffer, strip tool-call lines, display clean.
 
-        Only streams tokens when ``_streaming_final`` is True — i.e. when the
+        Only streams tokens when ``_streaming_final.is_set()`` is True — i.e. when the
         assistant has entered the final-answer phase.  Intermediate reasoning
         and tool-generation tokens are discarded.
         """
-        if not _streaming_final:
+        if not _streaming_final.is_set():
             return
         nonlocal token_buf, held_buf, _stream_line_buf
         compressor.add_tokens(len(content))
@@ -1433,8 +1443,7 @@ class TerminalVisualizer:
 
     def on_llm_request_started(self, data: dict):
         """Reset streaming gate — only final-answer tokens will be streamed."""
-        global _streaming_final
-        _streaming_final = False
+        _streaming_final.clear()
         self._navigation_enabled = False
         tool_result_list.clear()
 
@@ -1562,8 +1571,7 @@ class TerminalVisualizer:
         # phase.  Any llm_token events emitted from this point forward will be
         # streamed; earlier intermediate reasoning / tool-generation tokens
         # were discarded by the _streaming_final gate in _on_token_chunk.
-        global _streaming_final
-        _streaming_final = True
+        _streaming_final.set()
         self._navigation_enabled = True
 
         safe_width = min(console.size.width - 4, 80)
