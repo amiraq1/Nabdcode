@@ -49,7 +49,7 @@ class AgentStatusBar:
         self._live = Live(
             initial,
             console=self._console,
-            transient=True,
+            transient=False,
             auto_refresh=False,
         )
         self._live.__enter__()
