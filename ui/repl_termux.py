@@ -49,14 +49,8 @@ from ui.theme import (
 
 console = Console(theme=CUSTOM_THEME)
 
-_last_echoed_input: str = ""
-_streaming_final: bool = False
+_streaming_final: bool = False  # V9: _last_echoed_input + echo_user_input removed
 tool_result_list: ToolResultList = ToolResultList()
-
-
-def echo_user_input(text: str) -> None:
-    # No-op: PromptSession already displays prompt and user input cleanly.
-    pass
 
 
 def _ui_looks_like_tool_call(text: str) -> bool:
@@ -254,14 +248,8 @@ def render_todo_block(plan: list[dict] | None = None) -> None:
 # restarts. When the agent exposes a RuntimeState, its own shell_permissions
 # take precedence so policy follows the live execution loop.
 #
-# Phase 3 (D4): _SESSION_PERMS_STATE was a full RuntimeState instance that
-# duplicated session state.  Replaced with a bare ShellPermissions object.
-# Authorization data is NOT runtime session state — it's a lighter policy store.
-_SESSION_PERMS: ShellPermissions = ShellPermissions()
-# Phase 3 (D4): backward-compatible alias for characterization tests.
-# Previously was RuntimeState(session_id="repl-perms") — now None.
-# The test checks isinstance(..., RuntimeState) which correctly passes.
-_SESSION_PERMS_STATE = None
+# Phase 3 (D4): _SESSION_PERMS was a ShellPermissions singleton, now removed.
+# _SESSION_PERMS_STATE was a None sentinel for backward-compat; removed in V8.
 
 # ── Mode cycling (Shift+Tab): normal → plan mode → accept edits → normal ──
 # 0 = normal, 1 = plan mode, 2 = accept edits

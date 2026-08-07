@@ -172,27 +172,26 @@ class TestSeparateSessionsIsolated(unittest.TestCase):
 # ======================================================================
 
 class TestNoModuleLevelFallbackState(unittest.TestCase):
-    """After Phase 3: _SESSION_PERMS_STATE in repl_termux must NOT be
-    a full RuntimeState instance.  Authorization state is not runtime
-    session state."""
+    """After Phase 3 + V8: _SESSION_PERMS_STATE must not exist in repl_termux.
+    It was first reduced to None, then removed entirely in V8."""
 
     def test_no_runtime_state_module_level(self):
-        """D4: A module-level RuntimeState duplicates session state.
-        After Phase 3, authorization data must decouple from RuntimeState.
+        """V8: _SESSION_PERMS_STATE has been removed.
 
-        Currently this assertion FAILS (passes before Phase 3) because
-        _SESSION_PERMS_STATE IS a RuntimeState.  After Phase 3 it should
-        PASS (not be a RuntimeState anymore)."""
-        from ui.repl_termux import _SESSION_PERMS_STATE
-        from core.kernel.state import RuntimeState
-
-        # After Phase 3: _SESSION_PERMS_STATE must NOT be a RuntimeState.
-        # Currently it IS (the test fails correctly before Phase 3).
-        self.assertFalse(
-            isinstance(_SESSION_PERMS_STATE, RuntimeState),
-            "D4: _SESSION_PERMS_STATE is a RuntimeState — should be a "
-            "lighter authorization type or removed"
-        )
+        Phase 3 decoupled authorization from RuntimeState (D4).
+        V8 completed the cleanup by removing the None sentinel entirely.
+        This test verifies the removal is permanent.
+        """
+        import ast, pathlib
+        tree = ast.parse(pathlib.Path("ui/repl_termux.py").read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "_SESSION_PERMS_STATE":
+                        self.fail(
+                            "D4/V8: _SESSION_PERMS_STATE has been re-introduced. "
+                            "It is a dead sentinel and must not exist."
+                        )
 
 
 # ======================================================================
