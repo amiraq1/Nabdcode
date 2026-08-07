@@ -55,6 +55,14 @@ class SemanticTheme:
     git: Color          # GIT badge background — green (#059669)
     kill: Color         # KILL badge background — red (#EF4444)
 
+    # neon aesthetic palette (NABD cyberpunk identity — value-stable)
+    neon_green: Color   # neon green (#00ff9d)
+    neon_cyan: Color    # neon cyan (#00fff7)
+    neon_purple: Color  # neon purple (#bf5af2)
+    neon_pink: Color    # neon pink (#ff2d95)
+    neon_amber: Color   # neon amber (#ffcc00)
+    neon_blue: Color    # neon blue (#00a8ff)
+
 
 SEMANTIC: SemanticTheme = SemanticTheme(
     background=Color("#000000"),
@@ -88,4 +96,10 @@ SEMANTIC: SemanticTheme = SemanticTheme(
     search=Color("#7C3AED"),
     git=Color("#059669"),
     kill=Color("#EF4444"),
+    neon_green=Color("#00ff9d"),
+    neon_cyan=Color("#00fff7"),
+    neon_purple=Color("#bf5af2"),
+    neon_pink=Color("#ff2d95"),
+    neon_amber=Color("#ffcc00"),
+    neon_blue=Color("#00a8ff"),
 )

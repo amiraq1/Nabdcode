@@ -16,12 +16,12 @@ FOOTER_COLOR: str = "grey50"
 # 🎨 1. لوحة ألوان النيون (Neon Palette)
 PALETTE = {
     # Core neon colors
-    "neon_green": "#00ff9d",
-    "neon_cyan": "#00fff7", 
-    "neon_purple": "#bf5af2",
-    "neon_pink": "#ff2d95",
-    "neon_amber": "#ffcc00",
-    "neon_blue": "#00a8ff",
+    "neon_green": SEMANTIC.neon_green.hex,
+    "neon_cyan": SEMANTIC.neon_cyan.hex,
+    "neon_purple": SEMANTIC.neon_purple.hex,
+    "neon_pink": SEMANTIC.neon_pink.hex,
+    "neon_amber": SEMANTIC.neon_amber.hex,
+    "neon_blue": SEMANTIC.neon_blue.hex,
     
     # Semantic colors
     "success": SEMANTIC.success.hex,
