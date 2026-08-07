@@ -295,67 +295,26 @@ def _detect_arabic_scan_intent(text: str) -> bool:
 
 
 def _maybe_auto_scan(text: str, agent: Any) -> bool:
-    """If *text* contains Arabic scan intent, auto-trigger the EXPLORE tool.
+    """If *text* contains Arabic scan intent, auto-trigger workspace listing.
 
-    Seeds the agent's evidence log with a directory listing so that:
-      1. The convergence gate (``_real_reads() >= 3``) sees real file records.
-      2. The LLM gets concrete file paths to work with in its context.
-
-    Returns True if an auto-scan was performed, False otherwise.
+    V4.4: Evidence seeding and state mutation are delegated to
+    core/commands/auto_scan.maybe_auto_scan. This function handles display only.
     """
-    if not _detect_arabic_scan_intent(text):
+    from core.commands.auto_scan import maybe_auto_scan as _core_scan
+
+    result = _core_scan(text, agent)
+    if not result["triggered"]:
         return False
 
-    console.print(f"  [info]⟳ Auto-scan triggered — listing workspace...[/]")
-
-    try:
-        # List the workspace root using stdlib (no tools-layer dependency).
-        entries = sorted(os.listdir("."))
-        output = "\n".join(entries)
-        if not output:
+    if not result["success"]:
+        if result.get("error") == "Auto-scan returned empty listing.":
             console.print(f"  [warning]⚠ Auto-scan returned empty listing.[/]")
-            return False
-
-        # ── Seed the agent's evidence log ────────────────────────────────
-        # Add evidence records for the listing so _real_reads() sees them.
-        # Uses EvidenceLog.record() — the canonical write path.
-        evidence_log = getattr(agent, "evidence_log", None)
-        if evidence_log is not None and hasattr(evidence_log, "record"):
-            try:
-                evidence_log.record(
-                    tool="file_system",
-                    command_or_path=".",
-                    success=True,
-                    output_snippet=output[:200],
-                    action="list",
-                )
-            except Exception:
-                pass  # evidence seeding is best-effort
-
-        # ── Append results as a system message in agent context ──────────
-        # This ensures the LLM sees the file listing before it attempts
-        # to answer — it can then call read on specific files.
-        state = _resolve_runtime_state(agent)
-        if state is not None and hasattr(state, "append_message"):
-            try:
-                msg = (
-                    "[CONTROL] Auto-scan: workspace listing was performed because "
-                    "your request contained a scan command.\n\n"
-                    f"Directory listing (workspace root):\n{output[:2000]}\n\n"
-                    "You should now read specific files from this listing to "
-                    "answer the user's request. Call file_system with "
-                    "action='read' on relevant files."
-                )
-                state.append_message({"role": "system", "content": msg})
-            except Exception:
-                pass
-
-        console.print(f"  [success]✓ Auto-scan completed — {len(output.splitlines())} entries found[/]")
-        return True
-
-    except Exception as exc:
-        console.print(f"  [error]✗ Auto-scan error: {exc}[/]")
+        else:
+            console.print(f"  [error]✗ Auto-scan error: {result.get('error')}[/]")
         return False
+
+    console.print(f"  [success]✓ Auto-scan completed — {result['entry_count']} entries found[/]")
+    return True
 
 
 # ── Context warning threshold (Stage 6) ────────────────────────────────────
@@ -366,12 +325,7 @@ _CONTEXT_WARN_THRESHOLD: int = 100_000
 # ── Re-entrancy guard — prevents concurrent agent turns ────────────────────
 _agent_busy: bool = False
 
-PLAN_MODE_INSTRUCTION: str = (
-    "You are in PLAN MODE. Before executing any task:\n"
-    "1. Use todo_write(action='plan', items=[...]) to outline your steps\n"
-    "2. Get confirmation via final_answer() showing your plan\n"
-    "3. Only then proceed with execution\n"
-)
+from core.commands.plan_mode import PLAN_MODE_INSTRUCTION  # V4.5: single source of truth
 
 
 def _cycle_mode() -> None:
@@ -466,22 +420,16 @@ def _handle_permission_command(text: str, agent=None) -> bool:
 
 
 def _handle_goal_command(text: str, agent=None) -> Any:
-    """Handle the /goal <desc> [|| <criteria>] command with rich panel feedback."""
-    from core.kernel.state import parse_goal_command
+    """Handle the /goal <desc> [|| <criteria>] command with rich panel feedback.
 
-    spec = parse_goal_command(text)
+    V4.1: State mutation (state.active_goal = spec) is delegated to
+    core/commands/goal.handle_goal_command. This function handles display only.
+    """
+    from core.commands.goal import handle_goal_command as _core_goal
+
+    spec = _core_goal(text, agent)
     if spec is None:
         return None
-
-    state = _resolve_runtime_state(agent)
-    state.active_goal = spec
-
-    try:
-        from core.ui_bridge import get_bridge
-        bridge = get_bridge()
-        bridge.emit("goal_set", goal_desc=spec.raw_prompt)
-    except Exception:
-        pass
 
     _erase_live_line()
     panel_content = Text()
@@ -568,49 +516,22 @@ def _estimate_message_tokens(messages: list[dict]) -> int:
 def _handle_compact_command(agent: Any) -> bool:
     """Compact the agent's conversation history.
 
-    Uses ``RuntimeState.prune_history()`` with a 500-token budget to
-    replace verbose history with a compact form, then reports the
-    token savings to the console.
+    V4.2: History pruning logic is delegated to core/commands/compact.
+    This function handles display only.
     """
-    state = _resolve_runtime_state(agent)
-    if not state:
-        _erase_live_line()
-        console.print("[error]No agent state available for compaction.[/]")
-        return True
+    from core.commands.compact import handle_compact_command as _core_compact
 
-    old_messages = state.get_messages() if hasattr(state, "get_messages") else getattr(state, "messages", [])
-    old_tokens = _estimate_message_tokens(old_messages)
-
-    try:
-        # Set a tight budget so prune_history reduces to ~500 tokens.
-        saved_max = getattr(state, "max_context_tokens", 8192)
-        if hasattr(state, "max_context_tokens"):
-            state.max_context_tokens = _COMPACT_MAX_TOKENS
-        if hasattr(state, "prune_history") and callable(state.prune_history):
-            state.prune_history()
-        elif hasattr(state, "clear_context") and callable(state.clear_context):
-            state.clear_context()
-        else:
-            # Manual truncation: keep system + last 2 turns.
-            msgs = getattr(state, "messages", [])
-            if msgs:
-                sys_msgs = [m for m in msgs if m.get("role") == "system"]
-                non_sys = [m for m in msgs if m.get("role") != "system"]
-                kept = sys_msgs + non_sys[-4:]
-                state.messages = kept
-        # Restore original budget.
-        if hasattr(state, "max_context_tokens"):
-            state.max_context_tokens = saved_max
-    except Exception as exc:
-        _erase_live_line()
-        console.print(f"[error]Compaction failed: {exc}[/]")
-        return True
-
-    new_messages = state.get_messages() if hasattr(state, "get_messages") else getattr(state, "messages", [])
-    new_tokens = _estimate_message_tokens(new_messages)
-    saved = old_tokens - new_tokens
+    result = _core_compact(agent)
 
     _erase_live_line()
+    if not result["success"]:
+        console.print(f"[error]{result.get('error', 'Compaction failed.')}[/]")
+        return True
+
+    old_tokens = result["old_tokens"]
+    new_tokens = result["new_tokens"]
+    saved = result["saved"]
+
     console.print(f"[bold success]✓[/] [dim]Context compacted:[/] [cyan]~{old_tokens}t → ~{new_tokens}t[/] [dim](saved ~{saved}t)[/dim]")
     if saved > 0:
         console.print(f"  [dim]↳ Run /compact again if context grows too large[/dim]")
@@ -620,69 +541,34 @@ def _handle_compact_command(agent: Any) -> bool:
 
 
 def _handle_skill_command(text: str, agent=None) -> bool:
-    """Handle the ``/skill <name>`` command (Phase 6 Native Skills Loader).
+    """Handle the ``/skill <name>`` command.
 
-    Returns True if the text was a skill command (and thus consumed). The skill
-    command is executed through ``core.skills.execute_skill``, which:
-
-      a) merges the skill's ``allowed_tools`` into the live RuntimeState
-         shell_permissions as explicit ALLOW rules (consulted by the
-         PermissionEngine for this session);
-      b) dispatches the skill ``command`` via ``ShellTool.execute()`` — the SAME
-         code path the agent uses — so the non-overridable Phase 2.1 heuristics
-         (base64/hex/eval blocks, obfuscation sweep) still run first, and a
-         ``ToolResult`` is produced;
-      c) appends that result to the evidence ledger when one is available.
-
-    Fail-silent: an unknown skill name or a discovery miss prints a quiet error
-    and consumes the input (the command is never forwarded to the agent as a
-    task). A blocked/safe-rejected command still prints the ToolResult so the
-    operator sees the security outcome.
+    V4.3: Skill execution logic is delegated to core/commands/skill.
+    This function handles display only.
     """
-    parts = text.split(maxsplit=1)
-    cmd = parts[0].lower()
-    if cmd != "/skill":
-        return False
+    from core.commands.skill import handle_skill_command as _core_skill
 
-    # Split the skill name from any trailing arguments (e.g. a target file for
-    # parameterized skills like ``/skill reviewer core/state.py``).
-    name_arg = parts[1].strip() if len(parts) > 1 else ""
-    if not name_arg:
-        _erase_live_line()
-        console.print("[error]Usage: /skill <name> [args...]  (list skills with /skills)[/]")
-        return True
-    _name_parts = name_arg.split(maxsplit=1)
-    name = _name_parts[0]
-    skill_args = _name_parts[1].strip() if len(_name_parts) > 1 else ""
+    result = _core_skill(text, agent)
+    if result is None:
+        return False  # not a skill command
 
-    from core.skills import discover_skills, find_skill, execute_skill
-
-    state = _resolve_runtime_state(agent)
-    skills = discover_skills(Path.cwd())
-    skill = find_skill(skills, name)
-    if skill is None:
-        _erase_live_line()
-        console.print(f"[error]✗ Skill not found: {name}[/]")
-        return True
-
-    if getattr(skill, "goal", "") or getattr(skill, "success_criteria", ""):
-        from core.kernel.state import GoalSpec
-        g_prompt = getattr(skill, "goal", "") or getattr(skill, "description", "") or skill.name
-        g_crit = getattr(skill, "success_criteria", "") or g_prompt
-        state.active_goal = GoalSpec(raw_prompt=g_prompt, success_criteria=g_crit, is_met=False)
-
-    # Execute through ShellTool (Phase 2.1 heuristics + ToolResult evidence).
-    result = execute_skill(skill, state=state, evidence_log=_resolve_evidence_log(agent))
-
-    ok = bool(getattr(result, "success", False))
-    color = "[success]" if ok else "[error]"
-    out = getattr(result, "stdout", "") or getattr(result, "stderr", "") or ""
-    if isinstance(out, str) and len(out) > 4000:
-        out = out[-4000:]
     _erase_live_line()
+
+    if result.get("error") and not result.get("output"):
+        # Usage error or skill-not-found
+        if "Usage:" in (result.get("error") or ""):
+            console.print(f"[error]{result['error']}  (list skills with /skills)[/]")
+        else:
+            console.print(f"[error]✗ {result['error']}[/]")
+        return True
+
+    ok = result["success"]
+    color = "[success]" if ok else "[error]"
+    out = result.get("output") or ""
+    skill_name = result.get("skill_name", "")
     console.print(
         Panel(
-            f"[info]SKILL[/] {skill.name}\n\n"
+            f"[info]SKILL[/] {skill_name}\n\n"
             f"{color}{out or '(no output)'}[/]",
             border_style="#1a1a42",
             title=f"[info]◈ Skill Executed{' (OK)' if ok else ' (FAILED)'}[/]",
