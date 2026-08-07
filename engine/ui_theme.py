@@ -108,8 +108,14 @@ def think_line(seconds: float | None = None) -> str:
         body = _STYLE.verb
     else:
         sec = max(1, int(round(seconds)))
-        unit = "second" if sec == 1 else "seconds"
-        body = f"{_STYLE.verb}  {sec} {unit}"
+        if sec == 1:
+            body = f"{_STYLE.verb}  لثانية واحدة"
+        elif sec == 2:
+            body = f"{_STYLE.verb}  لثانيتين"
+        elif 3 <= (sec % 100) <= 10:
+            body = f"{_STYLE.verb}  لـ {sec} ثوانٍ"
+        else:
+            body = f"{_STYLE.verb}  لـ {sec} ثانية"
     return f"{fg(*_STYLE.color.rgb)}{Icon.glyph(_STYLE.icon)} {body}{_RESET}"
 
 

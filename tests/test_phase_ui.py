@@ -141,7 +141,7 @@ def test_think_line_with_duration():
     line = think_line(2.7)
     assert _STYLE.verb in line
     assert "3" in line  # rounded up
-    assert "seconds" in line
+    assert "لـ 3 ثوانٍ" in line
 
 
 def test_think_line_no_duration():
