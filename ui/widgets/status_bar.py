@@ -164,7 +164,7 @@ class AgentStatusBar:
             else:
                 ui_state = UIState.IDLE
                 
-            parts.append(StatusLine(ui_state, context=phase, hide_verb=True))
+            parts.append(StatusLine(ui_state, context=phase, hide_verb=False))
             
             if i < len(self.PHASES) - 1:
                 parts.append(Text(" → ", style=SEMANTIC.text_muted.to_rich_style()))
