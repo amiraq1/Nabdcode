@@ -113,3 +113,55 @@ def test_pending_edits_are_prompted_off_the_event_loop():
     assert not eager_calls, (
         "V2 blocking: _process_pending_edits is called eagerly/synchronously"
     )
+
+
+def test_agent_busy_is_armed_before_first_await_in_turn():
+    """V1.2: _agent_busy = True must be set BEFORE any await in the turn body.
+
+    The race window exists between the check (if _agent_busy: continue) and the
+    arming (_agent_busy = True). If there are awaits in that window, a second
+    coroutine invocation can pass the check before the first arms the guard.
+
+    This test verifies the guard is set before the first await that calls into
+    auto_scan, bridge.emit_thinking_start, or similar coroutines.
+
+    Strategy: find the _agent_busy = True assignment. Verify that the line
+    number is LESS than the line number of the asyncio.to_thread(_maybe_auto_scan)
+    call (which is the last await before the guard was previously placed).
+    """
+    tree = _repl_tree()
+    lines = _REPL_PATH.read_text(encoding="utf-8").splitlines()
+
+    # Find _agent_busy = True line
+    busy_true_line = None
+    for node in ast.walk(tree):
+        if _is_busy_assign(node, True):
+            busy_true_line = node.lineno
+            break
+
+    assert busy_true_line is not None, "V1.2: _agent_busy = True not found"
+
+    # Find the asyncio.to_thread(_maybe_auto_scan, ...) call — the problematic await
+    auto_scan_await_line = None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Await)
+            and isinstance(node.value.value, ast.Call)
+            and isinstance(node.value.value.func, ast.Attribute)
+            and node.value.value.func.attr == "to_thread"
+        ):
+            args = node.value.value.args
+            if args and isinstance(args[0], ast.Name) and args[0].id == "_maybe_auto_scan":
+                auto_scan_await_line = node.lineno
+                break
+
+    if auto_scan_await_line is None:
+        # _maybe_auto_scan await removed — guard is trivially satisfied
+        return
+
+    assert busy_true_line < auto_scan_await_line, (
+        f"V1.2 race window: _agent_busy = True (L{busy_true_line}) is AFTER "
+        f"await asyncio.to_thread(_maybe_auto_scan) (L{auto_scan_await_line}).\n"
+        "Move _agent_busy = True to before the first await in the turn body."
+    )

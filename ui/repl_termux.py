@@ -1186,48 +1186,51 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     console.print("[yellow]⚠ Agent busy — please wait[/yellow]")
                     continue
 
-                # Stable task id for this turn's real-time lifecycle tracking.
-                task_id = RepositoryContextManager.task_id_for(text)
-
-                # Call 1 (Start): mark the task active BEFORE invoking the agent.
-                # Best-effort + guarded so a write failure never blocks the turn.
-                try:
-                    RepositoryContextManager().update_state(task_id, "In Progress", {"prompt": text})
-                except Exception as e:  # V5: was bare pass — log for diagnostics
-                    logger.debug("_handle_user_input: repo ctx start failed: %s", e)
-
-                await bridge.emit_thinking_start()
-                status_bar.start()
-
-                # Reset final answer rendered tracker before each turn
-                bus_ref = getattr(agent, "bus", None) or getattr(bridge, "event_bus", None)
-                if bus_ref:
-                    bus_ref._final_answer_rendered = False
-
-                # Inject plan mode instruction into the agent's system prompt
-                # when active. We temporarily prepend to the system message so
-                # the directive applies at the role level for the entire turn.
-                _plan_snapshot: str | None = None
-                if _plan_mode:
-                    _msgs = getattr(agent, "messages", None) or getattr(
-                        getattr(agent, "state", None), "messages", None
-                    )
-                    if _msgs and len(_msgs) > 0 and _msgs[0].get("role") == "system":
-                        _plan_snapshot = _msgs[0]["content"]
-                        _msgs[0]["content"] = PLAN_MODE_INSTRUCTION + _plan_snapshot
-
-                # ── Arabic auto-scan: detect "فحر مستودع" etc. and seed ─────
-                # the agent's context with a directory listing + evidence
-                # before dispatching to the LLM. This ensures the convergence
-                # gate sees real file records and the model has concrete paths.
-                await asyncio.to_thread(_maybe_auto_scan, text, agent)
-
-                # Offload the blocking agent.run to a worker thread so the
-                # event loop keeps streaming tool/token events concurrently.
-                # V1: arm the re-entrancy guard BEFORE the turn; the finally
-                # below releases it on success, failure, or cancellation.
+                # V1.2: arm the re-entrancy guard IMMEDIATELY after the check
+                # (before any awaits) to close the race window.  Previously this
+                # was set just before agent.run — but there were several awaits
+                # between the check and the arming (emit_thinking_start, auto_scan)
+                # during which a second coroutine could pass the if _agent_busy check.
                 _agent_busy = True
                 try:
+                    # Stable task id for this turn's real-time lifecycle tracking.
+                    task_id = RepositoryContextManager.task_id_for(text)
+
+                    # Call 1 (Start): mark the task active BEFORE invoking the agent.
+                    # Best-effort + guarded so a write failure never blocks the turn.
+                    try:
+                        RepositoryContextManager().update_state(task_id, "In Progress", {"prompt": text})
+                    except Exception as e:  # V5: was bare pass — log for diagnostics
+                        logger.debug("_handle_user_input: repo ctx start failed: %s", e)
+
+                    await bridge.emit_thinking_start()
+                    status_bar.start()
+
+                    # Reset final answer rendered tracker before each turn
+                    bus_ref = getattr(agent, "bus", None) or getattr(bridge, "event_bus", None)
+                    if bus_ref:
+                        bus_ref._final_answer_rendered = False
+
+                    # Inject plan mode instruction into the agent's system prompt
+                    # when active. We temporarily prepend to the system message so
+                    # the directive applies at the role level for the entire turn.
+                    _plan_snapshot: str | None = None
+                    if _plan_mode:
+                        _msgs = getattr(agent, "messages", None) or getattr(
+                            getattr(agent, "state", None), "messages", None
+                        )
+                        if _msgs and len(_msgs) > 0 and _msgs[0].get("role") == "system":
+                            _plan_snapshot = _msgs[0]["content"]
+                            _msgs[0]["content"] = PLAN_MODE_INSTRUCTION + _plan_snapshot
+
+                    # ── Arabic auto-scan: detect "فحر مستودع" etc. and seed ─────
+                    # the agent's context with a directory listing + evidence
+                    # before dispatching to the LLM. This ensures the convergence
+                    # gate sees real file records and the model has concrete paths.
+                    await asyncio.to_thread(_maybe_auto_scan, text, agent)
+
+                    # Offload the blocking agent.run to a worker thread so the
+                    # event loop keeps streaming tool/token events concurrently.
                     if agent_runner_func and agent is not None:
                         response_text = await asyncio.to_thread(
                             agent_runner_func, text, agent
