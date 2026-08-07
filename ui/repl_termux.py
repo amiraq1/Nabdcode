@@ -6,6 +6,8 @@ Sequential Cyberpunk REPL Mode for Termux (prompt_toolkit + Rich).
 
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import json
 import os
@@ -15,6 +17,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
@@ -375,8 +379,8 @@ def _erase_live_line() -> None:
     try:
         sys.stdout.write("\r\033[K")
         sys.stdout.flush()
-    except Exception:
-        pass
+    except Exception as e:  # V5: was bare pass — log for diagnostics
+        logger.debug("_erase_live_line: stdout write/flush failed: %s", e)
 
 
 def _handle_permission_command(text: str, agent=None) -> bool:
@@ -872,8 +876,8 @@ async def render_agent_events(status_bar=None) -> None:
         def _on_plan_updated(todos):
             _render_todo_from_plan(list(todos) if todos else [])
         bridge.subscribe("on_plan_updated", _on_plan_updated)
-    except Exception:
-        pass
+    except Exception as e:  # V5: was bare pass — log for diagnostics
+        logger.debug("render_agent_events: bridge.subscribe failed: %s", e)
 
     compressor = thought_compressor
     token_buf = ""
@@ -1245,8 +1249,8 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 # Best-effort + guarded so a write failure never blocks the turn.
                 try:
                     RepositoryContextManager().update_state(task_id, "In Progress", {"prompt": text})
-                except Exception:
-                    pass
+                except Exception as e:  # V5: was bare pass — log for diagnostics
+                    logger.debug("_handle_user_input: repo ctx start failed: %s", e)
 
                 await bridge.emit_thinking_start()
                 status_bar.start()
@@ -1354,8 +1358,8 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 # after the agent's response is rendered. Best-effort + guarded.
                 try:
                     RepositoryContextManager().update_state(task_id, "Completed", {"prompt": text})
-                except Exception:
-                    pass
+                except Exception as e:  # V5: was bare pass — log for diagnostics
+                    logger.debug("_handle_user_input: repo ctx finish failed: %s", e)
 
             except (KeyboardInterrupt, EOFError):
                 thought_compressor.stop()
