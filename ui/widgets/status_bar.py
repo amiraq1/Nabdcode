@@ -35,6 +35,7 @@ class AgentStatusBar:
         self._live: Live | None = None
         self._running: bool = False
         self._wired: bool = False
+        self._frozen_elapsed: float | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ class AgentStatusBar:
             return
         self._running = True
         self._start_time = time.monotonic()
+        self._frozen_elapsed = None
         
         initial = self._build_renderable()
         self._live = Live(
@@ -58,6 +60,8 @@ class AgentStatusBar:
         """Tear down the Live context."""
         if not self._running:
             return
+        if self._start_time is not None:
+            self._frozen_elapsed = time.monotonic() - self._start_time
         self._running = False
         live = self._live
         self._live = None
@@ -132,6 +136,8 @@ class AgentStatusBar:
     def _get_duration(self) -> str:
         if self._start_time is None:
             return ""
+        if self._frozen_elapsed is not None:
+            return f" [{self._frozen_elapsed:.1f}s]"
         elapsed = time.monotonic() - self._start_time
         return f" [{elapsed:.1f}s]"
 
