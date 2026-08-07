@@ -102,23 +102,6 @@ def strike(s: str) -> str:
     return f"{_STRIKE}{s}{_RESET}"
 
 
-# ── Thought line ────────────────────────────────────────────────────────────
-def think_line(seconds: float | None = None) -> str:
-    if seconds is None:
-        body = _STYLE.verb
-    else:
-        sec = max(1, int(round(seconds)))
-        if sec == 1:
-            body = f"{_STYLE.verb}  لثانية واحدة"
-        elif sec == 2:
-            body = f"{_STYLE.verb}  لثانيتين"
-        elif 3 <= (sec % 100) <= 10:
-            body = f"{_STYLE.verb}  لـ {sec} ثوانٍ"
-        else:
-            body = f"{_STYLE.verb}  لـ {sec} ثانية"
-    return f"{fg(*_STYLE.color.rgb)}{Icon.glyph(_STYLE.icon)} {body}{_RESET}"
-
-
 # ── Status chip (Examining / Sculpting) ────────────────────────────────────
 def status_chip(verb: str, tokens: str | float | int | None = None) -> str:
     tail = ""

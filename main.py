@@ -163,7 +163,6 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         verb = select_status_verb(stage=_last_stage, last_tool=_last_tool_name, turn_index=_turn_index)
         renderer.status_start(verb)
         status_bar.start()
-        renderer.thought_start()
 
     def _on_llm_token(p: dict) -> None:
         # When the interactive TerminalVisualizer owns the TTY (REPL mode), it
@@ -187,7 +186,6 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
             return
 
     def _on_llm_completed(p: dict) -> None:
-        renderer.thought_end()
         status_bar.stop()
         renderer.flush()
         metrics.record_api_call(duration=p.get("duration", 1.0))
