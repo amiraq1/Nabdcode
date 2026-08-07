@@ -23,7 +23,6 @@ Everything is measured, never guessed:
   - make_console(width, height) comes from tests/support/render.py.
 """
 
-import copy
 import os
 import sys
 
@@ -58,13 +57,21 @@ def _make_ctx(monkeypatch):
 
 
 def _snapshot_subscribers() -> dict:
-    """Deep-copy the global bus subscriber registry (no mutation)."""
-    return copy.deepcopy(bus._subscribers)
+    """Identity snapshot of the global bus subscriber registry (no deep copy).
+
+    Copy subscribers by reference (identity), not by value. The registry may
+    hold live subscribers whose bound self carries unpicklable state (e.g. an
+    RLock inside a MetricsEngine). Deep-copying them raises TypeError under
+    pytest-randomly ordering; copying identity avoids that entirely while still
+    letting restore put the registry back on the SAME dict object.
+    """
+    return {event: dict(subscribers) for event, subscribers in bus._subscribers.items()}
 
 
 def _restore_subscribers(snapshot: dict) -> None:
-    """Restore the exact subscriber registry snapshot (no mutation)."""
-    bus._subscribers = snapshot
+    """Restore onto the SAME dict object in-place — no identity change."""
+    bus._subscribers.clear()
+    bus._subscribers.update(snapshot)
 
 
 def _emit_and_check(
