@@ -45,6 +45,9 @@ from ui.theme import (
     BOX_FINAL,
     PANEL_STYLES,
     CUSTOM_THEME,
+    PROMPT_HTML_PREFIX,
+    PROMPT_HTML_SUFFIX,
+    PROMPT_HTML_HR,
 )
 
 console = Console(theme=CUSTOM_THEME)
@@ -1086,7 +1089,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
     def _hr_line(width: int) -> str:
         line = _hr_cache.get(width)
         if line is None:
-            line = f"<style color='#555555'>{'─' * width}</style>"
+            line = PROMPT_HTML_HR % ("─" * width)
             _hr_cache[width] = line
         return line
 
@@ -1110,7 +1113,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
 
                 # The top border and the multi-line cyberpunk prompt
                 render_todo_block()
-                prompt_message = HTML(f"{hr_style}\n<style fg='#00ff9d' bold='true'>╭─ Ammar@NabdOS ~ </style>\n<style fg='#00fff7' bold='true'>╰─❯ </style>")
+                prompt_message = HTML(f"{hr_style}\n{PROMPT_HTML_PREFIX}\n{PROMPT_HTML_SUFFIX}")
                 # Render the prompt without the buggy bottom_toolbar
                 user_input = await session.prompt_async(
                     prompt_message,

@@ -137,3 +137,22 @@ PROMPT_STYLE = {
         ("class:prompt", "│ "),
     ],
 }
+
+# ───────────────────────────────────────────────────────
+# Prompt HTML fragments (prompt_toolkit) — named Rich styles only, never
+# raw hex in source. Consumed by main.py and ui/repl_termux.py so the
+# "╭─ Ammar@NabdOS" prompt is defined exactly once.
+# ───────────────────────────────────────────────────────
+
+# '╭─ Ammar@NabdOS ~ ' in neon green (semantic prompt accent), bold
+PROMPT_HTML_PREFIX: str = (
+    "<style fg='green' bold='true'>╭─ Ammar@NabdOS ~ </style>"
+)
+# '╰─❯ ' in neon cyan (semantic secondary accent), bold
+PROMPT_HTML_SUFFIX: str = (
+    "<style fg='cyan' bold='true'>╰─❯ </style>"
+)
+# Placeholder hint text (muted)
+PROMPT_HTML_PLACEHOLDER: str = "<style fg='grey'>Ask your question...</style>"
+# Horizontal rule (muted)
+PROMPT_HTML_HR: str = "<style color='grey'>%s</style>"

@@ -22,6 +22,12 @@ from core.kernel.security import get_workspace_root
 from engine.deep_agent import CHECKPOINT_FILENAME
 from core.turn_outcome import TurnOutcome, TurnStatus
 from core.text_utils import safe_display
+from ui.design.theme.semantic import SEMANTIC
+from ui.theme import (
+    PROMPT_HTML_PREFIX,
+    PROMPT_HTML_SUFFIX,
+    PROMPT_HTML_PLACEHOLDER,
+)
 
 _last_echoed_input: str = ""
 
@@ -798,6 +804,11 @@ def _build_app() -> tuple:
 # _run_repl — interactive prompt loop
 # =========================================================================
 
+def _ansi_fg(rgb: tuple, text: str) -> str:
+    """Wrap text in a 24-bit foreground ANSI escape from an (r,g,b) tuple."""
+    return f"\033[38;2;{rgb[0]};{rgb[1]};{rgb[2]}m{text}\033[0m"
+
+
 def _run_repl(
     ctx: Any,
     state: Any,
@@ -818,16 +829,16 @@ def _run_repl(
     def _bottom_toolbar():
         if plan_mode:
             return ANSI(
-                f"\033[38;2;250;204;21mplan mode\033[0m "
-                f"\033[2m[shift+tab]\033[0m  "
-                f"\033[2m? for shortcuts\033[0m"
+                _ansi_fg(SEMANTIC.warning.rgb, "plan mode")
+                + " \033[2m[shift+tab]\033[0m  "
+                + "\033[2m? for shortcuts\033[0m"
             )
         from core.accept_edits_state import has_pending_edits
         if has_pending_edits():
             return ANSI(
-                f"\033[38;2;167;139;250m» accept edits on\033[0m "
-                f"\033[2m[shift+tab]\033[0m  "
-                f"\033[2m? for shortcuts\033[0m"
+                _ansi_fg(SEMANTIC.secondary.rgb, "» accept edits on")
+                + " \033[2m[shift+tab]\033[0m  "
+                + "\033[2m? for shortcuts\033[0m"
             )
         return ANSI(
             f"\033[2m[shift+tab]\033[0m  "
@@ -875,11 +886,10 @@ def _run_repl(
             try:
                 user_input = input_session.prompt(
                     HTML(
-                        '<style fg="#00ff9d" bold="true">╭─ Ammar@NabdOS ~ </style>\n'
-                        '<style fg="#00fff7" bold="true">╰─❯ </style>'
+                        f"{PROMPT_HTML_PREFIX}\n{PROMPT_HTML_SUFFIX}"
                     ),
                     bottom_toolbar=_bottom_toolbar,
-                    placeholder=HTML('<style fg="#555">Ask your question...</style>'),
+                    placeholder=HTML(PROMPT_HTML_PLACEHOLDER),
                 ).strip()
             except (KeyboardInterrupt, EOFError):
                 break
