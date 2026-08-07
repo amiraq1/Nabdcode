@@ -31,6 +31,7 @@ class AgentStatusBar:
         self._console = console or Console()
         self._phase_states: dict[str, str] = {p: "pending" for p in self.PHASES}
         self._step: int | None = None
+        self._start_time: float | None = None
         self._live: Live | None = None
         self._running: bool = False
         self._wired: bool = False
@@ -42,6 +43,7 @@ class AgentStatusBar:
         if self._running:
             return
         self._running = True
+        self._start_time = time.monotonic()
         
         initial = self._build_renderable()
         self._live = Live(
@@ -127,6 +129,12 @@ class AgentStatusBar:
                 pass
             self._update_live()
 
+    def _get_duration(self) -> str:
+        if self._start_time is None:
+            return ""
+        elapsed = time.monotonic() - self._start_time
+        return f" [{elapsed:.1f}s]"
+
     # ── Rendering ──────────────────────────────────────────────────────
 
     def _update_live(self) -> None:
@@ -164,6 +172,10 @@ class AgentStatusBar:
         if self._step is not None:
             parts.append(Text("  │  ", style=SEMANTIC.text_muted.to_rich_style()))
             parts.append(Text(f"Step {self._step}", style=SEMANTIC.accent.to_rich_style()))
+            
+        dur = self._get_duration()
+        if dur:
+            parts.append(Text(dur, style=SEMANTIC.text_muted.to_rich_style()))
             
         return SectionPanel(
             title="",
