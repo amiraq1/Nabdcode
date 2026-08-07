@@ -48,6 +48,12 @@ class SemanticTheme:
     focus: Color         # focus ring (#00a8ff)
     disabled: Color     # disabled controls (#4d4d4d)
 
+    # tool-action badges (action badge mapping per UI overhaul spec)
+    shell: Color        # SHELL badge background — orange (#D97706)
+    search: Color       # SEARCH/EXPLORE/RAG/MEMORY badge — purple (#7C3AED)
+    git: Color          # GIT badge background — green (#059669)
+    kill: Color         # KILL badge background — red (#EF4444)
+
 
 SEMANTIC: SemanticTheme = SemanticTheme(
     background=Color("#000000"),
@@ -76,4 +82,8 @@ SEMANTIC: SemanticTheme = SemanticTheme(
     selection=Color("#00dcff"),
     focus=Color("#00a8ff"),
     disabled=Color("#4d4d4d"),
+    shell=Color("#D97706"),
+    search=Color("#7C3AED"),
+    git=Color("#059669"),
+    kill=Color("#EF4444"),
 )

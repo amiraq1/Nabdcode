@@ -556,24 +556,21 @@ cyberpunk_style = Style.from_dict({
 
 # ── Action badge colors (Stage 1: print_badge) ───────────────────────────
 # Color mapping per the UI overhaul spec:
-#   READ   → action badge teal
-#   EDIT   → action badge teal
-#   SHELL  → orange (#D97706)
-#   SEARCH → purple (#7C3AED)
-#   EXPLORE→ purple (#7C3AED)
-#   TODOS  → action badge teal
+#   READ/EDIT/TODOS/WRITE → action badge teal
+#   SHELL → shell orange · SEARCH/EXPLORE/RAG/MEMORY → search purple
+#   GIT → git green · KILL → kill red
 _BADGE_STYLES: dict[str, str] = {
     "READ":    f"bold white on {SEMANTIC.action_badge}",
     "EDIT":    f"bold white on {SEMANTIC.action_badge}",
-    "SHELL":   "bold black on #D97706",
-    "SEARCH":  "bold white on #7C3AED",
-    "EXPLORE": "bold white on #7C3AED",
+    "SHELL":   f"bold black on {SEMANTIC.shell}",
+    "SEARCH":  f"bold white on {SEMANTIC.search}",
+    "EXPLORE": f"bold white on {SEMANTIC.search}",
     "TODOS":   f"bold white on {SEMANTIC.action_badge}",
     "WRITE":   f"bold white on {SEMANTIC.action_badge}",
-    "RAG":     "bold white on #7C3AED",
-    "MEMORY":  "bold white on #7C3AED",
-    "GIT":     "bold white on #059669",
-    "KILL":    "bold black on #EF4444",
+    "RAG":     f"bold white on {SEMANTIC.search}",
+    "MEMORY":  f"bold white on {SEMANTIC.search}",
+    "GIT":     f"bold white on {SEMANTIC.git}",
+    "KILL":    f"bold black on {SEMANTIC.kill}",
     "DEFAULT": f"bold white on {SEMANTIC.action_badge}",
 }
 
