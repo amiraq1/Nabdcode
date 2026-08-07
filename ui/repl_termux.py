@@ -419,7 +419,7 @@ def _handle_permission_command(text: str, agent=None) -> bool:
     if cmd == "/clear_perms":
         perms.clear()
         _erase_live_line()
-        console.print("[#aaaaaa]Permission ruleset cleared (back to interactive ask).[/]")
+        console.print(f"[{SEMANTIC.text_muted}]Permission ruleset cleared (back to interactive ask).[/]")
         return True
     return False
 
@@ -531,7 +531,7 @@ def _handle_skill_command(text: str, agent=None) -> bool:
         Panel(
             f"[info]SKILL[/] {skill_name}\n\n"
             f"{color}{out or '(no output)'}[/]",
-            border_style="#1a1a42",
+            border_style=f"{SEMANTIC.border}",
             title=f"[info]◈ Skill Executed{' (OK)' if ok else ' (FAILED)'}[/]",
         )
     )
@@ -1000,7 +1000,7 @@ def _setup_repl_keybindings() -> KeyBindings:
         elif thought_compressor.session_thoughts:
             last_id = next(reversed(thought_compressor.session_thoughts))
             raw = thought_compressor.session_thoughts[last_id]
-            console.print("\n[#808080]── Thought Block ──[/]")
+            console.print(f"\n[{SEMANTIC.caption}]── Thought Block ──[/]")
             console.print(safe_strip(raw) or "(empty)")
 
     @bindings.add("s-tab")
