@@ -1653,6 +1653,7 @@ class TerminalVisualizer:
                 **PANEL_STYLES[style_key]
             )
             console.print(panel)
+            console.print()  # A.3: Fix missing newline before next prompt
         except Exception as exc:
             try:
                 console.print(f"[bold red]✖ on_loop_completed render error: {exc}[/bold red]")
