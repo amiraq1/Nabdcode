@@ -24,6 +24,7 @@ class SemanticTheme:
 
     # text
     text: Color         # primary text (#f2f2f2)
+    text_bright: Color  # brightest text — pure white (#ffffff)
     text_muted: Color   # muted text (#7a7a7a)
     text_dim: Color     # faint text (#4d4d4d)
     caption: Color      # caption / hint (#737373)
@@ -63,6 +64,7 @@ SEMANTIC: SemanticTheme = SemanticTheme(
     footer=Color("#0a0a0c"),
     border=Color("#1a1a1a"),
     text=Color("#f2f2f2"),
+    text_bright=Color("#ffffff"),
     text_muted=Color("#7a7a7a"),
     text_dim=Color("#4d4d4d"),
     caption=Color("#737373"),

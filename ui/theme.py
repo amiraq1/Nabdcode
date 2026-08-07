@@ -30,9 +30,9 @@ PALETTE = {
     "info": SEMANTIC.info.hex,
     
     # Backgrounds
-    "panel_bg": "#0d1117",      # GitHub dark
-    "panel_border": "#30363d",
-    "prompt_bg": "#161b22",
+    "panel_bg": SEMANTIC.panel.hex,       # GitHub dark
+    "panel_border": SEMANTIC.border.hex,
+    "prompt_bg": SEMANTIC.surface.hex,
 }
 
 NEON_CYAN = "bright_cyan"
@@ -96,7 +96,7 @@ CUSTOM_THEME = Theme({
     "neon_pink": Style(color=PALETTE["neon_pink"], bold=True),
     "neon_amber": Style(color=PALETTE["neon_amber"], bold=True),
     "neon_blue": Style(color=PALETTE["neon_blue"], bold=True),
-    "white": Style(color="#ffffff"),
+    "white": Style(color=SEMANTIC.text_bright.hex),
     
     # Status badges
     "success": Style(color=PALETTE["success"], bold=True),
