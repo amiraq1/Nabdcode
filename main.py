@@ -135,6 +135,8 @@ def _extract_final_answer_text(raw: Any) -> str:
 
 
 # ── Event Wiring ───────────────────────────────────────────────────────────
+from ui.widgets.status_bar import AgentStatusBar
+status_bar = AgentStatusBar()
 
 def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
     """Subscribe all event handlers. Every output goes through renderer."""
@@ -160,6 +162,7 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         _turn_index += 1
         verb = select_status_verb(stage=_last_stage, last_tool=_last_tool_name, turn_index=_turn_index)
         renderer.status_start(verb)
+        status_bar.start()
         renderer.thought_start()
 
     def _on_llm_token(p: dict) -> None:
@@ -185,6 +188,7 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
 
     def _on_llm_completed(p: dict) -> None:
         renderer.thought_end()
+        status_bar.stop()
         renderer.flush()
         metrics.record_api_call(duration=p.get("duration", 1.0))
 
