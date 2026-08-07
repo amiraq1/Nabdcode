@@ -26,3 +26,11 @@ f705c70  # fix: add missing state = RuntimeState(...) init after signal handlers
 0a976ba  # Phase 0–UI: input gateway hardening, evidence verification, persistence, streaming, TUI theme
 b0b6251  # Architectural refactor: evidence verification, AppContext, TODO system, deep agent fix, thread safety
 8626975  # refactor: complete 10-step master architectural blueprint (self-healing & security)
+
+# 2026-08-07 — HUMAN DECISION (Am+8): assistant-committed work carried the
+# wrapper's Co-authored-by trailer before the repo policy was enforced on the
+# assistant. Both commits are already in history; rewriting them would rewrite
+# published history. Recorded as DECLARED DEBT so the guard's count stays exact.
+# Going forward, assistant commits are made WITHOUT the trailer (repo policy).
+478766d  # Am+8 Persistent UI: جعل شريط الحالة مرئياً بعد انتهاء المهمة
+e9c447e  # Am+8 Protocol Debt Batch 1: استبدال 5 ألوان خام بثوابت دلالية
