@@ -20,8 +20,13 @@ from ui.design.state import UIState, UI_STATES
 
 
 class Personality(Enum):
-    """The six StatusLine personalities (one component, six faces)."""
+    """The StatusLine personalities (one component, seven faces).
 
+    Seven faces: PENDING is the not-yet-started station -- distinct from
+    THINKING so an idle face never borrows the agent's speaking verb.
+    """
+
+    PENDING = "pending"
     THINKING = "thinking"
     RUNNING = "running"
     SUCCESS = "success"
@@ -50,9 +55,9 @@ class PersonalityStyle:
     animated: bool
 
 
-# explicit TOTAL mapping of all 14 UIStates -> 5 personalities
+# explicit TOTAL mapping of all 14 UIStates -> 7 personalities
 _PERSONALITY_OF: dict[UIState, Personality] = {
-    UIState.IDLE:         Personality.THINKING,
+    UIState.IDLE:         Personality.PENDING,
     UIState.THINKING:     Personality.THINKING,
     UIState.PLANNING:     Personality.THINKING,
     UIState.RUNNING:      Personality.RUNNING,
@@ -69,6 +74,10 @@ _PERSONALITY_OF: dict[UIState, Personality] = {
 }
 
 _PERSONALITY_STYLE: dict[Personality, PersonalityStyle] = {
+    Personality.PENDING: PersonalityStyle(
+        Personality.PENDING, "بانتظار", SEMANTIC.text_muted, Icon.IDLE,
+        "dim", "static", SpinnerEnum.NONE, False,
+    ),
     Personality.THINKING: PersonalityStyle(
         Personality.THINKING, "يفكّر", SEMANTIC.thinking, Icon.THINKING,
         "dim", "stream", SpinnerEnum.DOTS, True,

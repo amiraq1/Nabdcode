@@ -3,6 +3,10 @@
 Human ruling (Am, 2026-08-06 17:18 - "V1 R1").
 Reasoning (assistant, accepted by that ruling): a guard that merely forbids
 Latin text passes for any junk string; the contract is the exact ruled word.
+
+Widened by human ruling (Am, 2026-08-08 - seventh face, new neutral verb):
+Personality.PENDING carries "بانتظار". The contract stays TOTAL - every face must
+still carry a word Am ruled; no face may carry an empty one.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ _RULED = {
     Personality.WARNING: "تحذير",
     Personality.ERROR: "فشل",
     Personality.DISABLED: "معطّل",
+    Personality.PENDING: "بانتظار",
 }
 
 
