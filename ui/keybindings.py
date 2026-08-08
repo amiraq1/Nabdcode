@@ -127,7 +127,7 @@ def create_shift_enter_keybindings(
     def _kitty_shift_enter(event) -> None:
         event.current_buffer.insert_text("\n")
 
-    @bindings.add(Keys.ControlM, filter=not_navigating)
+    @bindings.add(Keys.ControlM, filter=not_navigating, eager=True)
     def _enter_or_csi_shift_enter(event) -> None:
         if event.key_sequence[-1].data == _CSI_SHIFT_ENTER:
             event.current_buffer.insert_text("\n")

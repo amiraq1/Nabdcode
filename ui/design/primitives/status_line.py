@@ -37,7 +37,6 @@ class StatusLine:
 
     def _line(self) -> Text:
         """The rendered status line (single Text; measure reuses it)."""
-        rec = UI_STATES[self.state]
         style = self.style
         weight = to_style_str(style.weight)
         gap = " " * GAP.status

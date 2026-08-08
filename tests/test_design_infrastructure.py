@@ -71,7 +71,7 @@ def test_semantic_theme_has_every_category():
         "background", "surface", "panel", "header", "footer", "border",
         "text", "text_muted", "text_dim", "caption", "code",
         "primary", "primary_dim", "secondary", "accent",
-        "success", "warning", "danger", "error", "info",
+        "success", "warning", "error", "info",
         "thinking", "running", "idle", "selection", "focus", "disabled",
     }
     missing = required - set(SemanticTheme.__dataclass_fields__)
@@ -110,7 +110,7 @@ def test_animation_profiles_complete():
 
 def test_typography_presets_complete():
     required = {"terminal_title", "section_title", "normal", "muted", "caption",
-                "code", "success", "warning", "danger", "thinking", "running", "error"}
+                "code", "success", "warning", "thinking", "running", "error"}
     assert set(PRESETS) == required
     for p in PRESETS.values():
         assert isinstance(p, TypographyPreset)

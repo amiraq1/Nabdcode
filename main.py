@@ -22,6 +22,12 @@ from core.kernel.security import get_workspace_root
 from engine.deep_agent import CHECKPOINT_FILENAME
 from core.turn_outcome import TurnOutcome, TurnStatus
 from core.text_utils import safe_display
+from ui.design.theme.semantic import SEMANTIC
+from ui.theme import (
+    PROMPT_HTML_PREFIX,
+    PROMPT_HTML_SUFFIX,
+    PROMPT_HTML_PLACEHOLDER,
+)
 
 _last_echoed_input: str = ""
 
@@ -135,11 +141,13 @@ def _extract_final_answer_text(raw: Any) -> str:
 
 
 # ── Event Wiring ───────────────────────────────────────────────────────────
+from ui.widgets.status_bar import AgentStatusBar
+status_bar = AgentStatusBar()
 
 def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
     """Subscribe all event handlers. Every output goes through renderer."""
     from core.kernel.events import bus
-    from engine.ui_theme import map_tool_to_badge, select_status_verb
+    from engine.ui_theme import map_tool_to_badge
 
     renderer = ctx.renderer
     metrics = ctx.metrics
@@ -158,9 +166,7 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         _token_buf = ""
         _held_buf = ""
         _turn_index += 1
-        verb = select_status_verb(stage=_last_stage, last_tool=_last_tool_name, turn_index=_turn_index)
-        renderer.status_start(verb)
-        renderer.thought_start()
+        status_bar.start()
 
     def _on_llm_token(p: dict) -> None:
         # When the interactive TerminalVisualizer owns the TTY (REPL mode), it
@@ -184,7 +190,7 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
             return
 
     def _on_llm_completed(p: dict) -> None:
-        renderer.thought_end()
+        status_bar.stop()
         renderer.flush()
         metrics.record_api_call(duration=p.get("duration", 1.0))
 
@@ -311,6 +317,7 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         renderer.flush()
 
     bus.subscribe("llm_request_started", _on_llm_started)
+    status_bar.wire()  # السهم: الشريط يسمع الناقل
     bus.subscribe("llm_token", _on_llm_token)
     bus.subscribe("llm_request_completed", _on_llm_completed)
     bus.subscribe("tool_started", _on_tool_started)
@@ -796,6 +803,11 @@ def _build_app() -> tuple:
 # _run_repl — interactive prompt loop
 # =========================================================================
 
+def _ansi_fg(rgb: tuple, text: str) -> str:
+    """Wrap text in a 24-bit foreground ANSI escape from an (r,g,b) tuple."""
+    return f"\033[38;2;{rgb[0]};{rgb[1]};{rgb[2]}m{text}\033[0m"
+
+
 def _run_repl(
     ctx: Any,
     state: Any,
@@ -816,16 +828,16 @@ def _run_repl(
     def _bottom_toolbar():
         if plan_mode:
             return ANSI(
-                f"\033[38;2;250;204;21mplan mode\033[0m "
-                f"\033[2m[shift+tab]\033[0m  "
-                f"\033[2m? for shortcuts\033[0m"
+                _ansi_fg(SEMANTIC.warning.rgb, "plan mode")
+                + " \033[2m[shift+tab]\033[0m  "
+                + "\033[2m? for shortcuts\033[0m"
             )
         from core.accept_edits_state import has_pending_edits
         if has_pending_edits():
             return ANSI(
-                f"\033[38;2;167;139;250m» accept edits on\033[0m "
-                f"\033[2m[shift+tab]\033[0m  "
-                f"\033[2m? for shortcuts\033[0m"
+                _ansi_fg(SEMANTIC.secondary.rgb, "» accept edits on")
+                + " \033[2m[shift+tab]\033[0m  "
+                + "\033[2m? for shortcuts\033[0m"
             )
         return ANSI(
             f"\033[2m[shift+tab]\033[0m  "
@@ -873,11 +885,10 @@ def _run_repl(
             try:
                 user_input = input_session.prompt(
                     HTML(
-                        '<style fg="#00ff9d" bold="true">╭─ Ammar@NabdOS ~ </style>\n'
-                        '<style fg="#00fff7" bold="true">╰─❯ </style>'
+                        f"{PROMPT_HTML_PREFIX}\n{PROMPT_HTML_SUFFIX}"
                     ),
                     bottom_toolbar=_bottom_toolbar,
-                    placeholder=HTML('<style fg="#555">Ask your question...</style>'),
+                    placeholder=HTML(PROMPT_HTML_PLACEHOLDER),
                 ).strip()
             except (KeyboardInterrupt, EOFError):
                 break
@@ -903,6 +914,18 @@ def _run_repl(
 def main() -> None:
     """NABD Agent OS entry point — CLI flags, SIGINT, then dispatch."""
     sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+
+    # A.2: Termux Environment Guard (Replaces taste.md prompt rule)
+    if "com.termux" not in os.environ.get("PREFIX", ""):
+        from rich.console import Console
+        from rich.panel import Panel
+        Console().print(
+            Panel(
+                "[bold red]❌ SECURITY VIOLATION: NABD OS requires a Termux environment (PREFIX).[/]",
+                border_style="red"
+            )
+        )
+        sys.exit(1)
 
     if _check_cli_flags():
         return

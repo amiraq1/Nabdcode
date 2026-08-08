@@ -6,6 +6,8 @@ Sequential Cyberpunk REPL Mode for Termux (prompt_toolkit + Rich).
 
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import json
 import os
@@ -14,12 +16,14 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from rich.box import ROUNDED
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.spinner import SPINNERS
+from rich.spinner import SPINNERS, Spinner
 from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -32,32 +36,34 @@ from ui.widgets.tool_result import ToolResultWidget
 from ui.widgets.tool_result_list import ToolResultList
 from ui.design.theme.semantic import SEMANTIC
 from core.context_manager import RepositoryContextManager
-from core.permissions import ShellPermissions, PermissionEngine
+from core.permissions import ShellPermissions
 from core.kernel.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor
 from core.utils import safe_strip
 from ui.theme import (
-    nabd_theme,
-    BOX_THOUGHT,
     BOX_EXECUTION,
-    BOX_EVIDENCE,
     BOX_FINAL,
-    PALETTE,
     PANEL_STYLES,
     CUSTOM_THEME,
-    PROMPT_STYLE,
+    PROMPT_HTML_PREFIX,
+    PROMPT_HTML_SUFFIX,
+    PROMPT_HTML_HR,
 )
 
 console = Console(theme=CUSTOM_THEME)
 
-_last_echoed_input: str = ""
-_streaming_final: bool = False
+import threading
+
+# V6: _streaming_final guards which tokens reach the final-answer display.
+# Written from event handlers (on_llm_request_started, on_final_answer) that
+# MAY be called from asyncio.to_thread worker threads, and read by
+# _on_token_chunk on the event loop thread.
+#
+# threading.Event provides explicit, documented thread-safe set()/clear()/is_set()
+# semantics (no reliance on CPython GIL atomicity for future compatibility).
+_streaming_final: threading.Event = threading.Event()
+
 tool_result_list: ToolResultList = ToolResultList()
-
-
-def echo_user_input(text: str) -> None:
-    # No-op: PromptSession already displays prompt and user input cleanly.
-    pass
 
 
 def _ui_looks_like_tool_call(text: str) -> bool:
@@ -255,14 +261,8 @@ def render_todo_block(plan: list[dict] | None = None) -> None:
 # restarts. When the agent exposes a RuntimeState, its own shell_permissions
 # take precedence so policy follows the live execution loop.
 #
-# Phase 3 (D4): _SESSION_PERMS_STATE was a full RuntimeState instance that
-# duplicated session state.  Replaced with a bare ShellPermissions object.
-# Authorization data is NOT runtime session state — it's a lighter policy store.
-_SESSION_PERMS: ShellPermissions = ShellPermissions()
-# Phase 3 (D4): backward-compatible alias for characterization tests.
-# Previously was RuntimeState(session_id="repl-perms") — now None.
-# The test checks isinstance(..., RuntimeState) which correctly passes.
-_SESSION_PERMS_STATE = None
+# Phase 3 (D4): _SESSION_PERMS was a ShellPermissions singleton, now removed.
+# _SESSION_PERMS_STATE was a None sentinel for backward-compat; removed in V8.
 
 # ── Mode cycling (Shift+Tab): normal → plan mode → accept edits → normal ──
 # 0 = normal, 1 = plan mode, 2 = accept edits
@@ -300,67 +300,26 @@ def _detect_arabic_scan_intent(text: str) -> bool:
 
 
 def _maybe_auto_scan(text: str, agent: Any) -> bool:
-    """If *text* contains Arabic scan intent, auto-trigger the EXPLORE tool.
+    """If *text* contains Arabic scan intent, auto-trigger workspace listing.
 
-    Seeds the agent's evidence log with a directory listing so that:
-      1. The convergence gate (``_real_reads() >= 3``) sees real file records.
-      2. The LLM gets concrete file paths to work with in its context.
-
-    Returns True if an auto-scan was performed, False otherwise.
+    V4.4: Evidence seeding and state mutation are delegated to
+    core/commands/auto_scan.maybe_auto_scan. This function handles display only.
     """
-    if not _detect_arabic_scan_intent(text):
+    from core.commands.auto_scan import maybe_auto_scan as _core_scan
+
+    result = _core_scan(text, agent)
+    if not result["triggered"]:
         return False
 
-    console.print(f"  [info]⟳ Auto-scan triggered — listing workspace...[/]")
-
-    try:
-        # List the workspace root using stdlib (no tools-layer dependency).
-        entries = sorted(os.listdir("."))
-        output = "\n".join(entries)
-        if not output:
+    if not result["success"]:
+        if result.get("error") == "Auto-scan returned empty listing.":
             console.print(f"  [warning]⚠ Auto-scan returned empty listing.[/]")
-            return False
-
-        # ── Seed the agent's evidence log ────────────────────────────────
-        # Add evidence records for the listing so _real_reads() sees them.
-        # Uses EvidenceLog.record() — the canonical write path.
-        evidence_log = getattr(agent, "evidence_log", None)
-        if evidence_log is not None and hasattr(evidence_log, "record"):
-            try:
-                evidence_log.record(
-                    tool="file_system",
-                    command_or_path=".",
-                    success=True,
-                    output_snippet=output[:200],
-                    action="list",
-                )
-            except Exception:
-                pass  # evidence seeding is best-effort
-
-        # ── Append results as a system message in agent context ──────────
-        # This ensures the LLM sees the file listing before it attempts
-        # to answer — it can then call read on specific files.
-        state = _resolve_runtime_state(agent)
-        if state is not None and hasattr(state, "append_message"):
-            try:
-                msg = (
-                    "[CONTROL] Auto-scan: workspace listing was performed because "
-                    "your request contained a scan command.\n\n"
-                    f"Directory listing (workspace root):\n{output[:2000]}\n\n"
-                    "You should now read specific files from this listing to "
-                    "answer the user's request. Call file_system with "
-                    "action='read' on relevant files."
-                )
-                state.append_message({"role": "system", "content": msg})
-            except Exception:
-                pass
-
-        console.print(f"  [success]✓ Auto-scan completed — {len(output.splitlines())} entries found[/]")
-        return True
-
-    except Exception as exc:
-        console.print(f"  [error]✗ Auto-scan error: {exc}[/]")
+        else:
+            console.print(f"  [error]✗ Auto-scan error: {result.get('error')}[/]")
         return False
+
+    console.print(f"  [success]✓ Auto-scan completed — {result['entry_count']} entries found[/]")
+    return True
 
 
 # ── Context warning threshold (Stage 6) ────────────────────────────────────
@@ -371,12 +330,7 @@ _CONTEXT_WARN_THRESHOLD: int = 100_000
 # ── Re-entrancy guard — prevents concurrent agent turns ────────────────────
 _agent_busy: bool = False
 
-PLAN_MODE_INSTRUCTION: str = (
-    "You are in PLAN MODE. Before executing any task:\n"
-    "1. Use todo_write(action='plan', items=[...]) to outline your steps\n"
-    "2. Get confirmation via final_answer() showing your plan\n"
-    "3. Only then proceed with execution\n"
-)
+from core.commands.plan_mode import PLAN_MODE_INSTRUCTION  # V4.5: single source of truth
 
 
 def _cycle_mode() -> None:
@@ -426,8 +380,8 @@ def _erase_live_line() -> None:
     try:
         sys.stdout.write("\r\033[K")
         sys.stdout.flush()
-    except Exception:
-        pass
+    except Exception as e:  # V5: was bare pass — log for diagnostics
+        logger.debug("_erase_live_line: stdout write/flush failed: %s", e)
 
 
 def _handle_permission_command(text: str, agent=None) -> bool:
@@ -465,28 +419,22 @@ def _handle_permission_command(text: str, agent=None) -> bool:
     if cmd == "/clear_perms":
         perms.clear()
         _erase_live_line()
-        console.print("[#aaaaaa]Permission ruleset cleared (back to interactive ask).[/]")
+        console.print(f"[{SEMANTIC.text_muted}]Permission ruleset cleared (back to interactive ask).[/]")
         return True
     return False
 
 
 def _handle_goal_command(text: str, agent=None) -> Any:
-    """Handle the /goal <desc> [|| <criteria>] command with rich panel feedback."""
-    from core.kernel.state import parse_goal_command
+    """Handle the /goal <desc> [|| <criteria>] command with rich panel feedback.
 
-    spec = parse_goal_command(text)
+    V4.1: State mutation (state.active_goal = spec) is delegated to
+    core/commands/goal.handle_goal_command. This function handles display only.
+    """
+    from core.commands.goal import handle_goal_command as _core_goal
+
+    spec = _core_goal(text, agent)
     if spec is None:
         return None
-
-    state = _resolve_runtime_state(agent)
-    state.active_goal = spec
-
-    try:
-        from core.ui_bridge import get_bridge
-        bridge = get_bridge()
-        bridge.emit("goal_set", goal_desc=spec.raw_prompt)
-    except Exception:
-        pass
 
     _erase_live_line()
     panel_content = Text()
@@ -505,50 +453,6 @@ def _handle_goal_command(text: str, agent=None) -> Any:
     console.print(Panel(panel_content, title="[bento.execution.title] 🎯 Goal Active [/bento.execution.title]", border_style="bento.execution.border", box=BOX_EXECUTION, padding=(1, 2)))
     return f"Goal set: {spec.raw_prompt}"
 
-
-class REPL:
-    """REPL interface wrapper supporting object-oriented handlers and bridge events."""
-    def __init__(self, bridge: Any = None, loop: Any = None):
-        self._bridge = bridge
-        self._loop = loop
-
-    def _handle_goal_command(self, cmd: str) -> Optional[str]:
-        """Enhanced goal command with rich panel feedback"""
-        from core.kernel.state import parse_goal_command
-        goal = parse_goal_command(cmd)
-        if not goal:
-            return None
-
-        if self._loop and hasattr(self._loop, "state") and self._loop.state:
-            self._loop.state.active_goal = goal
-
-        if self._bridge and hasattr(self._bridge, "emit"):
-            self._bridge.emit("goal_set", goal_desc=goal.raw_prompt)
-
-        panel_content = Text()
-        panel_content.append("🎯 Objective: ", style="bold cyan")
-        panel_content.append(goal.raw_prompt + "\n\n")
-
-        if goal.success_criteria:
-            panel_content.append("✅ Criteria (done_when):\n", style="bold yellow")
-            panel_content.append(goal.success_criteria)
-        else:
-            panel_content.append("⚠️  No explicit criteria. Agent will determine success.", style="dim")
-
-        panel_content.append("\n\n")
-        panel_content.append("The agent won't report Success until criteria are proven.", style="italic dim")
-
-        console.print(Panel(panel_content, title="[bento.execution.title] 🎯 Goal Active [/bento.execution.title]", border_style="bento.execution.border", box=BOX_EXECUTION, padding=(1, 2)))
-        return f"Goal set: {goal.raw_prompt}"
-
-    def _render_prompt_with_goal(self) -> str:
-        """Enhanced prompt showing active goal status"""
-        if not self._loop or not hasattr(self._loop, "state") or not self._loop.state:
-            return "❯ "
-        goal = self._loop.state.active_goal
-        if goal and not goal.is_met:
-            return f"❯ [Goal: {goal.raw_prompt[:20]}...] "
-        return "❯ "
 
 
 def _resolve_evidence_log(agent) -> Any:
@@ -573,49 +477,22 @@ def _estimate_message_tokens(messages: list[dict]) -> int:
 def _handle_compact_command(agent: Any) -> bool:
     """Compact the agent's conversation history.
 
-    Uses ``RuntimeState.prune_history()`` with a 500-token budget to
-    replace verbose history with a compact form, then reports the
-    token savings to the console.
+    V4.2: History pruning logic is delegated to core/commands/compact.
+    This function handles display only.
     """
-    state = _resolve_runtime_state(agent)
-    if not state:
-        _erase_live_line()
-        console.print("[error]No agent state available for compaction.[/]")
-        return True
+    from core.commands.compact import handle_compact_command as _core_compact
 
-    old_messages = state.get_messages() if hasattr(state, "get_messages") else getattr(state, "messages", [])
-    old_tokens = _estimate_message_tokens(old_messages)
-
-    try:
-        # Set a tight budget so prune_history reduces to ~500 tokens.
-        saved_max = getattr(state, "max_context_tokens", 8192)
-        if hasattr(state, "max_context_tokens"):
-            state.max_context_tokens = _COMPACT_MAX_TOKENS
-        if hasattr(state, "prune_history") and callable(state.prune_history):
-            state.prune_history()
-        elif hasattr(state, "clear_context") and callable(state.clear_context):
-            state.clear_context()
-        else:
-            # Manual truncation: keep system + last 2 turns.
-            msgs = getattr(state, "messages", [])
-            if msgs:
-                sys_msgs = [m for m in msgs if m.get("role") == "system"]
-                non_sys = [m for m in msgs if m.get("role") != "system"]
-                kept = sys_msgs + non_sys[-4:]
-                state.messages = kept
-        # Restore original budget.
-        if hasattr(state, "max_context_tokens"):
-            state.max_context_tokens = saved_max
-    except Exception as exc:
-        _erase_live_line()
-        console.print(f"[error]Compaction failed: {exc}[/]")
-        return True
-
-    new_messages = state.get_messages() if hasattr(state, "get_messages") else getattr(state, "messages", [])
-    new_tokens = _estimate_message_tokens(new_messages)
-    saved = old_tokens - new_tokens
+    result = _core_compact(agent)
 
     _erase_live_line()
+    if not result["success"]:
+        console.print(f"[error]{result.get('error', 'Compaction failed.')}[/]")
+        return True
+
+    old_tokens = result["old_tokens"]
+    new_tokens = result["new_tokens"]
+    saved = result["saved"]
+
     console.print(f"[bold success]✓[/] [dim]Context compacted:[/] [cyan]~{old_tokens}t → ~{new_tokens}t[/] [dim](saved ~{saved}t)[/dim]")
     if saved > 0:
         console.print(f"  [dim]↳ Run /compact again if context grows too large[/dim]")
@@ -625,71 +502,36 @@ def _handle_compact_command(agent: Any) -> bool:
 
 
 def _handle_skill_command(text: str, agent=None) -> bool:
-    """Handle the ``/skill <name>`` command (Phase 6 Native Skills Loader).
+    """Handle the ``/skill <name>`` command.
 
-    Returns True if the text was a skill command (and thus consumed). The skill
-    command is executed through ``core.skills.execute_skill``, which:
-
-      a) merges the skill's ``allowed_tools`` into the live RuntimeState
-         shell_permissions as explicit ALLOW rules (consulted by the
-         PermissionEngine for this session);
-      b) dispatches the skill ``command`` via ``ShellTool.execute()`` — the SAME
-         code path the agent uses — so the non-overridable Phase 2.1 heuristics
-         (base64/hex/eval blocks, obfuscation sweep) still run first, and a
-         ``ToolResult`` is produced;
-      c) appends that result to the evidence ledger when one is available.
-
-    Fail-silent: an unknown skill name or a discovery miss prints a quiet error
-    and consumes the input (the command is never forwarded to the agent as a
-    task). A blocked/safe-rejected command still prints the ToolResult so the
-    operator sees the security outcome.
+    V4.3: Skill execution logic is delegated to core/commands/skill.
+    This function handles display only.
     """
-    parts = text.split(maxsplit=1)
-    cmd = parts[0].lower()
-    if cmd != "/skill":
-        return False
+    from core.commands.skill import handle_skill_command as _core_skill
 
-    # Split the skill name from any trailing arguments (e.g. a target file for
-    # parameterized skills like ``/skill reviewer core/state.py``).
-    name_arg = parts[1].strip() if len(parts) > 1 else ""
-    if not name_arg:
-        _erase_live_line()
-        console.print("[error]Usage: /skill <name> [args...]  (list skills with /skills)[/]")
-        return True
-    _name_parts = name_arg.split(maxsplit=1)
-    name = _name_parts[0]
-    skill_args = _name_parts[1].strip() if len(_name_parts) > 1 else ""
+    result = _core_skill(text, agent)
+    if result is None:
+        return False  # not a skill command
 
-    from core.skills import discover_skills, find_skill, execute_skill
-
-    state = _resolve_runtime_state(agent)
-    skills = discover_skills(Path.cwd())
-    skill = find_skill(skills, name)
-    if skill is None:
-        _erase_live_line()
-        console.print(f"[error]✗ Skill not found: {name}[/]")
-        return True
-
-    if getattr(skill, "goal", "") or getattr(skill, "success_criteria", ""):
-        from core.kernel.state import GoalSpec
-        g_prompt = getattr(skill, "goal", "") or getattr(skill, "description", "") or skill.name
-        g_crit = getattr(skill, "success_criteria", "") or g_prompt
-        state.active_goal = GoalSpec(raw_prompt=g_prompt, success_criteria=g_crit, is_met=False)
-
-    # Execute through ShellTool (Phase 2.1 heuristics + ToolResult evidence).
-    result = execute_skill(skill, state=state, evidence_log=_resolve_evidence_log(agent))
-
-    ok = bool(getattr(result, "success", False))
-    color = "[success]" if ok else "[error]"
-    out = getattr(result, "stdout", "") or getattr(result, "stderr", "") or ""
-    if isinstance(out, str) and len(out) > 4000:
-        out = out[-4000:]
     _erase_live_line()
+
+    if result.get("error") and not result.get("output"):
+        # Usage error or skill-not-found
+        if "Usage:" in (result.get("error") or ""):
+            console.print(f"[error]{result['error']}  (list skills with /skills)[/]")
+        else:
+            console.print(f"[error]✗ {result['error']}[/]")
+        return True
+
+    ok = result["success"]
+    color = "[success]" if ok else "[error]"
+    out = result.get("output") or ""
+    skill_name = result.get("skill_name", "")
     console.print(
         Panel(
-            f"[info]SKILL[/] {skill.name}\n\n"
+            f"[info]SKILL[/] {skill_name}\n\n"
             f"{color}{out or '(no output)'}[/]",
-            border_style="#1a1a42",
+            border_style=f"{SEMANTIC.border}",
             title=f"[info]◈ Skill Executed{' (OK)' if ok else ' (FAILED)'}[/]",
         )
     )
@@ -714,24 +556,21 @@ cyberpunk_style = Style.from_dict({
 
 # ── Action badge colors (Stage 1: print_badge) ───────────────────────────
 # Color mapping per the UI overhaul spec:
-#   READ   → action badge teal
-#   EDIT   → action badge teal
-#   SHELL  → orange (#D97706)
-#   SEARCH → purple (#7C3AED)
-#   EXPLORE→ purple (#7C3AED)
-#   TODOS  → action badge teal
+#   READ/EDIT/TODOS/WRITE → action badge teal
+#   SHELL → shell orange · SEARCH/EXPLORE/RAG/MEMORY → search purple
+#   GIT → git green · KILL → kill red
 _BADGE_STYLES: dict[str, str] = {
     "READ":    f"bold white on {SEMANTIC.action_badge}",
     "EDIT":    f"bold white on {SEMANTIC.action_badge}",
-    "SHELL":   "bold black on #D97706",
-    "SEARCH":  "bold white on #7C3AED",
-    "EXPLORE": "bold white on #7C3AED",
+    "SHELL":   f"bold black on {SEMANTIC.shell}",
+    "SEARCH":  f"bold white on {SEMANTIC.search}",
+    "EXPLORE": f"bold white on {SEMANTIC.search}",
     "TODOS":   f"bold white on {SEMANTIC.action_badge}",
     "WRITE":   f"bold white on {SEMANTIC.action_badge}",
-    "RAG":     "bold white on #7C3AED",
-    "MEMORY":  "bold white on #7C3AED",
-    "GIT":     "bold white on #059669",
-    "KILL":    "bold black on #EF4444",
+    "RAG":     f"bold white on {SEMANTIC.search}",
+    "MEMORY":  f"bold white on {SEMANTIC.search}",
+    "GIT":     f"bold white on {SEMANTIC.git}",
+    "KILL":    f"bold black on {SEMANTIC.kill}",
     "DEFAULT": f"bold white on {SEMANTIC.action_badge}",
 }
 
@@ -991,8 +830,8 @@ async def render_agent_events(status_bar=None) -> None:
         def _on_plan_updated(todos):
             _render_todo_from_plan(list(todos) if todos else [])
         bridge.subscribe("on_plan_updated", _on_plan_updated)
-    except Exception:
-        pass
+    except Exception as e:  # V5: was bare pass — log for diagnostics
+        logger.debug("render_agent_events: bridge.subscribe failed: %s", e)
 
     compressor = thought_compressor
     token_buf = ""
@@ -1084,11 +923,11 @@ async def render_agent_events(status_bar=None) -> None:
     def _on_token_chunk(content: str) -> None:
         """Streaming filter: buffer, strip tool-call lines, display clean.
 
-        Only streams tokens when ``_streaming_final`` is True — i.e. when the
+        Only streams tokens when ``_streaming_final.is_set()`` is True — i.e. when the
         assistant has entered the final-answer phase.  Intermediate reasoning
         and tool-generation tokens are discarded.
         """
-        if not _streaming_final:
+        if not _streaming_final.is_set():
             return
         nonlocal token_buf, held_buf, _stream_line_buf
         compressor.add_tokens(len(content))
@@ -1161,7 +1000,7 @@ def _setup_repl_keybindings() -> KeyBindings:
         elif thought_compressor.session_thoughts:
             last_id = next(reversed(thought_compressor.session_thoughts))
             raw = thought_compressor.session_thoughts[last_id]
-            console.print("\n[#808080]── Thought Block ──[/]")
+            console.print(f"\n[{SEMANTIC.caption}]── Thought Block ──[/]")
             console.print(safe_strip(raw) or "(empty)")
 
     @bindings.add("s-tab")
@@ -1247,7 +1086,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
     def _hr_line(width: int) -> str:
         line = _hr_cache.get(width)
         if line is None:
-            line = f"<style color='#555555'>{'─' * width}</style>"
+            line = PROMPT_HTML_HR % ("─" * width)
             _hr_cache[width] = line
         return line
 
@@ -1271,7 +1110,7 @@ async def run_repl(agent, agent_runner_func=None) -> None:
 
                 # The top border and the multi-line cyberpunk prompt
                 render_todo_block()
-                prompt_message = HTML(f"{hr_style}\n<style fg='#00ff9d' bold='true'>╭─ Ammar@NabdOS ~ </style>\n<style fg='#00fff7' bold='true'>╰─❯ </style>")
+                prompt_message = HTML(f"{hr_style}\n{PROMPT_HTML_PREFIX}\n{PROMPT_HTML_SUFFIX}")
                 # Render the prompt without the buggy bottom_toolbar
                 user_input = await session.prompt_async(
                     prompt_message,
@@ -1357,45 +1196,51 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     console.print("[yellow]⚠ Agent busy — please wait[/yellow]")
                     continue
 
-                # Stable task id for this turn's real-time lifecycle tracking.
-                task_id = RepositoryContextManager.task_id_for(text)
-
-                # Call 1 (Start): mark the task active BEFORE invoking the agent.
-                # Best-effort + guarded so a write failure never blocks the turn.
+                # V1.2: arm the re-entrancy guard IMMEDIATELY after the check
+                # (before any awaits) to close the race window.  Previously this
+                # was set just before agent.run — but there were several awaits
+                # between the check and the arming (emit_thinking_start, auto_scan)
+                # during which a second coroutine could pass the if _agent_busy check.
+                _agent_busy = True
                 try:
-                    RepositoryContextManager().update_state(task_id, "In Progress", {"prompt": text})
-                except Exception:
-                    pass
+                    # Stable task id for this turn's real-time lifecycle tracking.
+                    task_id = RepositoryContextManager.task_id_for(text)
 
-                await bridge.emit_thinking_start()
-                status_bar.start()
+                    # Call 1 (Start): mark the task active BEFORE invoking the agent.
+                    # Best-effort + guarded so a write failure never blocks the turn.
+                    try:
+                        RepositoryContextManager().update_state(task_id, "In Progress", {"prompt": text})
+                    except Exception as e:  # V5: was bare pass — log for diagnostics
+                        logger.debug("_handle_user_input: repo ctx start failed: %s", e)
 
-                # Reset final answer rendered tracker before each turn
-                bus_ref = getattr(agent, "bus", None) or getattr(bridge, "event_bus", None)
-                if bus_ref:
-                    bus_ref._final_answer_rendered = False
+                    await bridge.emit_thinking_start()
+                    status_bar.start()
 
-                # Inject plan mode instruction into the agent's system prompt
-                # when active. We temporarily prepend to the system message so
-                # the directive applies at the role level for the entire turn.
-                _plan_snapshot: str | None = None
-                if _plan_mode:
-                    _msgs = getattr(agent, "messages", None) or getattr(
-                        getattr(agent, "state", None), "messages", None
-                    )
-                    if _msgs and len(_msgs) > 0 and _msgs[0].get("role") == "system":
-                        _plan_snapshot = _msgs[0]["content"]
-                        _msgs[0]["content"] = PLAN_MODE_INSTRUCTION + _plan_snapshot
+                    # Reset final answer rendered tracker before each turn
+                    bus_ref = getattr(agent, "bus", None) or getattr(bridge, "event_bus", None)
+                    if bus_ref:
+                        bus_ref._final_answer_rendered = False
 
-                # ── Arabic auto-scan: detect "فحر مستودع" etc. and seed ─────
-                # the agent's context with a directory listing + evidence
-                # before dispatching to the LLM. This ensures the convergence
-                # gate sees real file records and the model has concrete paths.
-                await asyncio.to_thread(_maybe_auto_scan, text, agent)
+                    # Inject plan mode instruction into the agent's system prompt
+                    # when active. We temporarily prepend to the system message so
+                    # the directive applies at the role level for the entire turn.
+                    _plan_snapshot: str | None = None
+                    if _plan_mode:
+                        _msgs = getattr(agent, "messages", None) or getattr(
+                            getattr(agent, "state", None), "messages", None
+                        )
+                        if _msgs and len(_msgs) > 0 and _msgs[0].get("role") == "system":
+                            _plan_snapshot = _msgs[0]["content"]
+                            _msgs[0]["content"] = PLAN_MODE_INSTRUCTION + _plan_snapshot
 
-                # Offload the blocking agent.run to a worker thread so the
-                # event loop keeps streaming tool/token events concurrently.
-                try:
+                    # ── Arabic auto-scan: detect "فحر مستودع" etc. and seed ─────
+                    # the agent's context with a directory listing + evidence
+                    # before dispatching to the LLM. This ensures the convergence
+                    # gate sees real file records and the model has concrete paths.
+                    await asyncio.to_thread(_maybe_auto_scan, text, agent)
+
+                    # Offload the blocking agent.run to a worker thread so the
+                    # event loop keeps streaming tool/token events concurrently.
                     if agent_runner_func and agent is not None:
                         response_text = await asyncio.to_thread(
                             agent_runner_func, text, agent
@@ -1419,6 +1264,8 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                     )
                     continue
                 finally:
+                    # V1: release the re-entrancy guard regardless of outcome.
+                    _agent_busy = False
                     # Restore original system prompt after the turn completes.
                     if _plan_snapshot is not None:
                         _msgs = getattr(agent, "messages", None) or getattr(
@@ -1460,14 +1307,16 @@ async def run_repl(agent, agent_runner_func=None) -> None:
                 # ── Process pending edits (accept-edits mode) ────────────
                 # After the agent turn, if accept-edits mode was active and
                 # edits were queued, show them and ask for user approval.
-                _process_pending_edits()
+                # V2: offload the blocking input() prompt to a worker thread
+                # so the event loop keeps streaming while edits are reviewed.
+                await asyncio.to_thread(_process_pending_edits)
 
                 # Call 2 (Finish): transition the task to Completed immediately
                 # after the agent's response is rendered. Best-effort + guarded.
                 try:
                     RepositoryContextManager().update_state(task_id, "Completed", {"prompt": text})
-                except Exception:
-                    pass
+                except Exception as e:  # V5: was bare pass — log for diagnostics
+                    logger.debug("_handle_user_input: repo ctx finish failed: %s", e)
 
             except (KeyboardInterrupt, EOFError):
                 thought_compressor.stop()
@@ -1594,8 +1443,7 @@ class TerminalVisualizer:
 
     def on_llm_request_started(self, data: dict):
         """Reset streaming gate — only final-answer tokens will be streamed."""
-        global _streaming_final
-        _streaming_final = False
+        _streaming_final.clear()
         self._navigation_enabled = False
         tool_result_list.clear()
 
@@ -1723,8 +1571,7 @@ class TerminalVisualizer:
         # phase.  Any llm_token events emitted from this point forward will be
         # streamed; earlier intermediate reasoning / tool-generation tokens
         # were discarded by the _streaming_final gate in _on_token_chunk.
-        global _streaming_final
-        _streaming_final = True
+        _streaming_final.set()
         self._navigation_enabled = True
 
         safe_width = min(console.size.width - 4, 80)
@@ -1744,7 +1591,7 @@ class TerminalVisualizer:
         console.print("\n")
 
         words = output.split(" ")
-        chunk_size = 3
+        chunk_size = 10  # V3: was 3 — 10 words/update × 0.01s = <1s for 600w (was ~8s)
 
         with Live(panel, console=console, auto_refresh=False) as live:
             for i in range(0, len(words), chunk_size):
@@ -1753,7 +1600,7 @@ class TerminalVisualizer:
 
                 panel.renderable = Markdown(current_text)
                 live.update(panel, refresh=True)
-                time.sleep(0.04)
+                time.sleep(0.01)  # V3: was 0.04 — reduced alongside chunk_size increase
 
         console.print("\n")
 
@@ -1806,6 +1653,7 @@ class TerminalVisualizer:
                 **PANEL_STYLES[style_key]
             )
             console.print(panel)
+            console.print()  # A.3: Fix missing newline before next prompt
         except Exception as exc:
             try:
                 console.print(f"[bold red]✖ on_loop_completed render error: {exc}[/bold red]")

@@ -16,12 +16,12 @@ FOOTER_COLOR: str = "grey50"
 # 🎨 1. لوحة ألوان النيون (Neon Palette)
 PALETTE = {
     # Core neon colors
-    "neon_green": "#00ff9d",
-    "neon_cyan": "#00fff7", 
-    "neon_purple": "#bf5af2",
-    "neon_pink": "#ff2d95",
-    "neon_amber": "#ffcc00",
-    "neon_blue": "#00a8ff",
+    "neon_green": SEMANTIC.neon_green.hex,
+    "neon_cyan": SEMANTIC.neon_cyan.hex,
+    "neon_purple": SEMANTIC.neon_purple.hex,
+    "neon_pink": SEMANTIC.neon_pink.hex,
+    "neon_amber": SEMANTIC.neon_amber.hex,
+    "neon_blue": SEMANTIC.neon_blue.hex,
     
     # Semantic colors
     "success": SEMANTIC.success.hex,
@@ -30,9 +30,9 @@ PALETTE = {
     "info": SEMANTIC.info.hex,
     
     # Backgrounds
-    "panel_bg": "#0d1117",      # GitHub dark
-    "panel_border": "#30363d",
-    "prompt_bg": "#161b22",
+    "panel_bg": SEMANTIC.panel.hex,       # GitHub dark
+    "panel_border": SEMANTIC.border.hex,
+    "prompt_bg": SEMANTIC.surface.hex,
 }
 
 NEON_CYAN = "bright_cyan"
@@ -96,7 +96,7 @@ CUSTOM_THEME = Theme({
     "neon_pink": Style(color=PALETTE["neon_pink"], bold=True),
     "neon_amber": Style(color=PALETTE["neon_amber"], bold=True),
     "neon_blue": Style(color=PALETTE["neon_blue"], bold=True),
-    "white": Style(color="#ffffff"),
+    "white": Style(color=SEMANTIC.text_bright.hex),
     
     # Status badges
     "success": Style(color=PALETTE["success"], bold=True),
@@ -137,3 +137,22 @@ PROMPT_STYLE = {
         ("class:prompt", "│ "),
     ],
 }
+
+# ───────────────────────────────────────────────────────
+# Prompt HTML fragments (prompt_toolkit) — named Rich styles only, never
+# raw hex in source. Consumed by main.py and ui/repl_termux.py so the
+# "╭─ Ammar@NabdOS" prompt is defined exactly once.
+# ───────────────────────────────────────────────────────
+
+# '╭─ Ammar@NabdOS ~ ' in neon green (semantic prompt accent), bold
+PROMPT_HTML_PREFIX: str = (
+    "<style fg='green' bold='true'>╭─ Ammar@NabdOS ~ </style>"
+)
+# '╰─❯ ' in neon cyan (semantic secondary accent), bold
+PROMPT_HTML_SUFFIX: str = (
+    "<style fg='cyan' bold='true'>╰─❯ </style>"
+)
+# Placeholder hint text (muted)
+PROMPT_HTML_PLACEHOLDER: str = "<style fg='grey'>Ask your question...</style>"
+# Horizontal rule (muted)
+PROMPT_HTML_HR: str = "<style color='grey'>%s</style>"

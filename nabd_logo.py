@@ -35,7 +35,7 @@ def draw(model_name=None):
     # تحديد الأكواد القياسية: الأول أبيض عريض، والثاني رصاصي/رمادي مخفف
     colors = [
         "[bold white]",  # Bold White
-        "[#555555]",     # Dark Gray / Gray
+        "[grey35]",      # Dark Gray / Gray
     ]
     reset = "[/]"
 

@@ -1,6 +1,6 @@
 """D-1 personality resolver.
 
-Maps all 14 UIStates onto 5 StatusLine personalities so StatusLine stays ONE
+Maps all 14 UIStates onto 6 StatusLine personalities so StatusLine stays ONE
 component while every state is rendered with explicit, tested styling (no state
 falls through unstyled).
 
@@ -20,13 +20,19 @@ from ui.design.state import UIState, UI_STATES
 
 
 class Personality(Enum):
-    """The five StatusLine personalities (one component, five faces)."""
+    """The StatusLine personalities (one component, seven faces).
 
+    Seven faces: PENDING is the not-yet-started station -- distinct from
+    THINKING so an idle face never borrows the agent's speaking verb.
+    """
+
+    PENDING = "pending"
     THINKING = "thinking"
     RUNNING = "running"
     SUCCESS = "success"
     WARNING = "warning"
     ERROR = "error"
+    DISABLED = "disabled"
 
 
 @dataclass(frozen=True)
@@ -49,9 +55,9 @@ class PersonalityStyle:
     animated: bool
 
 
-# explicit TOTAL mapping of all 14 UIStates -> 5 personalities
+# explicit TOTAL mapping of all 14 UIStates -> 7 personalities
 _PERSONALITY_OF: dict[UIState, Personality] = {
-    UIState.IDLE:         Personality.THINKING,
+    UIState.IDLE:         Personality.PENDING,
     UIState.THINKING:     Personality.THINKING,
     UIState.PLANNING:     Personality.THINKING,
     UIState.RUNNING:      Personality.RUNNING,
@@ -64,29 +70,37 @@ _PERSONALITY_OF: dict[UIState, Personality] = {
     UIState.LOADING:      Personality.WARNING,
     UIState.ERROR:        Personality.ERROR,
     UIState.CANCELLED:    Personality.ERROR,
-    UIState.DISABLED:     Personality.ERROR,   # fixed: was a NameError in draft
+    UIState.DISABLED:     Personality.DISABLED,
 }
 
 _PERSONALITY_STYLE: dict[Personality, PersonalityStyle] = {
+    Personality.PENDING: PersonalityStyle(
+        Personality.PENDING, "بانتظار", SEMANTIC.text_muted, Icon.IDLE,
+        "dim", "static", SpinnerEnum.NONE, False,
+    ),
     Personality.THINKING: PersonalityStyle(
-        Personality.THINKING, "thinking", SEMANTIC.thinking, Icon.THINKING,
+        Personality.THINKING, "يفكّر", SEMANTIC.thinking, Icon.THINKING,
         "dim", "stream", SpinnerEnum.DOTS, True,
     ),
     Personality.RUNNING: PersonalityStyle(
-        Personality.RUNNING, "running", SEMANTIC.running, Icon.RUNNING,
+        Personality.RUNNING, "يُنفّذ", SEMANTIC.running, Icon.RUNNING,
         "bold", "stream", SpinnerEnum.LINE, True,
     ),
     Personality.SUCCESS: PersonalityStyle(
-        Personality.SUCCESS, "ok", SEMANTIC.success, Icon.SUCCESS,
+        Personality.SUCCESS, "تمّ", SEMANTIC.success, Icon.SUCCESS,
         "bold", "static", SpinnerEnum.NONE, False,
     ),
     Personality.WARNING: PersonalityStyle(
-        Personality.WARNING, "warn", SEMANTIC.warning, Icon.WARNING,
+        Personality.WARNING, "تحذير", SEMANTIC.warning, Icon.WARNING,
         "bold", "pulse", SpinnerEnum.PULSE, True,
     ),
     Personality.ERROR: PersonalityStyle(
-        Personality.ERROR, "error", SEMANTIC.error, Icon.ERROR,
+        Personality.ERROR, "فشل", SEMANTIC.error, Icon.ERROR,
         "bold", "static", SpinnerEnum.NONE, False,
+    ),
+    Personality.DISABLED: PersonalityStyle(
+        Personality.DISABLED, "معطّل", SEMANTIC.disabled, Icon.DISABLED,
+        "dim", "static", SpinnerEnum.NONE, False,
     ),
 }
 

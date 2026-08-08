@@ -41,7 +41,6 @@ _COLORS: dict[str, str] = {
     "red":    "\033[31m",
     "dim":    "\033[90m",
     "white":  "\033[97m",
-    "bg_gray": "\033[48;5;236m",
     "reset":  "\033[0m",
 }
 _ERASE_LINE = "\r\033[K"
@@ -57,13 +56,18 @@ from engine.ui_theme import (
     render_diff,
     todo_block as ui_todo_block,
     map_tool_to_badge,
-    think_line,
     status_chip as ui_status_chip,
     dim,
     fg,
     P,
     tree_prefix,
 )
+from ui.design.primitives.personality import style_of
+from ui.design.state import UIState
+
+# W-1: the thought line is identified by the ruled Arabic verb, never the
+# English word — otherwise thought_end() would not find its own line.
+_STYLE = style_of(UIState.THINKING)
 
 
 # ── Renderer ────────────────────────────────────────────────────────────────
@@ -334,22 +338,6 @@ class Renderer:
             self._lines_append(f"{tree_prefix()}{dim(l)}")
         if n > 6:
             self._lines_append(collapsed(n - 6))
-
-    def thought_start(self) -> None:
-        """Begin a thought line with timer + token count tracking."""
-        self._think_t0 = time.time()
-        self._token_count = 0
-        self._lines_append(think_line(None))
-
-    def thought_end(self) -> None:
-        """Finish thought line: replace in-place with duration."""
-        dt = (time.time() - self._think_t0) if self._think_t0 else 1.0
-        self._think_t0 = None
-        new_line = think_line(dt)
-        if self._lines and "Thinking" in self._lines[-1]:
-            self._lines[-1] = new_line
-        else:
-            self._lines_append(new_line)
 
     def todos(self, items: list[dict[str, Any]]) -> None:
         """Emit a TODOS checklist block (Cursor style)."""

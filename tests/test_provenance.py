@@ -12,7 +12,10 @@ QUARANTINE = REPO / "docs" / "provenance_quarantine.txt"
 
 # Pinned so the declared debt cannot grow in silence. Update only with an
 # explicit written decision recorded in the quarantine file itself.
-QUARANTINE_SIZE = 24
+# 2026-08-07: 24 → 26 — human decision (Am+8): recorded 478766d + e9c447e,
+# assistant commits that carried the wrapper trailer before repo policy was
+# enforced. Quarantine file documents the decision.
+QUARANTINE_SIZE = 26
 
 ATTRIBUTION_CORRECTIONS = REPO / "docs" / "attribution_corrections.txt"
 _ATTRIBUTION_RECORD_RE = re.compile(r"^[0-9a-f]{7,40}\s*->\s*[0-9a-f]{7,40}")

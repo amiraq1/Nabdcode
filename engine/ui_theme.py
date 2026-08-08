@@ -11,6 +11,12 @@ import shutil
 from typing import Any, Optional
 
 from ui.design.theme.semantic import SEMANTIC
+from ui.design.icons import Icon
+from ui.design.primitives.personality import style_of
+from ui.design.state import UIState
+
+# W-1: the waiting line's single source of truth — wired to the design layer.
+_STYLE = style_of(UIState.THINKING)
 
 # ── ANSI shortcuts ──────────────────────────────────────────────────────────
 _RESET = "\033[0m"
@@ -37,7 +43,6 @@ P: dict[str, tuple[int, int, int]] = {
     "badge_fg":     (255, 255, 255),
     "path":         (180, 180, 190),
     "meta":         (120, 120, 130),
-    "think":        (196, 181, 253),   # light violet
     "status_bg":    (30, 58, 95),      # dark blue
     "ok":           (74, 222, 128),
     "err":          (248, 113, 113),
@@ -95,17 +100,6 @@ def dim(s: str) -> str:
 
 def strike(s: str) -> str:
     return f"{_STRIKE}{s}{_RESET}"
-
-
-# ── Thought line ────────────────────────────────────────────────────────────
-def think_line(seconds: float | None = None) -> str:
-    if seconds is None:
-        body = "Thinking"
-    else:
-        sec = max(1, int(round(seconds)))
-        unit = "second" if sec == 1 else "seconds"
-        body = f"Thinking  {sec} {unit}"
-    return f"{fg(*P['think'])}* {body}{_RESET}"
 
 
 # ── Status chip (Examining / Sculpting) ────────────────────────────────────

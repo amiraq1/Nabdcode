@@ -1,9 +1,9 @@
 """Semantic color tokens.
 
 Single source of truth for *meaning* of color. Widgets must never reference a
-raw hex value; they read SEMANTIC.surface / SEMANTIC.primary / etc. Concrete
-values are aligned to the legacy palette (see ui/theme.py) so D-0 introduces no
-visual redesign — they are simply re-homed here going forward.
+raw hex value; they read SEMANTIC.surface / SEMANTIC.primary / etc. The legacy
+Rich palette (ui/theme.py) derives FROM these tokens — its PALETTE state
+entries resolve SEMANTIC.*.hex at import time, never the reverse.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ class SemanticTheme:
 
     # text
     text: Color         # primary text (#f2f2f2)
+    text_bright: Color  # brightest text — pure white (#ffffff)
     text_muted: Color   # muted text (#7a7a7a)
     text_dim: Color     # faint text (#4d4d4d)
     caption: Color      # caption / hint (#737373)
@@ -34,11 +35,10 @@ class SemanticTheme:
     primary_dim: Color  # muted primary (#4a3a94)
     secondary: Color     # secondary accent (#6943FF)
     accent: Color        # complementary accent (#6fd3d6)
+    info: Color          # informational (#6fd3d6)
     success: Color       # success (#3ecf8e)
     warning: Color       # warning (#e0b23c)
-    danger: Color        # danger (#e0524a)
-    error: Color         # error (#e0524a)
-    info: Color          # informational (#6fd3d6)
+    error: Color         # error-state hue (#e0524a)
     action_badge: Color  # action badge background (#0891B2)
 
     # execution / status states
@@ -49,6 +49,20 @@ class SemanticTheme:
     focus: Color         # focus ring (#00a8ff)
     disabled: Color     # disabled controls (#4d4d4d)
 
+    # tool-action badges (action badge mapping per UI overhaul spec)
+    shell: Color        # SHELL badge background — orange (#D97706)
+    search: Color       # SEARCH/EXPLORE/RAG/MEMORY badge — purple (#7C3AED)
+    git: Color          # GIT badge background — green (#059669)
+    kill: Color         # KILL badge background — red (#EF4444)
+
+    # neon aesthetic palette (NABD cyberpunk identity — value-stable)
+    neon_green: Color   # neon green (#00ff9d)
+    neon_cyan: Color    # neon cyan (#00fff7)
+    neon_purple: Color  # neon purple (#bf5af2)
+    neon_pink: Color    # neon pink (#ff2d95)
+    neon_amber: Color   # neon amber (#ffcc00)
+    neon_blue: Color    # neon blue (#00a8ff)
+
 
 SEMANTIC: SemanticTheme = SemanticTheme(
     background=Color("#000000"),
@@ -58,6 +72,7 @@ SEMANTIC: SemanticTheme = SemanticTheme(
     footer=Color("#0a0a0c"),
     border=Color("#1a1a1a"),
     text=Color("#f2f2f2"),
+    text_bright=Color("#ffffff"),
     text_muted=Color("#7a7a7a"),
     text_dim=Color("#4d4d4d"),
     caption=Color("#737373"),
@@ -66,11 +81,10 @@ SEMANTIC: SemanticTheme = SemanticTheme(
     primary_dim=Color("#4a3a94"),
     secondary=Color("#6943FF"),
     accent=Color("#6fd3d6"),
+    info=Color("#6fd3d6"),
     success=Color("#3ecf8e"),
     warning=Color("#e0b23c"),
-    danger=Color("#e0524a"),
     error=Color("#e0524a"),
-    info=Color("#6fd3d6"),
     action_badge=Color("#0891B2"),
     thinking=Color("#6943FF"),
     running=Color("#22d3ee"),
@@ -78,4 +92,14 @@ SEMANTIC: SemanticTheme = SemanticTheme(
     selection=Color("#00dcff"),
     focus=Color("#00a8ff"),
     disabled=Color("#4d4d4d"),
+    shell=Color("#D97706"),
+    search=Color("#7C3AED"),
+    git=Color("#059669"),
+    kill=Color("#EF4444"),
+    neon_green=Color("#00ff9d"),
+    neon_cyan=Color("#00fff7"),
+    neon_purple=Color("#bf5af2"),
+    neon_pink=Color("#ff2d95"),
+    neon_amber=Color("#ffcc00"),
+    neon_blue=Color("#00a8ff"),
 )

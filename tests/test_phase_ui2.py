@@ -17,6 +17,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from engine.renderer import Renderer
 from engine.ui_theme import status_chip, prompt_footer
+from ui.design.primitives.personality import style_of
+from ui.design.state import UIState
+
+_STYLE = style_of(UIState.THINKING)
 
 
 # ── Expand state ─────────────────────────────────────────────────────────
@@ -54,8 +58,8 @@ def test_status_chip_has_verb():
 
 
 def test_status_chip_no_tokens():
-    chip = status_chip("Thinking")
-    assert "Thinking" in chip
+    chip = status_chip(_STYLE.verb)
+    assert _STYLE.verb in chip
 
 
 def test_status_chip_ansi():

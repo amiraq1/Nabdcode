@@ -5,9 +5,8 @@ Verifies:
   2. collapsed count formatting.
   3. todo_block contains ☒/☐ glyphs with correct status.
   4. render_diff renders +/- lines.
-  5. think_line has duration text.
-  6. badge returns ANSI-wrapped text.
-  7. Renderer thread safety: concurrent tool_start + stream_chunk.
+  5. badge returns ANSI-wrapped text.
+  6. Renderer thread safety: concurrent tool_start + stream_chunk.
 """
 
 import sys
@@ -20,12 +19,15 @@ from engine.ui_theme import (
     collapsed,
     todo_block,
     render_diff,
-    think_line,
     badge,
     dim,
     tool_header,
 )
 from engine.renderer import Renderer
+from ui.design.primitives.personality import style_of
+from ui.design.state import UIState
+
+_STYLE = style_of(UIState.THINKING)
 
 
 # ── map_tool_to_badge ────────────────────────────────────────────────────
@@ -131,19 +133,6 @@ def test_render_diff_empty():
     assert render_diff("") == ""
 
 
-# ── think_line ──────────────────────────────────────────────────────────
-
-def test_think_line_with_duration():
-    line = think_line(2.7)
-    assert "Thinking" in line
-    assert "3" in line  # rounded up
-    assert "seconds" in line
-
-
-def test_think_line_no_duration():
-    line = think_line(None)
-    assert "Thinking" in line
-    assert "ctrl+o" not in line
 
 
 # ── badge ───────────────────────────────────────────────────────────────

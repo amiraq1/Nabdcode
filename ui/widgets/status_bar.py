@@ -31,9 +31,11 @@ class AgentStatusBar:
         self._console = console or Console()
         self._phase_states: dict[str, str] = {p: "pending" for p in self.PHASES}
         self._step: int | None = None
+        self._start_time: float | None = None
         self._live: Live | None = None
         self._running: bool = False
         self._wired: bool = False
+        self._frozen_elapsed: float | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -42,12 +44,14 @@ class AgentStatusBar:
         if self._running:
             return
         self._running = True
+        self._start_time = time.monotonic()
+        self._frozen_elapsed = None
         
         initial = self._build_renderable()
         self._live = Live(
             initial,
             console=self._console,
-            transient=True,
+            transient=False,
             auto_refresh=False,
         )
         self._live.__enter__()
@@ -56,6 +60,8 @@ class AgentStatusBar:
         """Tear down the Live context."""
         if not self._running:
             return
+        if self._start_time is not None:
+            self._frozen_elapsed = time.monotonic() - self._start_time
         self._running = False
         live = self._live
         self._live = None
@@ -127,6 +133,14 @@ class AgentStatusBar:
                 pass
             self._update_live()
 
+    def _get_duration(self) -> str:
+        if self._start_time is None:
+            return ""
+        if self._frozen_elapsed is not None:
+            return f" [{self._frozen_elapsed:.1f}s]"
+        elapsed = time.monotonic() - self._start_time
+        return f" [{elapsed:.1f}s]"
+
     # ── Rendering ──────────────────────────────────────────────────────
 
     def _update_live(self) -> None:
@@ -156,7 +170,7 @@ class AgentStatusBar:
             else:
                 ui_state = UIState.IDLE
                 
-            parts.append(StatusLine(ui_state, context=phase, hide_verb=True))
+            parts.append(StatusLine(ui_state, context=phase, hide_verb=False))
             
             if i < len(self.PHASES) - 1:
                 parts.append(Text(" → ", style=SEMANTIC.text_muted.to_rich_style()))
@@ -164,6 +178,10 @@ class AgentStatusBar:
         if self._step is not None:
             parts.append(Text("  │  ", style=SEMANTIC.text_muted.to_rich_style()))
             parts.append(Text(f"Step {self._step}", style=SEMANTIC.accent.to_rich_style()))
+            
+        dur = self._get_duration()
+        if dur:
+            parts.append(Text(dur, style=SEMANTIC.text_muted.to_rich_style()))
             
         return SectionPanel(
             title="",

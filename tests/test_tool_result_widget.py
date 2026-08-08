@@ -394,6 +394,8 @@ def test_error_without_reason_omits_segment():
     """Skeleton equality must still hold with the segment absent — SUCCESS and reasonless-ERROR share the skeleton."""
     import re
     from ui.design.icons import Icon
+    from ui.design.primitives.personality import style_of
+    from ui.design.state import UIState
     
     ok = ToolResultWidget("shell", "out 0", success=True)
     err = ToolResultWidget("shell", "out 0", success=False)
@@ -401,8 +403,8 @@ def test_error_without_reason_omits_segment():
     def norm(s: str) -> str:
         s = (s.replace(Icon.glyph(Icon.SUCCESS), "O")
               .replace(Icon.glyph(Icon.ERROR), "O")
-              .replace("ok", "V")
-              .replace("error", "V"))
+              .replace(style_of(UIState.SUCCESS).verb, "V")
+              .replace(style_of(UIState.ERROR).verb, "V"))
         return re.sub(r" +", " ", s).strip()
         
     a, b = _render_to_string(ok), _render_to_string(err)

@@ -1,19 +1,21 @@
 import pytest
 from unittest.mock import MagicMock
 from engine.state import GoalSpec, parse_goal_command, build_goal_block, RuntimeState
-from ui.repl_termux import REPL
+from core.commands.goal import handle_goal_command
 from engine.loop import ExecutionLoop
 
 def test_repl_goal_panel_rendering():
-    """REPL renders a non-transient goal panel"""
-    repl = REPL(bridge=MagicMock())
-    repl._loop = MagicMock()
-    repl._loop.state.active_goal = GoalSpec(raw_prompt="test", success_criteria="pass")
-    repl._bridge = MagicMock()
-    
-    result = repl._handle_goal_command("/goal test || pass")
-    assert result is not None
-    assert "Goal set" in result
+    """Goal command sets active_goal on the agent state (via core.commands.goal)."""
+    # V7: class REPL removed.  We now test handle_goal_command directly.
+    mock_agent = MagicMock()
+    mock_state = MagicMock(spec=["active_goal"])
+    mock_agent.state = mock_state
+
+    spec = handle_goal_command("/goal test || pass", agent=mock_agent)
+
+    assert spec is not None
+    assert spec.raw_prompt == "test"
+    assert spec.success_criteria == "pass"
 
 def test_loop_injects_active_goal_into_context():
     """ExecutionLoop injects goal block into system message"""
