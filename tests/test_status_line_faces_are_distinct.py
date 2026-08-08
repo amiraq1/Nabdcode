@@ -1,4 +1,4 @@
-"""Am+8 C1 guard: the six visible faces must stay six.
+"""Am+8 C1 guard: the seven visible faces must stay seven.
 
 Human ruling (Am, 2026-08-06 13:14 - "1A 2A 3B"). C1 executes 1A only.
 Reasoning (assistant, accepted by that ruling): DISABLED borrows the ERROR
@@ -12,13 +12,14 @@ from tests.support.render import make_console
 from ui.design.primitives import StatusLine
 from ui.design.state import UIState
 
-_SIX = (
+_FACES = (
     UIState.THINKING,
     UIState.RUNNING,
     UIState.SUCCESS,
     UIState.WARNING,
     UIState.ERROR,
     UIState.DISABLED,
+    UIState.IDLE,
 )
 
 
@@ -36,6 +37,10 @@ def test_disabled_does_not_wear_the_error_face():
     )
 
 
-def test_six_states_render_six_distinct_lines():
-    lines = [_render(s) for s in _SIX]
-    assert len(set(lines)) == len(_SIX), lines
+def test_seven_states_render_seven_distinct_lines():
+    lines = [_render(s) for s in _FACES]
+    assert len(set(lines)) == len(_FACES), dict(zip((st.name for st in _FACES), lines))
+
+
+# Widened by human ruling (Am, 2026-08-08 - R-4.5.1): the seventh face
+# Personality.PENDING (UIState.IDLE) now carries distinctness coverage.
