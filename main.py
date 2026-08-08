@@ -147,7 +147,7 @@ status_bar = AgentStatusBar()
 def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
     """Subscribe all event handlers. Every output goes through renderer."""
     from core.kernel.events import bus
-    from engine.ui_theme import map_tool_to_badge, select_status_verb
+    from engine.ui_theme import map_tool_to_badge
 
     renderer = ctx.renderer
     metrics = ctx.metrics
@@ -166,8 +166,6 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         _token_buf = ""
         _held_buf = ""
         _turn_index += 1
-        verb = select_status_verb(stage=_last_stage, last_tool=_last_tool_name, turn_index=_turn_index)
-        renderer.status_start(verb)
         status_bar.start()
 
     def _on_llm_token(p: dict) -> None:
