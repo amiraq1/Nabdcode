@@ -219,14 +219,11 @@ class TestD09GuardImports(unittest.TestCase):
     def test_dag_terminal_node_executes(self):
         from core.dag.nodes.terminal import TerminalNode
         from core.dag.context import NabdExecutionContext
-        # S-2 consent contract: the terminal node executes AGENT_SHELL through
-        # default_guard — wire an explicit approving callback under test.
-        from core.kernel.subprocess_guard import default_guard
-        with patch.object(default_guard, "_consent", lambda name, args: True):
-            ctx = NabdExecutionContext(
-                workspace_dir=".", shared_memory={"pending_command": "echo dag_ok"}
-            )
-            edge = TerminalNode().execute(ctx)
+
+        ctx = NabdExecutionContext(
+            workspace_dir=".", shared_memory={"pending_command": "echo dag_ok"}
+        )
+        edge = TerminalNode().execute(ctx)
         self.assertEqual(edge.target_node_id, "end")
         self.assertIn("dag_ok", ctx.shared_memory.get("terminal_output", ""))
 

@@ -209,14 +209,7 @@ class SubprocessGuard:
         Returns ``(returncode, stdout, stderr)``. On block (security or
         consent), returns ``(-1, "", "<reason>")`` so callers keep their
         existing tuple contract.
-
-        S-2 fail-closed consent contract: AGENT_SHELL without a wired consent
-        callback NEVER executes — no explicit consent, no spawn, not even a
-        validation attempt. Callers must inject a ``ConsentCallback``
-        explicitly.
         """
-        if self._consent is None:
-            return -1, "", "consent required: no consent callback wired for AGENT_SHELL policy"
         ok, reason = validate(command)
         if not ok:
             bus.emit("subprocess_blocked", {

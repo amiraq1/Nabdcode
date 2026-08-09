@@ -15,7 +15,6 @@ import sys
 import time
 import unittest
 from io import StringIO
-from unittest.mock import patch
 
 from core.sanitize import sanitize, strip_ansi_sequences
 from core.parser import normalize, validate_tool_call
@@ -80,12 +79,7 @@ class TestSubsystemIntegration(unittest.TestCase):
         self.assertTrue(ok, f"Expected valid tool call after sanitization, got {err}")
 
     def test_subprocess_safe_execute_command_sanitization(self):
-        # S-2 consent contract: safe_execute_command routes through
-        # default_guard — wire an explicit approving callback so execution
-        # is authorized, then verify output sanitization.
-        from core.kernel.subprocess_guard import default_guard
-        with patch.object(default_guard, "_consent", lambda name, args: True):
-            code, out, err = safe_execute_command("python3 tests/helper_ansi_emitter.py")
+        code, out, err = safe_execute_command("python3 tests/helper_ansi_emitter.py")
         self.assertEqual(code, 0)
         self.assertNotIn("\x1b", out)
         self.assertNotIn("\x00", out)

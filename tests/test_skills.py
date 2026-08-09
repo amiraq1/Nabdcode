@@ -238,11 +238,7 @@ class TestNativeSkillsLoader(unittest.TestCase):
 
             state = type("S", (), {"shell_permissions": ShellPermissions()})()
             log = EvidenceLog()
-            # S-2 consent contract: ShellTool's AGENT_SHELL path runs through
-            # default_guard — wire an explicit approving callback under test.
-            from core.kernel.subprocess_guard import default_guard
-            with patch.object(default_guard, "_consent", lambda name, args: True):
-                result = execute_skill(skill, state=state, evidence_log=log)
+            result = execute_skill(skill, state=state, evidence_log=log)
 
             # Allowed_tools merged into perms as ALLOW rules (glob match).
             from core.permissions import PermissionEngine, PermissionDecision
@@ -291,13 +287,9 @@ class TestNativeSkillsLoader(unittest.TestCase):
             pin_workspace_root(Path(tmp))
             
             # args carries the target path; must substitute {target}.
-            # S-2 consent contract: ShellTool's AGENT_SHELL path runs through
-            # default_guard — wire an explicit approving callback under test.
-            from core.kernel.subprocess_guard import default_guard
-            with patch.object(default_guard, "_consent", lambda name, args: True):
-                result = execute_skill(
-                    skill, state=state, evidence_log=EvidenceLog(), args=target
-                )
+            result = execute_skill(
+                skill, state=state, evidence_log=EvidenceLog(), args=target
+            )
             self.assertTrue(result.success, msg=result.stderr)
             self.assertIn("hello from skill", result.stdout)
 
