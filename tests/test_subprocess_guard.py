@@ -16,14 +16,17 @@ class TestSubprocessGuardAgentShell(unittest.TestCase):
     """AGENT_SHELL policy: validate() gate + consent seam."""
 
     def test_safe_command_executes(self):
-        guard = SubprocessGuard()
+        # S-2 consent contract: execution requires an explicitly wired
+        # approving callback — no execution without explicit consent.
+        guard = SubprocessGuard(consent_callback=lambda name, args: True)
         code, out, err = guard.run_agent_command("echo hello", timeout=5)
         self.assertEqual(code, 0)
         self.assertIn("hello", out)
 
     def test_dangerous_command_blocked(self):
-        # `rm` is not whitelisted by the kernel security engine.
-        guard = SubprocessGuard()
+        # `rm` is not whitelisted by the kernel security engine. Explicit
+        # consent approves, but the security validator still blocks (S-2).
+        guard = SubprocessGuard(consent_callback=lambda name, args: True)
         code, out, err = guard.run_agent_command("rm -rf /", timeout=5)
         self.assertEqual(code, -1)
         self.assertIn("Security Violation", err)

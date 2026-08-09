@@ -409,10 +409,14 @@ def test_timeout_is_reported_not_swallowed():
     """§8/§9: A timeout must return clear error, not be swallowed."""
     # safe_execute_command returns a structured timeout tuple
     from core.utils import safe_execute_command
+    # S-2 consent contract: wire an explicit approving callback so the
+    # command is authorized and reaches the timeout path under test.
+    from core.kernel.subprocess_guard import default_guard
     # Use a command that will timeout quickly — we pass a very short timeout
-    returncode, stdout, stderr = safe_execute_command(
-        "sleep 10", timeout=1
-    )
+    with patch.object(default_guard, "_consent", lambda name, args: True):
+        returncode, stdout, stderr = safe_execute_command(
+            "sleep 10", timeout=1
+        )
     assert returncode == -1, (
         f"Expected returncode -1 for timeout, got {returncode}"
     )
