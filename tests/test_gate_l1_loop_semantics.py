@@ -16,21 +16,21 @@ class TestGateL1TruthTableSemantics(TestCase):
         ('engine/_tool_runner.py', 144, 'PROCEED'),
         ('engine/loop.py', 387, 'TERMINATE'),
         ('engine/loop.py', 388, 'CONTINUE'),
-        ('engine/loop.py', 805, 'TERMINATE'),
-        ('engine/loop.py', 826, 'TERMINATE'),
-        ('engine/loop.py', 830, 'PROCEED'),
-        ('engine/loop.py', 912, 'CONTINUE'),
-        ('engine/loop.py', 917, 'CONTINUE'),
-        ('engine/loop.py', 919, 'PROCEED'),
-        ('engine/loop.py', 954, 'CONTINUE'),
-        ('engine/loop.py', 960, 'PROCEED'),
-        ('engine/loop.py', 994, 'CONTINUE'),
-        ('engine/loop.py', 1016, 'CONTINUE'),
-        ('engine/loop.py', 1019, 'PROCEED'),
-        ('engine/loop.py', 1052, 'PROCEED'),
-        ('engine/loop.py', 1657, 'TERMINATE'),
-        ('engine/loop.py', 1660, 'TERMINATE'),
-        ('engine/loop.py', 1678, 'CONTINUE'),
+        ('engine/loop.py', 811, 'TERMINATE'),
+        ('engine/loop.py', 832, 'TERMINATE'),
+        ('engine/loop.py', 836, 'PROCEED'),
+        ('engine/loop.py', 918, 'CONTINUE'),
+        ('engine/loop.py', 923, 'CONTINUE'),
+        ('engine/loop.py', 925, 'PROCEED'),
+        ('engine/loop.py', 960, 'CONTINUE'),
+        ('engine/loop.py', 966, 'PROCEED'),
+        ('engine/loop.py', 1000, 'CONTINUE'),
+        ('engine/loop.py', 1022, 'CONTINUE'),
+        ('engine/loop.py', 1025, 'PROCEED'),
+        ('engine/loop.py', 1058, 'PROCEED'),
+        ('engine/loop.py', 1663, 'TERMINATE'),
+        ('engine/loop.py', 1666, 'TERMINATE'),
+        ('engine/loop.py', 1684, 'CONTINUE'),
     ]
 
     def test_truth_table_every_return_site_enumerated(self):
@@ -72,7 +72,7 @@ class TestGateL1TruthTableSemantics(TestCase):
 
     def test_no_security_gate_skip_per_signal(self):
         """Security checks correctly return CONTINUE to block tools or PROCEED to evaluate further."""
-        sec_guards = [s for s in self.MANIFEST_AST_SITES if s[0] == "engine/loop.py" and s[1] in (994, 1016, 1019, 1052)]
+        sec_guards = [s for s in self.MANIFEST_AST_SITES if s[0] == "engine/loop.py" and s[1] in (1000, 1022, 1025, 1058)]
         self.assertTrue(any(s[2] == "CONTINUE" for s in sec_guards))
         self.assertTrue(any(s[2] == "PROCEED" for s in sec_guards))
         self.assertTrue(all(s[2] in ("CONTINUE", "PROCEED") for s in sec_guards))

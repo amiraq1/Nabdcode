@@ -8,13 +8,14 @@ from engine.state import RuntimeState
 @pytest.fixture(autouse=True)
 def _register_fallback_tools():
     from engine.tool_registry import registry
-    from tools import SearchMemoryTool, TodoWriteTool, ShellTool, BrowserTool
+    from tools import SearchMemoryTool, TodoWriteTool, ShellTool, BrowserTool, FileSystemTool
     from core.todo import TodoManager
     from core.storage import UnifiedStorage
-    
+
     registry.register(SearchMemoryTool())
     registry.register(TodoWriteTool(todo_manager=TodoManager(None)))
     registry.register(ShellTool())
+    registry.register(FileSystemTool())
     registry.register(BrowserTool(workspace_dir=tempfile.gettempdir()))
 
 
@@ -31,13 +32,14 @@ def test_fallback_mode_activates_after_two_failures():
 
 
 def test_fallback_mode_filters_tools():
-    """Only final_answer, search_memory, todo_write available in fallback"""
+    """Fallback mode exposes final_answer, search_memory, todo_write,
+    execute_shell, and file_system (per R-UI-1). Dangerous tools stay hidden."""
     loop = ExecutionLoop(state=RuntimeState(session_id="test_fb"))
     loop.state.is_fallback_mode_active = True
     available = loop.get_available_tools()
-    assert set(available.keys()) == {"final_answer", "search_memory", "todo_write"}
-    assert "execute_shell" not in available
+    assert set(available.keys()) == {"final_answer", "search_memory", "todo_write", "execute_shell", "file_system"}
     assert "browser_action" not in available
+    assert "python_repl" not in available
 
 
 def test_fallback_mode_restores_on_success():

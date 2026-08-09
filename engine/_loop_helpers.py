@@ -194,7 +194,7 @@ def _is_thought_only(response_text: str) -> bool:
 
 MAX_SELF_CORRECT: Final[int] = 3
 MAX_PROVIDER_FAIL_STREAK: Final[int] = 3
-FALLBACK_ALLOWED_TOOLS: Final[set[str]] = {"final_answer", "search_memory", "todo_write"}
+FALLBACK_ALLOWED_TOOLS: Final[set[str]] = {"final_answer", "search_memory", "todo_write", "execute_shell", "file_system"}
 
 # Phase 4.5 — anti-frustration guards observed in live sessions:
 #  • Cap consecutive reasoning rounds that produce NO new tool call. After this

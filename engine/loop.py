@@ -549,8 +549,14 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                     # control message by the Convergence Gate instead).
                     if getattr(self, "_exact_action_mode", False):
                         _exclude: set[str] = {"final_answer"}
+                    elif getattr(self.state, "is_fallback_mode_active", False):
+                        # Fallback mode (R-UI-1): the model must be able to call
+                        # execute_shell and file_system to escape the fallback
+                        # loop. Only final_answer is excluded (injected by the
+                        # Convergence Gate as a system-level control message).
+                        _exclude = set()
                     else:
-                        # Normal/fallback: the Orchestrator is forbidden from
+                        # Normal mode: the Orchestrator is forbidden from
                         # calling execute_shell (security gate blocks it);
                         # exclude it from the FC schema so the model can never
                         # emit a blocked call via native FC.
