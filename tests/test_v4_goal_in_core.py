@@ -4,10 +4,11 @@ V4.1 Architecture Guard: handle_goal_command must live in core/commands/goal.py
 The "UI is a mirror" principle: state mutations (_active_goal, etc.)
 belong in core/, not in the UI layer.
 
-This guard ensures:
-1. core/commands/goal.py is importable with handle_goal_command
-2. It accepts (text, agent) and returns the GoalSpec or None
-3. ui/repl_termux.py's _handle_goal_command delegates to core
+V-BURY-1 (Am, 2026-08-09): the dead UI wrapper ``_handle_goal_command`` in
+ui/repl_termux.py was buried with the orphaned async REPL (run_repl). The
+delegation contract now resolves entirely in core: core/commands/goal.py is
+the ONLY home of handle_goal_command, and the UI layer no longer defines a
+goal wrapper at all.
 """
 import ast
 import pathlib
@@ -28,23 +29,23 @@ def test_core_commands_goal_module_exists():
     )
 
 
-def test_ui_repl_delegates_goal_to_core():
-    """AST guard: _handle_goal_command in repl_termux must import from core.commands.goal."""
+def test_ui_repl_no_longer_wraps_goal_command():
+    """AST guard: _handle_goal_command must NOT be defined in ui/repl_termux.py.
+
+    V-BURY-1: the dead UI wrapper was buried with run_repl. Goal logic lives
+    ONLY in core/commands/goal.py — the UI layer must not resurrect a wrapper.
+    """
     src = pathlib.Path("ui/repl_termux.py").read_text()
     tree = ast.parse(src)
-
-    # Look for 'from core.commands.goal import' or 'import core.commands.goal'
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            if node.module and "core.commands.goal" in node.module:
-                return  # Found delegation import
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if "core.commands.goal" in alias.name:
-                    return
-
-    raise AssertionError(
-        "ui/repl_termux.py does not import from core.commands.goal — "
-        "goal logic must be delegated to core/, not embedded in UI. "
+    wrappers = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "_handle_goal_command"
+    ]
+    assert not wrappers, (
+        "_handle_goal_command must NOT be defined in ui/repl_termux.py — "
+        "it was buried with run_repl (V-BURY-1). Goal logic lives ONLY in "
+        "core/commands/goal.py. "
         "V4.1 fix: extract _handle_goal_command to core/commands/goal.py"
     )

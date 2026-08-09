@@ -1,6 +1,11 @@
 """
 V4.2 Architecture Guard: handle_compact_command must live in core/commands/compact.py
 V4.3 Architecture Guard: handle_skill_command must live in core/commands/skill.py
+
+V-BURY-1 (Am, 2026-08-09): the dead UI wrappers ``_handle_compact_command``
+and ``_handle_skill_command`` in ui/repl_termux.py were buried with the
+orphaned async REPL (run_repl). The delegation contract now resolves
+entirely in core — the UI layer defines no wrappers at all.
 """
 import ast
 import importlib
@@ -23,21 +28,24 @@ def test_core_commands_compact_module_exists():
     )
 
 
-def test_ui_repl_delegates_compact_to_core():
-    """AST guard: _handle_compact_command in repl_termux must import from core.commands.compact."""
+def test_ui_repl_no_longer_wraps_compact_command():
+    """AST guard: _handle_compact_command must NOT be defined in ui/repl_termux.py.
+
+    V-BURY-1: the dead UI wrapper was buried with run_repl. Compact logic
+    lives ONLY in core/commands/compact.py.
+    """
     src = pathlib.Path("ui/repl_termux.py").read_text()
     tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            if node.module and "core.commands.compact" in node.module:
-                return
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if "core.commands.compact" in alias.name:
-                    return
-    raise AssertionError(
-        "ui/repl_termux.py does not import from core.commands.compact — "
-        "compact logic must be delegated to core/. "
+    wrappers = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "_handle_compact_command"
+    ]
+    assert not wrappers, (
+        "_handle_compact_command must NOT be defined in ui/repl_termux.py — "
+        "it was buried with run_repl (V-BURY-1). Compact logic lives ONLY in "
+        "core/commands/compact.py. "
         "V4.2 fix: delegate _handle_compact_command to core/commands/compact.py"
     )
 
@@ -69,21 +77,24 @@ def test_core_commands_skill_module_exists():
     )
 
 
-def test_ui_repl_delegates_skill_to_core():
-    """AST guard: _handle_skill_command in repl_termux must import from core.commands.skill."""
+def test_ui_repl_no_longer_wraps_skill_command():
+    """AST guard: _handle_skill_command must NOT be defined in ui/repl_termux.py.
+
+    V-BURY-1: the dead UI wrapper was buried with run_repl. Skill logic
+    lives ONLY in core/commands/skill.py.
+    """
     src = pathlib.Path("ui/repl_termux.py").read_text()
     tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            if node.module and "core.commands.skill" in node.module:
-                return
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if "core.commands.skill" in alias.name:
-                    return
-    raise AssertionError(
-        "ui/repl_termux.py does not import from core.commands.skill — "
-        "skill logic must be delegated to core/. "
+    wrappers = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "_handle_skill_command"
+    ]
+    assert not wrappers, (
+        "_handle_skill_command must NOT be defined in ui/repl_termux.py — "
+        "it was buried with run_repl (V-BURY-1). Skill logic lives ONLY in "
+        "core/commands/skill.py. "
         "V4.3 fix: delegate _handle_skill_command to core/commands/skill.py"
     )
 
