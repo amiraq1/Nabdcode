@@ -21,6 +21,15 @@ S-2-REDESIGN v1.0 — حكم بشري، المصدر: المشغّل البشر�
      S-2 المرجوع (19097c9): fail-closed بلا توصيل فعلي = كسر وظيفي فوري
      (كان يكسر مسار ShellTool، وهنا كان سيكسر /refactor و /dag).
 
+S-2-FINAL — إغلاق الدين (توصيل فعلي + fail-closed):
+  1. consent_callback يُوصَّل فعليًا: main.py (مسار /refactor) ينشئ
+     ConsentManager ويُكيِّفه إلى ConsentCallback (confirm()→None = موافقة)
+     ويمرره عبر launch_nabdos_core(consent_callback=...) إلى TerminalNode.
+  2. عند غياب التماس: **fail-closed** — حجب محلي في هذه العقدة فقط؛ لا
+     يمس default_guard العام ولا مسار ShellTool. الاستثناء الموثق:
+     core/multi_agent_orchestrator.py:538 يبني TerminalNode() بلا تماس —
+     لا مستدعٍ إنتاجي له (لا main ولا engine يستوردانه) — دين جانبي موثق.
+
 ملاحظة صدق (القياس): default_guard.run_agent_command يستدعي validate()
 داخليًا كخط دفاع خلفي — فالأمر الخطر لم يكن يُنفَّذ غالبًا حتى قبل هذا
 الإصلاح. الثغرتان الحقيقيتان اللتان يُغلقان هنا: (أ) غياب الموافقة كليًا
@@ -82,10 +91,11 @@ class TerminalNode(BaseNode):
                 context.shared_memory['human_feedback'] = f"Command blocked: no approval for '{command}'"
                 return Edge(target_node_id="reasoner_node", reason="Consent denied")
         else:
-            # قرار بشري موثق: fail-open كدين صريح — لا تماس موصول بعد (الوضع
-            # الإنتاجي الحالي). يُنفَّذ بمستوى الفحص المرفوع فقط. بند مفتوح
-            # في DEBT_LEDGER حتى يُوصَّل consent من main.py (عقد منفصل).
-            print(" ⚠️ [Terminal] consent_callback not wired — fail-open (documented debt, see DEBT_LEDGER)")
+            # S-2-FINAL: fail-closed — لا تنفيذ بلا تماس موصول. الحجب محلي في
+            # هذه العقدة فقط؛ لا يمس default_guard العام ولا مسار ShellTool.
+            print(" 🚫 [Terminal] consent_callback not wired — fail-closed (S-2-FINAL)")
+            context.shared_memory['human_feedback'] = "Command blocked: consent_callback not wired (fail-closed)"
+            return Edge(target_node_id="reasoner_node", reason="Consent denied (no callback wired)")
 
         # 3. التنفيذ الفعلي (Subprocess Execution) — عبر الحارس المركزي (shell=False)
         print(" ⚙️ [Terminal] Executing command in isolated shell...")

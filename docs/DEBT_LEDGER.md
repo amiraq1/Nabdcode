@@ -665,3 +665,16 @@ Deleted after this record was written. Reflog retains them for 30 days.
 - ملاحظة توصيل: التماس يمرّر tool_name="execute_shell" (اصطلاح الحارس
   subprocess_guard L258/369) — أي مُكيّف نحو ConsentManager يعمل فورًا
   لأن ConsentPolicy.requires_confirmation يفعل عند هذا الاسم فقط.
+
+## S-2-FINAL (2026-08-09) — إغلاق بند S-2-REDESIGN (توصيل consent فعلي)
+- الحالة: **مغلق** — consent_callback موصول فعليًا في مسار الإنتاج:
+  main.py (/refactor) ينشئ ConsentManager ويُكيِّفه (confirm()→None=موافقة)
+  ويمرره عبر launch_nabdos_core(consent_callback=...) إلى TerminalNode.
+- السلوك: fail-closed محلي في TerminalNode عند غياب التماس (لا يمس
+  default_guard العام ولا مسار ShellTool).
+- الاستثناء الموثق: core/multi_agent_orchestrator.py:538 يبني
+  TerminalNode() بلا تماس — لا مستدعٍ إنتاجي له (لا main ولا engine
+  يستوردانه؛ مراجع docstring فقط) — خارج النطاق؛ إن أُعيد إحياؤه يجب
+  حقن التماس أولًا (سيحجب fail-closed عندها).
+- الحارس: tests/test_terminal_node_consent_is_wired.py — 4 عقود (ع2/ع3
+  وُلدا أحمرين — التوصيل مفقود — واخضرّا 4/4 × بذرتين).

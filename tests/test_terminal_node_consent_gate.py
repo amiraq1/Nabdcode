@@ -9,6 +9,11 @@
     الفحص المرفوع مع تحذير مطبوع) — توصيل ConsentManager الحقيقي من main.py
     بندٌ مفتوح في DEBT_LEDGER، عقد منفصل لاحق (درس S-2 المرجوع 19097c9:
     fail-closed بلا توصيل فعلي = كسر وظيفي فوري).
+  - **S-2-FINAL (لاحق — أُغلق البند):** consent موصول فعليًا من main.py
+    عبر launch_nabdos_core(consent_callback=...) إلى TerminalNode، والسلوك
+    عند غياب التماس أصبح fail-closed محليًا في العقدة (حجب قبل أي تنفيذ؛
+    لا يمس default_guard العام ولا مسار ShellTool). ع2a أدناه أُعيد تأطيره
+    ليوثّق الحجب بدل التنفيذ.
 
 الفجوة المقيسة (خام §1 — لا افتراض):
   - _is_command_safe (قائمة سوداء محلية) تسمح تجريبيًا بـ /bin/rm -rf / ،
@@ -28,9 +33,9 @@
     صيغ كبوابة — يتوقّع False بعد الإصلاح. **قبل الإصلاح يفشل أحمر**،
     موثّقًا أن القائمة السوداء كانت تسمح بالحمولة؛ بعد §3.1 يخضرّ،
     مثبتًا أن رفع الفحص أغلق التجاوز.
-  - ع2a (…executes_without_any_consent_today): وثائقي أخضر دائم —
-    يؤكد الحالة الإنتاجية الحالية (تنفيذ بلا موافقة) ويبقى أخضر بعد
-    الإصلاح بموجب قرار fail-open الموثّق.
+  - ع2a (…blocks_without_consent_since_final): وثائقي أُعيد تأطيره بقرار
+    S-2-FINAL — غياب التماس = حجب fail-closed (لا تنفيذ). يخضرّ الآن؛
+    لو أُعيد إحياء fail-open (تراجع S-2-FINAL) عاد أحمر.
   - ع2b (…denial_blocks_execution): البوابة الحمراء الحقيقية —
     تماس الرفض يجب أن يحجب قبل التنفيذ. **قبل الإصلاح يفشل أحمر**
     (لا تماس موجود → يُنفَّذ)، بعد §3.2 يخضرّ.
@@ -81,17 +86,24 @@ def test_dangerous_command_outside_blacklist_executes_unchecked():  # ع1
         )
 
 
-def test_terminal_node_executes_without_any_consent_today():  # ع2a
-    """وثائقي: بلا consent_callback (الوضع الإنتاجي الحالي) يُنفَّذ الأمر.
+def test_terminal_node_blocks_without_consent_since_final():  # ع2a — محدَّثة
+    """بوابة: بلا consent_callback → fail-closed (S-2-FINAL) — لا تنفيذ.
 
-    يؤكد الحالة الحالية (غياب الموافقة في مسار DAG). يبقى أخضر بعد
-    الإصلاح بموجب قرار fail-open الموثّق (الدين يُسجَّل، لا يُخفى).
+    سابقة العقد (S-2-REDESIGN): وثائقي أخضر دائم يؤكد تنفيذًا بلا موافقة
+    بموجب قرار fail-open الموثّق. أُلغي ذلك الحكم بقرار S-2-FINAL (توصيل
+    consent الفعلي من main.py + fail-closed): الآن غياب التماس يحجب قبل أي
+    تنفيذ. لو أُعيد إحياء fail-open (تراجع S-2-FINAL) عاد هذا العقد أحمر.
     """
-    node = TerminalNode()
-    edge = node.execute(_ctx(SAFE_CMD))
-    # الخروج الناجح يوجّه إلى "end" — أي أن الأمر نُفِّذ فعليًا
-    assert edge.target_node_id == "end", (
-        f"expected execution (no consent wired today), got edge={edge!r}"
+    ctx = _ctx(SAFE_CMD)
+    node = TerminalNode()  # بلا callback
+    edge = node.execute(ctx)
+
+    assert "Consent" in edge.reason, f"expected consent-denied edge, got {edge!r}"
+    assert edge.target_node_id == "reasoner_node", (
+        f"blocked command must route back to reasoner, got {edge!r}"
+    )
+    assert "terminal_output" not in ctx.shared_memory, (
+        "blocked command must NOT have executed (no output recorded)"
     )
 
 

@@ -512,10 +512,18 @@ def _process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str
             from llm_router import get_secure_model
             from tools.secure_tools import SecureGraphifyTool
             from core.dag.launcher import launch_nabdos_core
+            from engine.consent import ConsentManager
             llm = get_secure_model()
             ws = str(get_workspace_root() if 'get_workspace_root' in globals() else Path.cwd())
             graphify = SecureGraphifyTool(workspace_dir=ws)
             taste_rules = ["All functions MUST have strict Type Hints.", "Use clear docstrings and comments."]
+            # S-2-FINAL: توصيل الموافقة الفعلي — ConsentManager يُكيَّف إلى
+            # ConsentCallback (confirm()→None = موافقة). كل أمر DAG طرفي
+            # يُعرض على البشر قبل التنفيذ (أو يُسجَّل رفضًا عند غياب الإجابة).
+            consent_manager = ConsentManager()
+            consent_callback = lambda t, a: consent_manager.confirm(
+                t, a, evidence_log=ctx.evidence_log, step=getattr(state, "step_count", 0)
+            ) is None
             launch_nabdos_core(
                 llm_engine=llm,
                 graphify_tool=graphify,
@@ -523,6 +531,7 @@ def _process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str
                 target_files=target_files_list,
                 taste_rules=taste_rules,
                 resume=is_resume,
+                consent_callback=consent_callback,
             )
         except Exception as dag_err:
             sys.stdout.write(f"\n\033[91m❌ [DAG Launcher Error] {dag_err}\033[0m\n\n")

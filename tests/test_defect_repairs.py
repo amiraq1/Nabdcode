@@ -223,7 +223,11 @@ class TestD09GuardImports(unittest.TestCase):
         ctx = NabdExecutionContext(
             workspace_dir=".", shared_memory={"pending_command": "echo dag_ok"}
         )
-        edge = TerminalNode().execute(ctx)
+        # S-2-FINAL: بلا تماس → fail-closed (حجب). نمرر تماسًا موافقًا كما
+        # يفعله الإنتاج الآن (main.py يُكيِّف ConsentManager إلى bool) —
+        # يبقى هذا العقد يختبر مسار التنفيذ الفعلي الذي كان D-09 يثبته.
+        node = TerminalNode(consent_callback=lambda tool_name, args: True)
+        edge = node.execute(ctx)
         self.assertEqual(edge.target_node_id, "end")
         self.assertIn("dag_ok", ctx.shared_memory.get("terminal_output", ""))
 

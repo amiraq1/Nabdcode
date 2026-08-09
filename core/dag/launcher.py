@@ -16,10 +16,12 @@ class EndNode(BaseNode):
         print("\n🎉 [End Node] Mission Accomplished. NabdOS Pipeline completed flawlessly.")
         return None
 
-def launch_nabdos_core(llm_engine, graphify_tool, workspace_dir: str, target_files: list, taste_rules: list, resume: bool = False) -> NabdExecutionContext:
+def launch_nabdos_core(llm_engine, graphify_tool, workspace_dir: str, target_files: list, taste_rules: list, resume: bool = False, consent_callback=None) -> NabdExecutionContext:
     """
     زر الإطلاق الرئيسي (The Ignition Switch).
     يجمع أدواتك (LLM, Graphify, Taste) ويطلقها في مسار حتمي صارم.
+    consent_callback: تماس موافقة يُحقن من الطبقة العليا (main.py) ويُمرَّر
+    إلى TerminalNode (S-2-FINAL). بلا تماس → TerminalNode يحجب fail-closed.
     """
     print("\n" + "═" * 65)
     print(" 🚀 ACTIVATING NABD-OS DETERMINISTIC KERNEL (EDGE AI) 🚀")
@@ -41,7 +43,7 @@ def launch_nabdos_core(llm_engine, graphify_tool, workspace_dir: str, target_fil
     engine.register_node(ReasonerNode(llm_engine=llm_engine))
     engine.register_node(SentinelNode())
     engine.register_node(ExecutorNode())
-    engine.register_node(TerminalNode())
+    engine.register_node(TerminalNode(consent_callback=consent_callback))
     engine.register_node(EndNode())
 
     # 4. الإطلاق (Ignition!)
