@@ -105,6 +105,25 @@ _PROVIDER_ENV_VARS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _normalize_api_key(key: str) -> str:
+    """Normalize a provider API key before use.
+
+    Am+9 (root cause fix): OpenRouter keys are case-sensitive and the
+    canonical prefix is lowercase ``sk-or-v1-...``.  A very common paste
+    error is a capitalised ``Sk-or-v1-...`` which the API rejects with
+    HTTP 401 (Missing Authentication header), silently accumulating
+    provider failures until the whole router enters cooldown.  Normalizing
+    the prefix prevents that failure mode.
+    """
+    if not key or not isinstance(key, str):
+        return key
+    stripped = key.strip()
+    if stripped.startswith("Sk-or-v1-") or stripped.startswith("SK-OR-V1-"):
+        # Rebuild the canonical lowercase prefix + the remainder after "v1-".
+        stripped = "sk-or-v1-" + stripped[len("Sk-or-v1-"):]
+    return stripped
+
+
 def _resolve_api_key(provider_name: str, api_key: str | None = None) -> str:
     """Resolve an LLM provider API key via a Config-First flow.
 
@@ -128,13 +147,13 @@ def _resolve_api_key(provider_name: str, api_key: str | None = None) -> str:
 
     if api_key:
         logger.debug("API key for %s supplied explicitly.", provider_name)
-        return api_key
+        return _normalize_api_key(api_key)
 
     for env_var in env_vars:
         value = os.getenv(env_var)
         if value:
             logger.debug("Fetched API key for %s from env (%s).", provider_name, env_var)
-            return value
+            return _normalize_api_key(value)
 
     logger.debug("No env key for %s; checking persistent config.", provider_name)
     try:
@@ -144,7 +163,7 @@ def _resolve_api_key(provider_name: str, api_key: str | None = None) -> str:
 
     if key:
         logger.debug("Fetched API key for %s from persistent config.", provider_name)
-        return key
+        return _normalize_api_key(key)
 
     tried = ", ".join(env_vars) if env_vars else "(none configured)"
     raise MissingAPIKeyError(
