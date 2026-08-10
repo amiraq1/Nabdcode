@@ -55,13 +55,21 @@ class TestBrand2TypingIndicator:
     # ── ع3: startup_logo_is_ascii ───────────────────────────────────────────
 
     def test_startup_logo_is_ascii(self):
-        """خرج nabd_logo.draw الافتراضي يحتوي '█' (NABDCODE مرجوع)."""
-        # After the revert, draw() contains the original ASCII banner.
+        """BRAND-3: draw() الافتراضي يُخرج ◈ agent (دنيا)؛ classic يحتوي █.
+
+        BRAND-3 يلغي عقد BRAND-2/revert: الافتراضي أصبح العلامة الدنيا.
+        render_logo("classic") تحفظ الـ ASCII.
+        """
         import inspect
         src = inspect.getsource(nabd_logo.draw)
-        assert "█" in src, "ASCII banner must contain █"
-        assert "NABDCODE" not in src or "◈ agent" not in src, \
-            "startup logo must be the ASCII banner, not ◈ agent"
+        # BRAND-3: draw() delegates to _draw_minimal — must reference ◈ agent
+        assert "◈" in src or "_draw_minimal" in src, (
+            "BRAND-3: draw() must reference ◈ mark or _draw_minimal"
+        )
+        # classic mode preserved via render_logo
+        classic_src = inspect.getsource(nabd_logo._draw_classic)
+        assert "█" in classic_src, "render_logo('classic') must still contain █"
+
 
     # ── ع4: prompt_wires_animated_indicator ─────────────────────────────────
 

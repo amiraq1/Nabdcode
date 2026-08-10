@@ -916,6 +916,7 @@ def _run_repl(
     from prompt_toolkit.history import InMemoryHistory
     from prompt_toolkit.formatted_text import ANSI, HTML
     from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.styles import Style
 
     plan_mode: bool = False
 
@@ -968,12 +969,18 @@ def _run_repl(
         nonlocal plan_mode
         plan_mode = not plan_mode
 
+    # BRAND-3: dark toolbar style — black background, dim text via SEMANTIC.
+    _toolbar_style = Style.from_dict({
+        "bottom-toolbar": f"bg:black {SEMANTIC.text_muted}",
+    })
+
     input_session = PromptSession(
         history=InMemoryHistory(),
         mouse_support=False,
         # Single-line mode: 'Enter' submits immediately even with pasted newlines.
         multiline=False,
         key_bindings=bindings,
+        style=_toolbar_style,
     )
 
     # Flush setup output before first prompt

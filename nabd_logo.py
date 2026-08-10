@@ -1,8 +1,16 @@
+"""nabd_logo.py — NABD OS startup identity.
+
+BRAND-3: Default mode shows only "◈ agent" in SEMANTIC.brand on black —
+no ASCII art, no metadata, no separator.  The classic ASCII logo is
+preserved via render_logo("classic").
+"""
 import os
 import shutil
 
 from rich.console import Console
+from rich.text import Text
 from core.kernel.subprocess_guard import default_guard
+from ui.design.theme.semantic import SEMANTIC
 
 # Force .env loading before reading OPENROUTER_MODEL for the banner.
 try:
@@ -23,45 +31,66 @@ def get_git_repository_name():
     return "Local Workspace"
 
 
-def draw(model_name=None):
+def render_logo(mode: str = "minimal", model_name: str | None = None) -> None:
+    """Render the startup identity.
+
+    Args:
+        mode: "minimal" (default) — shows only the ◈ agent mark in
+              SEMANTIC.brand on black.
+              "classic" — shows the original ASCII block art + metadata.
+        model_name: Passed to classic mode only.
+    """
+    if mode == "classic":
+        _draw_classic(model_name=model_name)
+    else:
+        _draw_minimal()
+
+
+def _draw_minimal() -> None:
+    """BRAND-3: minimal identity — ◈ agent in brand teal on black."""
+    # Hard ANSI reset — consistent Termux clear (through Rich)
+    console.print("\033c", end="")
+
+    mark = Text()
+    mark.append("◈ agent", style=f"bold {SEMANTIC.brand}")
+    console.print(mark)
+
+
+def _draw_classic(model_name: str | None = None) -> None:
+    """Original ASCII block logo + metadata line + separator."""
     if model_name is None:
         model_name = os.getenv("OPENROUTER_MODEL", "ORCA-FLASH").split("/")[-1]
-    # تقسيم أسطر الشعار لتلوين كل سطر بشكل مستقل
     logo_lines = [
         "█▄ █ ▄▀█ █▄▀ █▀▄ █▀▀ █▀█ █▀▄ █▀▀",  # السطر العلوي
         "█ ▀█ █▀█ █▄█ █▄▀ █▄▄ █▄█ █▄▀ ██▄"   # السطر السفلي
     ]
-
-    # تحديد الأكواد القياسية: الأول أبيض عريض، والثاني رصاصي/رمادي مخفف
     colors = [
         "[bold white]",  # Bold White
         "[grey35]",      # Dark Gray / Gray
     ]
     reset = "[/]"
 
-    # جلب اسم المستودع الحالي ديناميكياً
     repo_name = get_git_repository_name()
-
-    # صياغة معلومات النظام بعد حذف الـ Version
     metadata = f"Repo: {repo_name}  •  Model: {model_name}"
-
     columns, _ = shutil.get_terminal_size()
 
-    # Hard ANSI reset — consistent Termux clear (through Rich)
     console.print("\033c", end="")
 
-    # 1. طباعة الشعار وحساب التوسط يدوياً لتفادي تشويه الألوان
     for line, color in zip(logo_lines, colors):
         padding = max(0, (columns - len(line)) // 2)
         console.print(" " * padding + color + line + reset)
 
     console.print()
-
-    # 2. طباعة معلومات النظام النظيفة بمنتصف الشاشة
     console.print(metadata.center(columns))
     console.print("-" * columns)
 
 
+def draw(model_name=None):
+    """Backward-compatible entry point — calls minimal mode."""
+    _draw_minimal()
+
+
+# Aliases
 print_nabd_logo = draw
 
 if __name__ == "__main__":
