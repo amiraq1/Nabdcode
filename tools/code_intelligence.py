@@ -16,6 +16,7 @@ from typing import Any, Dict, Final, List, Optional, Tuple, Type
 
 from tools.base import BaseModel, BaseTool, Field
 from tools.models import ToolResult
+from tools.action_contract import invalid_action_result, normalize_action
 
 
 class CodeIntelligenceArgs(BaseModel):
@@ -70,15 +71,14 @@ class CodeIntelligenceTool(BaseTool):
         return target
 
     def execute(self, **kwargs) -> ToolResult:
-        action = kwargs.get("action", "").lower().strip()
+        raw_action = kwargs.get("action", "")
+        action = normalize_action(raw_action)
+        allowed_actions = ("list_symbols", "get_definition")
+        if action not in allowed_actions:
+            return invalid_action_result(self.name, raw_action, allowed_actions)
+
         path_str = str(kwargs.get("path", ".")).strip()
         symbol = str(kwargs.get("symbol", "")).strip()
-
-        if action not in ("list_symbols", "get_definition"):
-            return ToolResult(
-                success=False,
-                stderr="Invalid action. Allowed actions: 'list_symbols', 'get_definition'.",
-            )
 
         try:
             target = self._resolve(path_str)
