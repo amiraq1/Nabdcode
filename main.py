@@ -966,8 +966,6 @@ def _run_repl(
                 ).strip()
             except (KeyboardInterrupt, EOFError):
                 break
-            finally:
-                _prompt_active.clear()
 
             if not user_input:
                 continue
