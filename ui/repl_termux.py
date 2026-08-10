@@ -944,6 +944,8 @@ def extract_clean_answer(raw_text: Any) -> str:
 
 
 class TerminalVisualizer:
+    _step_start_time: float | None = None
+    _timed_step: object = None
     """المسؤول عن التقاط أحداث الـ Event Bus وتحويلها إلى لوحات بصرية متحركة داخل Termux"""
 
     def __init__(self, event_bus, state, register_listeners: bool = True):
@@ -1011,12 +1013,16 @@ class TerminalVisualizer:
                 _current_step = int(data["step"])
             except (ValueError, TypeError):
                 pass
+        # UI-CC-9: بدء التوقيت للخطوة الجديدة
+        if self._step_start_time is None or self._timed_step != data.get("step"):
+            self._step_start_time = time.monotonic()
+            self._timed_step = data.get("step")
         _erase_live_line()
         console.print(f"[dim]{format_status_message('thinking', _current_step)}[/dim]")
         # UI-CC-5: compact single-line status (Thinking active).
         # UI-CC-8: suppress duplicate compact lines.
         _compact = status_compact_line(
-            step=_current_step, elapsed=0.0,
+            step=_current_step, elapsed=time.monotonic() - (self._step_start_time or time.monotonic()),
             thinking=True, tools=False, generating=False,
         )
         if should_print_compact(self._last_compact, str(_compact)):
@@ -1044,7 +1050,7 @@ class TerminalVisualizer:
             # UI-CC-5: compact status line (Thinking done, Tools active).
             # UI-CC-8: suppress duplicate compact lines.
             _compact = status_compact_line(
-                step=_current_step, elapsed=0.0,
+                step=_current_step, elapsed=time.monotonic() - (self._step_start_time or time.monotonic()),
                 thinking=True, tools=True, generating=False,
             )
             if should_print_compact(self._last_compact, str(_compact)):
