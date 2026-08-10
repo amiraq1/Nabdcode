@@ -43,6 +43,7 @@ from ui.cc_style import (
     collapse_lines,
     error_line,
     final_answer_header,
+    should_print_compact,
     status_compact_line,
     status_line,
     thought_line,
@@ -950,6 +951,7 @@ class TerminalVisualizer:
         self.state = state
         self.live_context = None
         self._navigation_enabled: bool = False
+        self._last_compact: str | None = None  # UI-CC-8: dedup tracker
         if self.event_bus:
             self.event_bus._final_answer_rendered = False
         # Single-renderer rule (plan 1.1): only ONE renderer owns stdout. In
@@ -1012,10 +1014,14 @@ class TerminalVisualizer:
         _erase_live_line()
         console.print(f"[dim]{format_status_message('thinking', _current_step)}[/dim]")
         # UI-CC-5: compact single-line status (Thinking active).
-        console.print(status_compact_line(
+        # UI-CC-8: suppress duplicate compact lines.
+        _compact = status_compact_line(
             step=_current_step, elapsed=0.0,
             thinking=True, tools=False, generating=False,
-        ))
+        )
+        if should_print_compact(self._last_compact, str(_compact)):
+            console.print(_compact)
+            self._last_compact = str(_compact)
 
     def on_tool_started(self, data: dict):
         """إظهار رأس الأداة بأسلوب Claude Code (شارة + الوسيط الأساسي)."""
@@ -1036,10 +1042,14 @@ class TerminalVisualizer:
             else:
                 console.print(f"[{BADGE_STYLE}] {header} [/]")
             # UI-CC-5: compact status line (Thinking done, Tools active).
-            console.print(status_compact_line(
+            # UI-CC-8: suppress duplicate compact lines.
+            _compact = status_compact_line(
                 step=_current_step, elapsed=0.0,
                 thinking=True, tools=True, generating=False,
-            ))
+            )
+            if should_print_compact(self._last_compact, str(_compact)):
+                console.print(_compact)
+                self._last_compact = str(_compact)
 
             # اختيار لون السبينر حسب قبعة الوكيل الحالي
             color = "cyan" if role == "ORCHESTRATOR" else "green" if role == "CODER" else "yellow"

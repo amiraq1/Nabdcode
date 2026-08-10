@@ -274,3 +274,26 @@ def error_line(msg: str) -> "Text":
     t.append("✖ ERROR: ", style="bold red")
     t.append(str(msg), style="red")
     return t
+
+
+# ---------------------------------------------------------------------------
+# UI-CC-8: compact-line deduplication
+# ---------------------------------------------------------------------------
+
+def should_print_compact(last: "str | None", new: str) -> bool:
+    """Return True if *new* compact line should be printed.
+
+    Suppresses the line when it is character-for-character identical to the
+    previously printed compact line (*last*).  The first call (last=None)
+    always returns True.
+
+    Args:
+        last: The last compact line that was printed, or None if nothing has
+              been printed yet.
+        new:  The candidate compact line about to be printed.
+
+    Returns:
+        True  → print the line.
+        False → suppress (duplicate).
+    """
+    return last != new
