@@ -170,3 +170,75 @@ class CollapseStore:
 
 # Process-wide collapse store (UI-CC-3): /expand and future ctrl+o share it.
 collapse_store = CollapseStore()
+
+
+# ── UI-CC-5: compact CC-style lines (no heavy panels) ───────────────────────
+
+def final_answer_header() -> "Text":
+    """Build the FINAL ANSWER header line (◆ FINAL ANSWER + light rule).
+
+    Returns a rich ``Text`` (not a Panel) for clean scrollback output.
+    """
+    from rich.text import Text
+    t = Text()
+    t.append("◆ FINAL ANSWER", style="bold magenta")
+    t.append("\n" + "─" * 40, style="dim")
+    return t
+
+
+def status_compact_line(
+    step: int,
+    elapsed: float,
+    thinking: bool = False,
+    tools: bool = False,
+    generating: bool = False,
+) -> "Text":
+    """Build a single-line compact status: ✓/▶/○ phases + step + elapsed.
+
+    Done phases get a green ✓, the active phase a cyan ▶, pending a dim ○.
+    Format: ``✓ Thinking ✓ Tools ▶ Generating · Step N · [X.Xs]``
+    """
+    from rich.text import Text
+    t = Text()
+
+    def phase(label: str, done: bool, active: bool) -> None:
+        if done:
+            t.append("✓ ", style="green")
+            t.append(label, style="green")
+        elif active:
+            t.append("▶ ", style="cyan")
+            t.append(label, style="cyan")
+        else:
+            t.append("○ ", style="dim")
+            t.append(label, style="dim")
+
+    # The "active" phase is the first phase that is not yet done, in order.
+    active_phase = None
+    if not thinking:
+        active_phase = "Thinking"
+    elif not tools:
+        active_phase = "Tools"
+    elif not generating:
+        active_phase = "Generating"
+
+    phase("Thinking", thinking, active_phase == "Thinking")
+    t.append(" ", style="dim")
+    phase("Tools", tools, active_phase == "Tools")
+    t.append(" ", style="dim")
+    phase("Generating", generating, active_phase == "Generating")
+
+    t.append(f" · Step {step}", style="bold")
+    t.append(f" · [{elapsed:.1f}s]", style="dim")
+    return t
+
+
+def error_line(msg: str) -> "Text":
+    """Build a compact red error line: ``✖ ERROR: <msg>``.
+
+    Returns a rich ``Text`` (not a Panel).
+    """
+    from rich.text import Text
+    t = Text()
+    t.append("✖ ERROR: ", style="bold red")
+    t.append(str(msg), style="red")
+    return t

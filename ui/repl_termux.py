@@ -42,6 +42,9 @@ from ui.live_thought import LiveThoughtCompressor
 from core.utils import safe_strip
 from ui.cc_style import (
     collapse_lines,
+    error_line,
+    final_answer_header,
+    status_compact_line,
     status_line,
     thought_line,
     tool_header_line,
@@ -1007,6 +1010,11 @@ class TerminalVisualizer:
                 pass
         _erase_live_line()
         console.print(f"[dim]{format_status_message('thinking', _current_step)}[/dim]")
+        # UI-CC-5: compact single-line status (Thinking active).
+        console.print(status_compact_line(
+            step=_current_step, elapsed=0.0,
+            thinking=True, tools=False, generating=False,
+        ))
 
     def on_tool_started(self, data: dict):
         """إظهار رأس الأداة بأسلوب Claude Code (شارة + الوسيط الأساسي)."""
@@ -1026,6 +1034,11 @@ class TerminalVisualizer:
                 console.print(f"[{BADGE_STYLE}] {badge} [/] {arg}")
             else:
                 console.print(f"[{BADGE_STYLE}] {header} [/]")
+            # UI-CC-5: compact status line (Thinking done, Tools active).
+            console.print(status_compact_line(
+                step=_current_step, elapsed=0.0,
+                thinking=True, tools=True, generating=False,
+            ))
 
             # اختيار لون السبينر حسب قبعة الوكيل الحالي
             color = "cyan" if role == "ORCHESTRATOR" else "green" if role == "CODER" else "yellow"
@@ -1152,33 +1165,14 @@ class TerminalVisualizer:
 
         safe_width = min(console.size.width - 4, 80)
 
-        current_text = ""
-        panel = Panel(
-            Markdown(current_text),
-            border_style="neon_purple",
-            box=BOX_FINAL,
-            padding=(1, 2),
-            width=safe_width,
-            title="[bold neon_purple]◆ FINAL ANSWER[/bold neon_purple]",
-            subtitle="[dim]Task completed successfully[/dim]",
-            subtitle_align="right"
-        )
-
+        # UI-CC-5: compact header + Markdown, no heavy panel frame.
+        console.print("\n")
+        console.print(final_answer_header())
+        console.print(Markdown(output))
         console.print("\n")
 
-        words = output.split(" ")
-        chunk_size = 10  # V3: was 3 — 10 words/update × 0.01s = <1s for 600w (was ~8s)
-
-        with Live(panel, console=console, auto_refresh=False) as live:
-            for i in range(0, len(words), chunk_size):
-                chunk = " ".join(words[i:i + chunk_size])
-                current_text += (" " if current_text else "") + chunk
-
-                panel.renderable = Markdown(current_text)
-                live.update(panel, refresh=True)
-                time.sleep(0.01)  # V3: was 0.04 — reduced alongside chunk_size increase
-
-        console.print("\n")
+        return
+        # (legacy animated-Panel path removed in UI-CC-5)
 
     def on_loop_completed(self, data: dict):
         """Handle final answer or error from ExecutionLoop with Panel styling and resilience against VerifyError."""
@@ -1224,11 +1218,11 @@ class TerminalVisualizer:
             if self.event_bus and getattr(self.event_bus, "_final_answer_rendered", False):
                 return
 
-            panel = Panel(
-                Text(response_text, style="white"),
-                **PANEL_STYLES[style_key]
-            )
-            console.print(panel)
+            # UI-CC-5: compact lines instead of heavy panels.
+            if style_key == "error":
+                console.print(error_line(response_text))
+            else:
+                console.print(Text(response_text, style="white"))
             console.print()  # A.3: Fix missing newline before next prompt
         except Exception as exc:
             try:
