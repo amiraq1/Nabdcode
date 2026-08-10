@@ -20,6 +20,7 @@ except Exception:
 
 from tools.base import BaseTool
 from tools.models import ToolResult
+from tools.action_contract import invalid_action_message, normalize_action
 
 
 class GraphifyArgs(BaseModel):
@@ -56,6 +57,12 @@ class GraphifyTool(BaseTool):
 
     def forward(self, action: str, target: Optional[str] = None, target_b: Optional[str] = None, **kwargs: Any) -> str:
         """Smolagents and direct execution entry point."""
+        raw_action = action
+        action = normalize_action(raw_action)
+        allowed_actions = ("query", "path", "explain", "update")
+        if action not in allowed_actions:
+            return invalid_action_message(self.name, raw_action, allowed_actions)
+
         graph_dir = os.path.join(self.workspace_dir, "graphify-out")
         if action != "update" and not os.path.exists(graph_dir):
             return "Error: graphify-out/ directory not found. Please run 'graphify update .' first (or invoke with action='update') to generate the graph."
@@ -74,9 +81,6 @@ class GraphifyTool(BaseTool):
 
         elif action == "update":
             cmd.append(".")
-
-        else:
-            return "Error: Invalid action. Supported actions are 'query', 'path', 'explain', 'update'."
 
         try:
             result = default_guard.run_infra(

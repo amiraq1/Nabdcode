@@ -408,6 +408,17 @@ def _handle_one_shot_query(
         exact_action_mode=_exact_action_mode,
     )
     try:
+        # S-1: Validate /fix path traversal
+        if one_shot_query.startswith('/fix'):
+            import re
+            m = re.match(r'/fix\s+(.+?)\s*(?:->|→)\s*(.+)', one_shot_query)
+            if m:
+                filepath = m.group(1).strip()
+                if not _validate_fix_path(filepath):
+                    sys.stdout.write("\n\033[91m⚠ Error: path outside workspace\033[0m\n\n")
+                    sys.stdout.flush()
+                    sys.exit(1)  # إنهاء فوري لمنع السقوط في REPL loop
+
         outcome = engine.run(one_shot_query)
         display_text = outcome.safe_message or outcome.final_answer or "(Session completed - no text returned)"
         ctx.renderer.stream_chunk(display_text)
@@ -432,6 +443,18 @@ def _handle_one_shot_query(
 
 
 # ── Slash-command handler ──────────────────────────────────────────────────
+
+
+def _validate_fix_path(filepath: str) -> bool:
+    """Return True if filepath is safe, False otherwise."""
+    from core.kernel.security import get_workspace_root
+    try:
+        workspace_root = get_workspace_root()
+        resolved_target = (workspace_root / filepath).resolve()
+        resolved_target.relative_to(workspace_root)
+        return True
+    except (ValueError, OSError):
+        return False
 
 def _process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
     if user_input.lower() in ("clear", "/clear", "/reset", "/c"):
@@ -489,10 +512,18 @@ def _process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str
             from llm_router import get_secure_model
             from tools.secure_tools import SecureGraphifyTool
             from core.dag.launcher import launch_nabdos_core
+            from engine.consent import ConsentManager
             llm = get_secure_model()
             ws = str(get_workspace_root() if 'get_workspace_root' in globals() else Path.cwd())
             graphify = SecureGraphifyTool(workspace_dir=ws)
             taste_rules = ["All functions MUST have strict Type Hints.", "Use clear docstrings and comments."]
+            # S-2-FINAL: توصيل الموافقة الفعلي — ConsentManager يُكيَّف إلى
+            # ConsentCallback (confirm()→None = موافقة). كل أمر DAG طرفي
+            # يُعرض على البشر قبل التنفيذ (أو يُسجَّل رفضًا عند غياب الإجابة).
+            consent_manager = ConsentManager()
+            consent_callback = lambda t, a: consent_manager.confirm(
+                t, a, evidence_log=ctx.evidence_log, step=getattr(state, "step_count", 0)
+            ) is None
             launch_nabdos_core(
                 llm_engine=llm,
                 graphify_tool=graphify,
@@ -500,6 +531,7 @@ def _process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str
                 target_files=target_files_list,
                 taste_rules=taste_rules,
                 resume=is_resume,
+                consent_callback=consent_callback,
             )
         except Exception as dag_err:
             sys.stdout.write(f"\n\033[91m❌ [DAG Launcher Error] {dag_err}\033[0m\n\n")
@@ -524,6 +556,11 @@ def _process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str
         func_name = _m.group(2).strip()
 
         try:
+            if not _validate_fix_path(filepath):
+                sys.stdout.write("\n\033[91m⚠ Error: path outside workspace\033[0m\n\n")
+                sys.stdout.flush()
+                return
+
             target = Path(filepath)
             if not target.exists():
                 sys.stdout.write(f"\n\033[91m⚠ File not found: {filepath}\033[0m\n\n")

@@ -54,6 +54,9 @@ def test_normal_mode_fc_schema_filtering():
     assert "final_answer" in captured_tools
 
 def test_fallback_mode_fc_schema_filtering():
+    """Fallback mode exposes final_answer, search_memory, todo_write,
+    execute_shell, and file_system — the expanded safe set per R-UI-1.
+    Dangerous tools (browser_action, python_repl) remain hidden."""
     state = RuntimeState(session_id="test-3")
     state.is_fallback_mode_active = True
     captured_tools = []
@@ -61,10 +64,11 @@ def test_fallback_mode_fc_schema_filtering():
         if tools is not None:
             captured_tools.extend([t["function"]["name"] for t in tools])
         return "mock response"
-        
+
     with patch("engine.loop._resolve_default_provider", return_value=mock_provider):
         loop = ExecutionLoop(state, llm_provider=mock_provider, no_stream=True)
         loop._invoke_llm_and_normalize()
-    
-    assert len(captured_tools) == 3, f"Expected 3 tools, got {len(captured_tools)}"
-    assert set(captured_tools) == {"final_answer", "search_memory", "todo_write"}
+
+    assert set(captured_tools) == {"final_answer", "search_memory", "todo_write", "execute_shell", "file_system"}
+    assert "browser_action" not in captured_tools
+    assert "python_repl" not in captured_tools

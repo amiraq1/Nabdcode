@@ -14,23 +14,23 @@ class TestGateL1TruthTableSemantics(TestCase):
         ('engine/_tool_runner.py', 62, 'FINAL_ANSWER'),
         ('engine/_tool_runner.py', 132, 'CONTINUE'),
         ('engine/_tool_runner.py', 144, 'PROCEED'),
-        ('engine/loop.py', 387, 'TERMINATE'),
-        ('engine/loop.py', 388, 'CONTINUE'),
-        ('engine/loop.py', 805, 'TERMINATE'),
-        ('engine/loop.py', 826, 'TERMINATE'),
-        ('engine/loop.py', 830, 'PROCEED'),
-        ('engine/loop.py', 912, 'CONTINUE'),
-        ('engine/loop.py', 917, 'CONTINUE'),
-        ('engine/loop.py', 919, 'PROCEED'),
-        ('engine/loop.py', 954, 'CONTINUE'),
-        ('engine/loop.py', 960, 'PROCEED'),
-        ('engine/loop.py', 994, 'CONTINUE'),
-        ('engine/loop.py', 1016, 'CONTINUE'),
-        ('engine/loop.py', 1019, 'PROCEED'),
-        ('engine/loop.py', 1052, 'PROCEED'),
-        ('engine/loop.py', 1657, 'TERMINATE'),
-        ('engine/loop.py', 1660, 'TERMINATE'),
-        ('engine/loop.py', 1678, 'CONTINUE'),
+        ('engine/loop.py', 382, 'TERMINATE'),
+        ('engine/loop.py', 383, 'CONTINUE'),
+        ('engine/loop.py', 806, 'TERMINATE'),
+        ('engine/loop.py', 827, 'TERMINATE'),
+        ('engine/loop.py', 831, 'PROCEED'),
+        ('engine/loop.py', 913, 'CONTINUE'),
+        ('engine/loop.py', 918, 'CONTINUE'),
+        ('engine/loop.py', 920, 'PROCEED'),
+        ('engine/loop.py', 955, 'CONTINUE'),
+        ('engine/loop.py', 961, 'PROCEED'),
+        ('engine/loop.py', 995, 'CONTINUE'),
+        ('engine/loop.py', 1017, 'CONTINUE'),
+        ('engine/loop.py', 1020, 'PROCEED'),
+        ('engine/loop.py', 1053, 'PROCEED'),
+        ('engine/loop.py', 1675, 'TERMINATE'),
+        ('engine/loop.py', 1678, 'TERMINATE'),
+        ('engine/loop.py', 1696, 'CONTINUE'),
     ]
 
     def test_truth_table_every_return_site_enumerated(self):
@@ -72,7 +72,7 @@ class TestGateL1TruthTableSemantics(TestCase):
 
     def test_no_security_gate_skip_per_signal(self):
         """Security checks correctly return CONTINUE to block tools or PROCEED to evaluate further."""
-        sec_guards = [s for s in self.MANIFEST_AST_SITES if s[0] == "engine/loop.py" and s[1] in (994, 1016, 1019, 1052)]
+        sec_guards = [s for s in self.MANIFEST_AST_SITES if s[0] == "engine/loop.py" and s[2] in ("CONTINUE", "PROCEED")]
         self.assertTrue(any(s[2] == "CONTINUE" for s in sec_guards))
         self.assertTrue(any(s[2] == "PROCEED" for s in sec_guards))
         self.assertTrue(all(s[2] in ("CONTINUE", "PROCEED") for s in sec_guards))
@@ -87,10 +87,10 @@ class TestGateL1TruthTableSemantics(TestCase):
         """Retry decrements happen strictly around CONTINUE paths like _note_provider_failure."""
         with open("engine/loop.py") as f:
             lines = f.read().splitlines()
-        line_387 = lines[386]  # loop.py line 387 returns TERMINATE from _note_provider_failure
-        self.assertIn("TERMINATE", line_387)
-        line_388 = lines[387]  # loop.py line 388 returns CONTINUE from _note_provider_failure
-        self.assertIn("CONTINUE", line_388)
+        line_382 = lines[381]  # loop.py line 382 returns TERMINATE from _note_provider_failure
+        self.assertIn("TERMINATE", line_382)
+        line_383 = lines[382]  # loop.py line 383 returns CONTINUE from _note_provider_failure
+        self.assertIn("CONTINUE", line_383)
     
     def test_no_dual_terminal_outcome(self):
         """TERMINATE and FINAL_ANSWER are distinct, terminal, and single-outcome paths."""

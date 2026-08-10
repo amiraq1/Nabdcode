@@ -706,7 +706,13 @@ class TestReplDelegation(unittest.TestCase):
         self.assertFalse(has_drain, "REPL must not call drain_pending directly")
 
     def test_repl_delegates_to_accept_edit(self):
-        """AST guard: verify REPL calls accept_edit() via the canonical API."""
+        """AST guard: the accept/reject path lives in core, not in the UI layer.
+
+        V-BURY-1: the dead UI wrapper _process_pending_edits (which called
+        accept_edit inside the orphaned async REPL) was buried. The canonical
+        accept/reject state machine lives in core.accept_edits_state — the UI
+        layer must NOT resurrect its own accept_edit call path.
+        """
         import ast
         repl_path = Path(__file__).parent.parent / "ui" / "repl_termux.py"
         content = repl_path.read_text(encoding="utf-8")
@@ -718,7 +724,25 @@ class TestReplDelegation(unittest.TestCase):
                 if node.func.attr == "accept_edit":
                     has_accept = True
                     break
-        self.assertTrue(has_accept, "REPL must call accept_edit() via the canonical API")
+        self.assertFalse(
+            has_accept,
+            "REPL must NOT call accept_edit() from the UI layer — the dead "
+            "wrapper was buried (V-BURY-1); accept/reject lives only in "
+            "core.accept_edits_state (see TestAcceptDrainsPending above).",
+        )
+
+    def test_canonical_accept_edit_lives_in_core(self):
+        """The canonical accept/reject API must remain in core.accept_edits_state."""
+        import ast
+        core_path = Path(__file__).parent.parent / "core" / "accept_edits_state.py"
+        content = core_path.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+        funcs = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+        self.assertTrue(
+            {"accept_edit", "reject_edit"} <= funcs,
+            "core.accept_edits_state must keep the canonical accept_edit/reject_edit "
+            "state machine — it is the only home of the accept/reject path.",
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

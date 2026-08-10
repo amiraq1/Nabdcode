@@ -18,6 +18,7 @@ except Exception:
 from core.taste_engine import TasteEngine
 from tools.base import BaseTool
 from tools.models import ToolResult
+from tools.action_contract import invalid_action_message, normalize_action
 
 
 class TasteManagerArgs(BaseModel):
@@ -53,14 +54,17 @@ class TasteManagerTool(BaseTool):
 
     def forward(self, action: str, category: Optional[str] = None, rule: Optional[str] = None, **kwargs: Any) -> str:
         """Smolagents and direct execution entry point."""
+        raw_action = action
+        action = normalize_action(raw_action)
+        allowed_actions = ("view", "add_rule", "remove_rule")
+        if action not in allowed_actions:
+            return invalid_action_message(self.name, raw_action, allowed_actions)
+
         profile = self.taste_engine.load_profile()
 
         # 1. View current taste
         if action == "view":
             return self.taste_engine.get_taste_summary_for_prompt()
-
-        if action not in ("add_rule", "remove_rule"):
-            return "Error: Invalid action. Use 'view', 'add_rule', or 'remove_rule'."
 
         # Validate category before mutation
         valid_categories = ["architectural_rules", "code_styling", "language_preferences", "custom_rules"]
@@ -89,9 +93,6 @@ class TasteManagerTool(BaseTool):
                 self.taste_engine.save_profile(profile)
                 return f"Success: The rule '{rule}' has been removed from {category}."
             return "Error: Rule not found in the specified category."
-
-        else:
-            return "Error: Invalid action. Use 'view', 'add_rule', or 'remove_rule'."
 
     def execute(self, action: str, category: Optional[str] = None, rule: Optional[str] = None) -> ToolResult:
         """Native engine execution entry point."""

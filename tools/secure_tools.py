@@ -375,17 +375,29 @@ class SecureTestRunner(SecureTool):
         self.repo_path = pathlib.Path(repo_path).resolve()
         self.timeout = timeout
 
-    def forward(self, test_target: str, **kwargs: Any) -> str:
+    def forward(self, test_target: str = "", **kwargs: Any) -> str:
         start_time = time.time()
 
+        # P-1: lenient target resolution — same tolerant pattern as the other
+        # Secure* tools (default value + kwargs fallback + graceful error).
+        # The tool remains revoked in core/agent_manager.py:136 (Tool Fixation
+        # guard); this contract is a quantitative fix only.
+        target = test_target or kwargs.get("test_target") or kwargs.get("target")
+        if not target:
+            allowed = ", ".join(sorted(ALLOWED_TEST_TARGETS.keys()))
+            return (
+                "Error: secure_test_runner requires a 'test_target' argument "
+                f"({allowed})."
+            )
+
         # 1. Validate against immutable target allowlist
-        cleaned_target = test_target.strip()
+        cleaned_target = str(target).strip()
         if cleaned_target not in ALLOWED_TEST_TARGETS:
             logger.warning(
-                f"[{self.name}] Validation failed: Unknown target '{test_target}'"
+                f"[{self.name}] Validation failed: Unknown target '{target}'"
             )
             return (
-                f"Security Violation: Target '{test_target}' is not allowed. "
+                f"Security Violation: Target '{target}' is not allowed. "
                 f"Allowed targets: {sorted(ALLOWED_TEST_TARGETS.keys())}."
             )
 
