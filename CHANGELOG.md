@@ -47,6 +47,28 @@ All notable changes to NABD OS are documented in this file, following
   model, hardening checklist).
 - **DOC-2** — Added this `CHANGELOG.md`.
 
+## [2026-08-10] — UI-CC: Claude Code Style Interface
+
+### Added
+- **UI-CC-1** (d6e78a1): Pure rendering primitives in `ui/cc_style.py`
+  - `badge_for_tool()` — READ/EDIT/SHELL/LIST/SEARCH/KILL badges
+  - `collapse_lines()` — output truncation with `[ctrl+o to expand]` footer
+  - `diff_pairs()`, `todo_line()`, `format_tokens()`, `next_status_verb()`
+- **UI-CC-2** (37fb45b): Wired into TerminalVisualizer
+  - Tool header lines with colored badges and primary argument preview
+  - Thought completion indicators with duration
+  - Status lines with animated verbs (Drafting, Conjuring, Choreographing, etc.)
+- **UI-CC-3** (9eefa52): Footer hints and collapse expansion
+  - `hint_for_mode()` — plan/accept/default mode hints in bottom toolbar
+  - `CollapseStore` — persistent storage for collapsed output blocks
+  - `/expand [id]` slash command to retrieve collapsed content
+  - `ctrl+o` keybinding to expand most recent collapsed block
+
+### Technical Notes
+- All colors use `SEMANTIC` tokens (no raw hex literals)
+- `ui/widgets/status_bar.py` unchanged (protected file)
+- 18 new tests across 3 test files (1903 passed, 0 failed)
+
 ## [1.0.0] — 2026-07
 
 ### Added
