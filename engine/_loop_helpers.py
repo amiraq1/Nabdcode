@@ -196,6 +196,28 @@ MAX_SELF_CORRECT: Final[int] = 3
 MAX_PROVIDER_FAIL_STREAK: Final[int] = 3
 FALLBACK_ALLOWED_TOOLS: Final[set[str]] = {"final_answer", "search_memory", "todo_write", "execute_shell", "file_system"}
 
+
+def filter_tools_for_turn(
+    all_tools: dict[str, Any],
+    *,
+    exact_action: bool = False,
+    restricted: bool = False,
+) -> dict[str, Any]:
+    """Return the tool schemas permitted for the current execution mode."""
+    if exact_action:
+        from core._exact_action_contract import EXACT_ACTION_ALLOWED_TOOLS
+        allowed = set(EXACT_ACTION_ALLOWED_TOOLS)
+    elif restricted:
+        allowed = FALLBACK_ALLOWED_TOOLS
+    else:
+        allowed = set(all_tools)
+
+    return {
+        name: schema
+        for name, schema in all_tools.items()
+        if name in allowed and isinstance(schema, dict)
+    }
+
 # Phase 4.5 — anti-frustration guards observed in live sessions:
 #  • Cap consecutive reasoning rounds that produce NO new tool call. After this
 #    many thought-only turns the model is forced to commit (tool call or a

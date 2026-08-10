@@ -93,6 +93,7 @@ from engine._loop_helpers import (  # noqa: F401
     MAX_SELF_CORRECT,
     MAX_PROVIDER_FAIL_STREAK,
     FALLBACK_ALLOWED_TOOLS,
+    filter_tools_for_turn,
     CHAT_WINDOW,
     _has_active_goal,
     TOOL_WINDOW,
@@ -256,28 +257,22 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
           never attempts to call them. ``final_answer`` is handled as a
           system-level control message by the Convergence Gate.
         """
-        if getattr(self, "_exact_action_mode", False):
-            from core._exact_action_contract import EXACT_ACTION_ALLOWED_TOOLS
-            return {
-                name: self.all_tools[name]
-                for name in EXACT_ACTION_ALLOWED_TOOLS
-                if name in self.all_tools
+        filtered = filter_tools_for_turn(
+            self.all_tools,
+            exact_action=getattr(self, "_exact_action_mode", False),
+            restricted=getattr(self.state, "is_fallback_mode_active", False),
+        )
+        if (
+            getattr(self.state, "is_fallback_mode_active", False)
+            and "final_answer" in FALLBACK_ALLOWED_TOOLS
+            and "final_answer" not in filtered
+        ):
+            filtered["final_answer"] = {
+                "description": "Terminate task and return final answer to the user.",
+                "required": {"answer": str},
+                "optional": {},
             }
-
-        if getattr(self.state, "is_fallback_mode_active", False):
-            filtered = {
-                name: schema
-                for name, schema in self.all_tools.items()
-                if name in FALLBACK_ALLOWED_TOOLS
-            }
-            if "final_answer" in FALLBACK_ALLOWED_TOOLS and "final_answer" not in filtered:
-                filtered["final_answer"] = {
-                    "description": "Terminate task and return final answer to the user.",
-                    "required": {"answer": str},
-                    "optional": {},
-                }
-            return filtered
-        return self.all_tools
+        return filtered
 
     def _build_critique(self, result: Any, _last_tool_call: Any = None) -> str:
         findings_str = str(getattr(result, "findings", result))
@@ -1499,6 +1494,23 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         assert ctx is not None
         tool_name = tool_call.tool
         tool_args = tool_call.args
+
+        if getattr(self.state, "is_fallback_mode_active", False):
+            allowed = filter_tools_for_turn(
+                self.all_tools,
+                restricted=True,
+            )
+            if tool_name not in allowed and tool_name != "final_answer":
+                return ToolResult(
+                    success=False,
+                    stderr=(
+                        f"[FALLBACK_TOOL_BLOCKED] Tool '{tool_name}' is not allowed "
+                        f"in fallback mode. Allowed tools: {sorted(allowed)}."
+                    ),
+                    returncode=-1,
+                    status="blocked",
+                    metadata={"allowed_tools": sorted(allowed)},
+                )
 
         for guard in (
             self._guard_exact_action,
