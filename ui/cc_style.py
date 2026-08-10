@@ -8,7 +8,10 @@ from __future__ import annotations
 import itertools
 from typing import Sequence
 
-BADGE_STYLE = "bold white on #5f5faf"
+from ui.design.theme.semantic import SEMANTIC
+
+# Badge background routes through the semantic palette (no raw #hex).
+BADGE_STYLE = f"bold white on {SEMANTIC.action_badge}"
 
 _STATUS_VERBS = ("Drafting", "Conjuring", "Choreographing",
                  "Abracadabraing", "Crafting")
@@ -73,3 +76,48 @@ def format_tokens(n: int) -> str:
 
 def next_status_verb() -> str:
     return next(_verb_cycle)
+
+
+# ── UI-CC-2: header / thought / status lines ───────────────────────────────
+
+def _primary_arg(args: dict | None) -> str:
+    """Pick the primary argument for a tool header line.
+
+    Priority: path, filepath, file, command, query, url; falls back to the
+    first string value.  Clamped to 60 characters.
+    """
+    if not isinstance(args, dict):
+        return ""
+    for key in ("path", "filepath", "file", "command", "query", "url", "target"):
+        val = args.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()[:60]
+    for val in args.values():
+        if isinstance(val, str) and val.strip():
+            return val.strip()[:60]
+    return ""
+
+
+def tool_header_line(tool: str, args: dict | None = None) -> str:
+    """Build a Claude-Code-style tool header line: ``BADGE  primary-arg``.
+
+    Returns a plain string like ``READ  main.py``.  The badge label is
+    derived from :func:`badge_for_tool`; the argument from
+    :func:`_primary_arg`.
+    """
+    label, _style = badge_for_tool(tool)
+    primary = _primary_arg(args)
+    if primary:
+        return f"{label}  {primary}"
+    return label
+
+
+def thought_line(seconds: int) -> str:
+    """Format the thought indicator with an elapsed-seconds count."""
+    unit = "second" if seconds == 1 else "seconds"
+    return f"✳ Thought for {seconds} {unit} [ctrl+o to expand]"
+
+
+def status_line(verb: str, tokens: int) -> str:
+    """Format a status line with a verb and a human-readable token count."""
+    return f"✦ {verb}… {format_tokens(tokens)}"

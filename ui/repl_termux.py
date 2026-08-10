@@ -40,6 +40,12 @@ from core.permissions import ShellPermissions
 from core.kernel.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor
 from core.utils import safe_strip
+from ui.cc_style import (
+    collapse_lines,
+    status_line,
+    thought_line,
+    tool_header_line,
+)
 from ui.theme import (
     BOX_EXECUTION,
     BOX_FINAL,
@@ -727,6 +733,14 @@ async def render_agent_events(status_bar=None) -> None:
         _display_thought_content(compressor)
         if status_bar:
             status_bar.stop()
+        # UI-CC-2: مؤشر التفكير مع عدد الثواني
+        elapsed = getattr(compressor, "elapsed_seconds", 0)
+        try:
+            elapsed = int(elapsed)
+        except (ValueError, TypeError):
+            elapsed = 0
+        _erase_live_line()
+        console.print(f"[dim]{thought_line(elapsed)}[/dim]")
 
     def _on_thought_chunk(content: str) -> None:
         """Accumulate a raw reasoning chunk."""
@@ -981,22 +995,26 @@ class TerminalVisualizer:
         console.print(f"[dim]{format_status_message('thinking', _current_step)}[/dim]")
 
     def on_tool_started(self, data: dict):
-        """إظهار لوحة بدء الأداة مع سبينر متحرك عند بدء تشغيل أي أداة بناءً على دور الوكيل"""
+        """إظهار رأس الأداة بأسلوب Claude Code (شارة + الوسيط الأساسي)."""
         try:
             self.stop()  # إيقاف أي سياق عرض نشط أولاً
 
             role = data.get("role", "ORCHESTRATOR")
             tool_name = data.get("tool") or data.get("tool_name") or "tool"
+            args = data.get("args") or {}
+
+            # UI-CC-2: شارة الأداة (READ/EDIT/SHELL/...) + الوسيط الأساسي
+            _erase_live_line()
+            header = tool_header_line(tool_name, args)
+            from ui.cc_style import BADGE_STYLE
+            if '  ' in header:
+                badge, arg = header.split('  ', 1)
+                console.print(f"[{BADGE_STYLE}] {badge} [/] {arg}")
+            else:
+                console.print(f"[{BADGE_STYLE}] {header} [/]")
 
             # اختيار لون السبينر حسب قبعة الوكيل الحالي
             color = "cyan" if role == "ORCHESTRATOR" else "green" if role == "CODER" else "yellow"
-
-            # لوحة بدء الأداة
-            panel = Panel(
-                Text(f"Executing: {tool_name} [{role}]", style="neon_cyan"),
-                **PANEL_STYLES["tool_start"]
-            )
-            console.print(panel)
 
             spinner = Spinner("dots", text=Text(f" [{role}] Running tool: {tool_name}...", style=f"bold {color}"))
             self.live_context = Live(spinner, console=console, refresh_per_second=10, transient=True)
@@ -1024,6 +1042,12 @@ class TerminalVisualizer:
             summary = data.get("summary", "")
             diff = data.get("diff", "")
             args = data.get("args")
+
+            # UI-CC-2: طيّ المخرجات (+N lines [ctrl+o to expand])
+            if output_text:
+                _erase_live_line()
+                for line in collapse_lines(output_text.splitlines(), keep=3):
+                    console.print(f"[dim]{line}[/dim]")
 
             widget = ToolResultWidget(
                 tool_name=tool_name,

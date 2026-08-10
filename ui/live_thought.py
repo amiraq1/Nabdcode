@@ -75,6 +75,8 @@ class LiveThoughtCompressor:
         self._step_counter = 0
         self._token_count: int = 0
         self._ansi = _supports_ansi()
+        # UI-CC-2: last concluded thought-phase duration (seconds).
+        self.elapsed_seconds: int = 0
 
     # ── Phase control ──────────────────────────────────────────────────
     def start(self) -> None:
@@ -127,6 +129,8 @@ class LiveThoughtCompressor:
             return None
         self._active = False
         total_time = max(0, int(time.time() - self._start_ts))
+        # UI-CC-2: expose the duration for the thought indicator.
+        self.elapsed_seconds = total_time
         icon, label = _get_thinking_label(total_time)
         token_info = _fmt_tokens(self._token_count)
         # Erase the live line entirely. The frozen thinking placeholder
