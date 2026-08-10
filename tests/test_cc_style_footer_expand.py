@@ -55,9 +55,21 @@ def test_collapse_store_roundtrip() -> None:
 # ── ع5: footer_and_expand_wired ─────────────────────────────────────────────
 
 def test_footer_and_expand_wired() -> None:
-    """main.py must use hint_for_mode and /expand; repl must use CollapseStore."""
+    """BRAND-4: toolbar removed from main.py; hint_for_mode survives in cc_style.
+
+    BRAND-4 deletes the bottom toolbar from main.py, so hint_for_mode is no
+    longer called there.  The function must still exist in cc_style as an
+    available (unwired) primitive.  /expand and CollapseStore remain in repl.
+    """
+    from ui.cc_style import hint_for_mode  # must still exist
+    assert callable(hint_for_mode), "hint_for_mode must remain callable in cc_style"
+
     main_src = MAIN.read_text(encoding="utf-8")
-    assert "hint_for_mode" in main_src
+    # BRAND-4: hint_for_mode is no longer wired in main.py
+    assert "hint_for_mode" not in main_src, (
+        "BRAND-4: hint_for_mode must NOT be called in main.py (toolbar removed)"
+    )
     assert "/expand" in main_src
+
     repl_src = REPL.read_text(encoding="utf-8")
     assert "collapse_store" in repl_src

@@ -86,8 +86,8 @@ def _draw_classic(model_name: str | None = None) -> None:
 
 
 def draw(model_name=None):
-    """Backward-compatible entry point — calls minimal mode."""
-    _draw_minimal()
+    """Backward-compatible entry point — calls classic mode (BRAND-4)."""
+    _draw_classic(model_name=model_name)
 
 
 # Aliases

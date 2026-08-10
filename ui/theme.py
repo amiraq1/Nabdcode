@@ -131,7 +131,7 @@ nabd_theme = CUSTOM_THEME
 
 PROMPT_STYLE = {
     "prompt": [
-        ("class:prompt", "╭─ Ammar@NabdOS ~ "),
+        ("class:prompt", "╭─ nabd ~ "),
     ],
     "continuation": [
         ("class:prompt", "│ "),
@@ -141,12 +141,12 @@ PROMPT_STYLE = {
 # ───────────────────────────────────────────────────────
 # Prompt HTML fragments (prompt_toolkit) — named Rich styles only, never
 # raw hex in source. Consumed by main.py and ui/repl_termux.py so the
-# "╭─ Ammar@NabdOS" prompt is defined exactly once.
+# prompt is defined exactly once.
 # ───────────────────────────────────────────────────────
 
-# '╭─ Ammar@NabdOS ~ ' in neon green (semantic prompt accent), bold
+# '╭─ nabd ~ ' in neon green (semantic prompt accent), bold
 PROMPT_HTML_PREFIX: str = (
-    "<style fg='green' bold='true'>╭─ Ammar@NabdOS ~ </style>"
+    "<style fg='green' bold='true'>╭─ nabd ~ </style>"
 )
 # '╰─❯ ' in neon cyan (semantic secondary accent), bold
 PROMPT_HTML_SUFFIX: str = (

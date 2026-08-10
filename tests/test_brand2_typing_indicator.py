@@ -55,26 +55,40 @@ class TestBrand2TypingIndicator:
     # ── ع3: startup_logo_is_ascii ───────────────────────────────────────────
 
     def test_startup_logo_is_ascii(self):
-        """BRAND-3: draw() الافتراضي يُخرج ◈ agent (دنيا)؛ classic يحتوي █.
+        """BRAND-4: draw() الافتراضي يُخرج الكلاسيكي (█ + Repo:).
 
-        BRAND-3 يلغي عقد BRAND-2/revert: الافتراضي أصبح العلامة الدنيا.
-        render_logo("classic") تحفظ الـ ASCII.
+        BRAND-4 يُعيد الكلاسيكي افتراضياً — _draw_classic هو الهدف.
+        render_logo("classic") محفوظ؛ _draw_minimal متاح غير موصول.
         """
         import inspect
         src = inspect.getsource(nabd_logo.draw)
-        # BRAND-3: draw() delegates to _draw_minimal — must reference ◈ agent
-        assert "◈" in src or "_draw_minimal" in src, (
-            "BRAND-3: draw() must reference ◈ mark or _draw_minimal"
+        # BRAND-4: draw() delegates to _draw_classic
+        assert "_draw_classic" in src, (
+            "BRAND-4: draw() must call _draw_classic (classic is default)"
         )
-        # classic mode preserved via render_logo
+        # classic impl must contain █
         classic_src = inspect.getsource(nabd_logo._draw_classic)
-        assert "█" in classic_src, "render_logo('classic') must still contain █"
+        assert "█" in classic_src, "_draw_classic must still contain █"
 
 
     # ── ع4: prompt_wires_animated_indicator ─────────────────────────────────
 
     def test_prompt_wires_animated_indicator(self):
-        """مصدر main.py يستدعي typing_indicator + invalidate."""
+        """BRAND-4: toolbar wiring removed; indicator functions survive in cc_style.
+
+        BRAND-2 wired typing_indicator into main.py bottom_toolbar.
+        BRAND-4 removes that wiring — but the functions must remain in cc_style
+        as available (unwired) primitives.
+        """
+        import ui.cc_style as cc_style
+        assert hasattr(cc_style, "typing_indicator_frame"), (
+            "typing_indicator_frame must remain in cc_style (unwired)"
+        )
+        assert hasattr(cc_style, "typing_indicator_frames"), (
+            "typing_indicator_frames must remain in cc_style (unwired)"
+        )
+        # main.py must NOT wire the indicator anymore
         src = inspect.getsource(main)
-        assert "typing_indicator" in src, "main.py must call typing_indicator"
-        assert "invalidate" in src, "main.py must call invalidate()"
+        assert "typing_indicator" not in src, (
+            "BRAND-4: main.py must NOT call typing_indicator (wiring removed)"
+        )

@@ -916,41 +916,8 @@ def _run_repl(
     from prompt_toolkit.history import InMemoryHistory
     from prompt_toolkit.formatted_text import ANSI, HTML
     from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.styles import Style
 
     plan_mode: bool = False
-
-    def _render_indicator() -> str:
-        """Render the current typing-indicator frame to an ANSI string."""
-        from io import StringIO
-        from rich.console import Console
-        from ui.cc_style import typing_indicator_frame
-        buf = StringIO()
-        Console(file=buf, force_terminal=False, color_system="truecolor").print(
-            typing_indicator_frame(_indicator_index_holder[0])
-        )
-        return buf.getvalue()
-
-    def _bottom_toolbar():
-        from ui.cc_style import hint_for_mode
-        indicator = _render_indicator()
-        if plan_mode:
-            text, _style = hint_for_mode("plan")
-            return ANSI(
-                indicator
-                + _ansi_fg(SEMANTIC.warning.rgb, text.split(" [")[0])
-                + f" \033[2m[{text.split('[', 1)[1]}"
-            )
-        from core.accept_edits_state import has_pending_edits
-        if has_pending_edits():
-            text, _style = hint_for_mode("accept")
-            return ANSI(
-                indicator
-                + _ansi_fg(SEMANTIC.secondary.rgb, text.split(" [")[0])
-                + f" \033[2m[{text.split('[', 1)[1]}"
-            )
-        text, _style = hint_for_mode("default")
-        return ANSI(indicator + f"\033[2m{text}")
 
     bindings = KeyBindings()
 
@@ -969,18 +936,12 @@ def _run_repl(
         nonlocal plan_mode
         plan_mode = not plan_mode
 
-    # BRAND-3: dark toolbar style — black background, dim text via SEMANTIC.
-    _toolbar_style = Style.from_dict({
-        "bottom-toolbar": f"bg:black {SEMANTIC.text_muted}",
-    })
-
     input_session = PromptSession(
         history=InMemoryHistory(),
         mouse_support=False,
         # Single-line mode: 'Enter' submits immediately even with pasted newlines.
         multiline=False,
         key_bindings=bindings,
-        style=_toolbar_style,
     )
 
     # Flush setup output before first prompt
@@ -994,37 +955,13 @@ def _run_repl(
         )
         return
 
-    # BRAND-2: daemon thread that pulses the "◈ agent" typing indicator
-    # in the bottom toolbar every 0.5s while the prompt is waiting for
-    # user input.  The thread calls app.invalidate() to refresh the
-    # display; it only runs while _prompt_active is set so it never
-    # interferes with agent execution.
-    _indicator_index_holder: list[int] = [0]
-    _prompt_active = threading.Event()
-
-    def _pulse_indicator() -> None:
-        """Cycle the typing-indicator frame and invalidate the prompt app."""
-        while True:
-            if _prompt_active.is_set():
-                _indicator_index_holder[0] = (_indicator_index_holder[0] + 1) % 3
-                try:
-                    input_session.app.invalidate()
-                except Exception:
-                    pass
-            _prompt_active.wait(0.5)
-
-    _indicator_thread = threading.Thread(target=_pulse_indicator, daemon=True)
-    _indicator_thread.start()
-
     try:
         while True:
             try:
-                _prompt_active.set()
                 user_input = input_session.prompt(
                     HTML(
                         f"{PROMPT_HTML_PREFIX}\n{PROMPT_HTML_SUFFIX}"
                     ),
-                    bottom_toolbar=_bottom_toolbar,
                     placeholder=HTML(PROMPT_HTML_PLACEHOLDER),
                 ).strip()
             except (KeyboardInterrupt, EOFError):
