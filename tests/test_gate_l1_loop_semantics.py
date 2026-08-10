@@ -87,10 +87,10 @@ class TestGateL1TruthTableSemantics(TestCase):
         """Retry decrements happen strictly around CONTINUE paths like _note_provider_failure."""
         with open("engine/loop.py") as f:
             lines = f.read().splitlines()
-        line_383 = lines[382]  # loop.py line 383 returns TERMINATE from _note_provider_failure
-        self.assertIn("TERMINATE", line_383)
-        line_384 = lines[383]  # loop.py line 384 returns CONTINUE from _note_provider_failure
-        self.assertIn("CONTINUE", line_384)
+        line_term = lines[382]  # loop.py line 383 returns TERMINATE
+        self.assertIn("TERMINATE", line_term)
+        line_cont = lines[383]  # loop.py line 384 returns CONTINUE
+        self.assertIn("CONTINUE", line_cont)
     
     def test_no_dual_terminal_outcome(self):
         """TERMINATE and FINAL_ANSWER are distinct, terminal, and single-outcome paths."""
