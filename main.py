@@ -142,6 +142,7 @@ def _extract_final_answer_text(raw: Any) -> str:
 
 # ── Event Wiring ───────────────────────────────────────────────────────────
 from ui.widgets.status_bar import AgentStatusBar
+from ui.cc_style import status_compact_line
 status_bar = AgentStatusBar()
 
 def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
@@ -166,7 +167,13 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         _token_buf = ""
         _held_buf = ""
         _turn_index += 1
-        status_bar.start()
+        # UI-CC-7: inline compact status line replaces the live SectionPanel
+        # box that was rendered by the status bar (protected file untouched).
+        from rich.console import Console
+        Console().print(status_compact_line(
+            step=_turn_index, elapsed=0.0,
+            thinking=True, tools=False, generating=False,
+        ))
 
     def _on_llm_token(p: dict) -> None:
         # When the interactive TerminalVisualizer owns the TTY (REPL mode), it
@@ -190,7 +197,12 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
             return
 
     def _on_llm_completed(p: dict) -> None:
-        status_bar.stop()
+        # UI-CC-7: all phases done — compact line marks completion.
+        from rich.console import Console
+        Console().print(status_compact_line(
+            step=_turn_index, elapsed=p.get("duration", 0.0),
+            thinking=True, tools=True, generating=True,
+        ))
         renderer.flush()
         metrics.record_api_call(duration=p.get("duration", 1.0))
 
@@ -317,7 +329,9 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         renderer.flush()
 
     bus.subscribe("llm_request_started", _on_llm_started)
-    status_bar.wire()  # السهم: الشريط يسمع الناقل
+    # UI-CC-7: keep the bar listening on the bus (protected contract) but
+    # do NOT start() it — the inline compact line replaces the live box.
+    status_bar.wire()
     bus.subscribe("llm_token", _on_llm_token)
     bus.subscribe("llm_request_completed", _on_llm_completed)
     bus.subscribe("tool_started", _on_tool_started)
