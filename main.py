@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-
+import threading
 from typing import Any
 from pathlib import Path
 from core.utils import safe_strip
@@ -913,23 +913,37 @@ def _run_repl(
 
     plan_mode: bool = False
 
+    def _render_indicator() -> str:
+        """Render the current typing-indicator frame to an ANSI string."""
+        from io import StringIO
+        from rich.console import Console
+        from ui.cc_style import typing_indicator_frame
+        buf = StringIO()
+        Console(file=buf, force_terminal=False, color_system="truecolor").print(
+            typing_indicator_frame(_indicator_index_holder[0])
+        )
+        return buf.getvalue()
+
     def _bottom_toolbar():
         from ui.cc_style import hint_for_mode
+        indicator = _render_indicator()
         if plan_mode:
             text, _style = hint_for_mode("plan")
             return ANSI(
-                _ansi_fg(SEMANTIC.warning.rgb, text.split(" [")[0])
+                indicator
+                + _ansi_fg(SEMANTIC.warning.rgb, text.split(" [")[0])
                 + f" \033[2m[{text.split('[', 1)[1]}"
             )
         from core.accept_edits_state import has_pending_edits
         if has_pending_edits():
             text, _style = hint_for_mode("accept")
             return ANSI(
-                _ansi_fg(SEMANTIC.secondary.rgb, text.split(" [")[0])
+                indicator
+                + _ansi_fg(SEMANTIC.secondary.rgb, text.split(" [")[0])
                 + f" \033[2m[{text.split('[', 1)[1]}"
             )
         text, _style = hint_for_mode("default")
-        return ANSI(f"\033[2m{text}")
+        return ANSI(indicator + f"\033[2m{text}")
 
     bindings = KeyBindings()
 
@@ -967,9 +981,32 @@ def _run_repl(
         )
         return
 
+    # BRAND-2: daemon thread that pulses the "◈ agent" typing indicator
+    # in the bottom toolbar every 0.5s while the prompt is waiting for
+    # user input.  The thread calls app.invalidate() to refresh the
+    # display; it only runs while _prompt_active is set so it never
+    # interferes with agent execution.
+    _indicator_index_holder: list[int] = [0]
+    _prompt_active = threading.Event()
+
+    def _pulse_indicator() -> None:
+        """Cycle the typing-indicator frame and invalidate the prompt app."""
+        while True:
+            if _prompt_active.is_set():
+                _indicator_index_holder[0] = (_indicator_index_holder[0] + 1) % 3
+                try:
+                    input_session.app.invalidate()
+                except Exception:
+                    pass
+            _prompt_active.wait(0.5)
+
+    _indicator_thread = threading.Thread(target=_pulse_indicator, daemon=True)
+    _indicator_thread.start()
+
     try:
         while True:
             try:
+                _prompt_active.set()
                 user_input = input_session.prompt(
                     HTML(
                         f"{PROMPT_HTML_PREFIX}\n{PROMPT_HTML_SUFFIX}"
@@ -979,6 +1016,8 @@ def _run_repl(
                 ).strip()
             except (KeyboardInterrupt, EOFError):
                 break
+            finally:
+                _prompt_active.clear()
 
             if not user_input:
                 continue

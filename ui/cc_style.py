@@ -10,6 +10,38 @@ from typing import Sequence
 
 from ui.design.theme.semantic import SEMANTIC
 
+# BRAND-2: typing-indicator animation frames.
+#
+# The indicator is "◈ agent" rendered in SEMANTIC.brand (world teal).
+# To produce a "pulse" effect we cycle three Rich styles derived from the
+# brand color — brand / brand-dim / brand — so the mark breathes without
+# embedding any raw #hex in cc_style (the value lives only in the
+# SemanticTheme registry).
+
+_brand_style = f"bold {SEMANTIC.brand}"
+_brand_dim_style = f"bold {SEMANTIC.brand} dim"
+
+
+def typing_indicator_frames() -> list["Text"]:
+    """Return the list of animation frames for the typing indicator.
+
+    Each frame is a Rich ``Text`` containing "◈ agent" in a brand-derived
+    style.  Three frames give a breathing pulse:
+    brand → brand-dim → brand.
+    """
+    from rich.text import Text
+    return [
+        Text().append("◈ agent", style=_brand_style),
+        Text().append("◈ agent", style=_brand_dim_style),
+        Text().append("◈ agent", style=_brand_style),
+    ]
+
+
+def typing_indicator_frame(index: int) -> "Text":
+    """Return the animation frame at *index* (cycles indefinitely)."""
+    frames = typing_indicator_frames()
+    return frames[index % len(frames)]
+
 # Badge background routes through the semantic palette (no raw #hex).
 BADGE_STYLE = f"bold white on {SEMANTIC.action_badge}"
 

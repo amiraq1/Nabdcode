@@ -63,6 +63,9 @@ class SemanticTheme:
     neon_amber: Color   # neon amber (#ffcc00)
     neon_blue: Color    # neon blue (#00a8ff)
 
+    # brand identity
+    brand: Color        # brand primary — world teal (#00ff9d)
+
 
 SEMANTIC: SemanticTheme = SemanticTheme(
     background=Color("#000000"),
@@ -102,4 +105,5 @@ SEMANTIC: SemanticTheme = SemanticTheme(
     neon_pink=Color("#ff2d95"),
     neon_amber=Color("#ffcc00"),
     neon_blue=Color("#00a8ff"),
+    brand=Color("#00ff9d"),
 )
