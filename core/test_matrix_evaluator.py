@@ -8,9 +8,6 @@ single bad case never aborts the whole matrix.
 
 from __future__ import annotations
 
-import threading
-import traceback
-from concurrent.futures import Future
 from typing import Any, Dict, List
 
 from core.self_refinement import SafeExecutionSandbox
@@ -67,88 +64,28 @@ class TestMatrixEvaluator:
         failed = 0
         details: List[Dict[str, Any]] = []
 
-        # 1. Compile + sandbox-exec the payload ONCE (reused for every case).
-        compiled = None
-        sandbox_globals: Dict[str, Any] = {}
-        try:
-            result = SafeExecutionSandbox.smoke_test_code(code_str)
-            if not result["passed"]:
-                # Whole payload invalid: every case fails with the compile error.
-                for i, case in enumerate(test_cases, start=1):
-                    failed += 1
-                    details.append(
-                        {
-                            "case": i,
-                            "status": "failed",
-                            "error": f"payload error: {result['error']}",
-                            "expected": case.get("expected"),
-                            "actual": None,
-                        }
-                    )
-                return self._report(total, passed, failed, details)
-            # Re-exec into a fresh namespace to capture the defined function.
-            compiled = compile(code_str, "<suite>", "exec")
-            SafeExecutionSandbox.smoke_test_code(code_str)  # already validated
-            namespace: Dict[str, Any] = {}
-            exec(compiled, namespace)
-            target = self._find_target(namespace)
-            if target is None:
-                raise NameError(
-                    "no testable function found in payload (expected e.g. 'def solution(...)')"
-                )
-        except Exception as exc:  # noqa: BLE001 - payload-level failure
-            for i, case in enumerate(test_cases, start=1):
-                failed += 1
-                details.append(
-                    {
-                        "case": i,
-                        "status": "failed",
-                        "error": f"payload error: {type(exc).__name__}: {exc}",
-                        "expected": case.get("expected"),
-                        "actual": None,
-                    }
-                )
-            return self._report(total, passed, failed, details)
+        result = SafeExecutionSandbox.evaluate_code_suite(
+            code_str,
+            test_cases,
+            timeout=self.case_timeout,
+        )
+        if not result.get("passed"):
+            error = result.get("error", "payload execution failed")
+            details = [
+                {
+                    "case": i,
+                    "status": "failed",
+                    "error": f"payload error: {error}",
+                    "expected": case.get("expected"),
+                    "actual": None,
+                }
+                for i, case in enumerate(test_cases, start=1)
+            ]
+            return self._report(total, 0, total, details)
 
-        # 2. Per-case evaluation, each isolated so one failure can't abort the loop.
-        for i, case in enumerate(test_cases, start=1):
-            try:
-                actual = self._invoke(target, case.get("inputs"))
-                expected = case.get("expected")
-                if self._matches(actual, expected):
-                    passed += 1
-                    details.append(
-                        {
-                            "case": i,
-                            "status": "passed",
-                            "error": None,
-                            "expected": expected,
-                            "actual": actual,
-                        }
-                    )
-                else:
-                    failed += 1
-                    details.append(
-                        {
-                            "case": i,
-                            "status": "failed",
-                            "error": f"mismatch: expected {expected!r}, got {actual!r}",
-                            "expected": expected,
-                            "actual": actual,
-                        }
-                    )
-            except Exception as exc:  # noqa: BLE001 - single-case containment
-                failed += 1
-                details.append(
-                    {
-                        "case": i,
-                        "status": "failed",
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "expected": case.get("expected"),
-                        "actual": None,
-                    }
-                )
-
+        details = result.get("details", [])
+        passed = sum(1 for item in details if item.get("status") == "passed")
+        failed = len(details) - passed
         return self._report(total, passed, failed, details)
 
     # ── helpers ──────────────────────────────────────────────────────────
