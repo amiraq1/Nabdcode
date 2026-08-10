@@ -31,7 +31,6 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from core.ui_bridge import get_bridge
-from ui.widgets.status_bar import AgentStatusBar
 from ui.widgets.tool_result import ToolResultWidget
 from ui.widgets.tool_result_list import ToolResultList
 from ui.design.theme.semantic import SEMANTIC
@@ -673,9 +672,11 @@ async def render_agent_events(status_bar=None) -> None:
     """
     bridge = get_bridge()
 
-    if status_bar is None:
-        status_bar = AgentStatusBar(console=console)
-        status_bar.wire()
+    # UI-CC-6: the status box is no longer rendered from the REPL — the
+    # compact ✓/▶/○ line (status_compact_line) is the feedback instead.
+    # AgentStatusBar is left untouched (protected file); we simply never
+    # construct/wire it here, so all `if status_bar:` branches are no-ops.
+    status_bar = None
 
     try:
         def _on_plan_updated(todos):
