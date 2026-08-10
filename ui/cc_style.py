@@ -121,3 +121,52 @@ def thought_line(seconds: int) -> str:
 def status_line(verb: str, tokens: int) -> str:
     """Format a status line with a verb and a human-readable token count."""
     return f"✦ {verb}… {format_tokens(tokens)}"
+
+
+# ── UI-CC-3: bottom-bar hints + collapse store ──────────────────────────────
+
+def hint_for_mode(mode: str) -> tuple[str, str]:
+    """Return (hint_text, rich_style) for the bottom bar given the mode.
+
+    Modes: "plan" (plan mode), "accept" (accept-edits on), "default".
+    The style routes through the SEMANTIC palette — no raw #hex.
+    """
+    if mode == "plan":
+        return "plan mode [shift+tab]", f"bold {SEMANTIC.warning}"
+    if mode == "accept":
+        return "» accept edits on [shift+tab]", f"bold {SEMANTIC.secondary}"
+    return "? for shortcuts [shift+tab]", "dim"
+
+
+class CollapseStore:
+    """Store collapsed output blocks by id so they can be expanded later.
+
+    ``store()`` returns an integer id; ``expand(id)`` returns the original
+    lines (a fresh list copy) or ``None`` for an unknown/expired id.
+    """
+
+    def __init__(self) -> None:
+        self._blocks: dict[int, list[str]] = {}
+        self._next_id: int = 1
+
+    def store(self, lines: Sequence[str]) -> int:
+        """Store *lines* and return its id."""
+        cid = self._next_id
+        self._next_id += 1
+        self._blocks[cid] = list(lines)
+        return cid
+
+    def expand(self, cid: int) -> list[str] | None:
+        """Return a copy of the stored block, or None if unknown."""
+        block = self._blocks.get(cid)
+        if block is None:
+            return None
+        return list(block)
+
+    def ids(self) -> list[int]:
+        """Return all stored ids (ascending)."""
+        return sorted(self._blocks)
+
+
+# Process-wide collapse store (UI-CC-3): /expand and future ctrl+o share it.
+collapse_store = CollapseStore()

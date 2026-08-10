@@ -632,6 +632,36 @@ def _process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str
 
         return True
 
+    if user_input.lower().startswith("/expand"):
+        # UI-CC-3: expand a previously collapsed output block by id.
+        parts = user_input.split(maxsplit=1)
+        cid_arg = parts[1].strip() if len(parts) > 1 else ""
+        from ui.cc_style import CollapseStore, collapse_store
+        if not cid_arg:
+            ids = collapse_store.ids()
+            if not ids:
+                sys.stdout.write("\n\033[2m(no collapsed blocks to expand)\033[0m\n\n")
+            else:
+                sys.stdout.write(f"\n\033[2mCollapsed blocks: {', '.join(str(i) for i in ids)} — /expand <id>\033[0m\n\n")
+            sys.stdout.flush()
+            return True
+        try:
+            cid = int(cid_arg)
+        except ValueError:
+            sys.stdout.write(f"\n\033[91m⚠ /expand expects a numeric id, got '{cid_arg}'\033[0m\n\n")
+            sys.stdout.flush()
+            return True
+        block = collapse_store.expand(cid)
+        if block is None:
+            sys.stdout.write(f"\n\033[91m⚠ No collapsed block with id {cid}\033[0m\n\n")
+            sys.stdout.flush()
+            return True
+        sys.stdout.write(f"\n{'─' * 40}\n")
+        for line in block:
+            sys.stdout.write(f"  {line}\n")
+        sys.stdout.flush()
+        return True
+
     return False
 
 
@@ -870,23 +900,22 @@ def _run_repl(
     plan_mode: bool = False
 
     def _bottom_toolbar():
+        from ui.cc_style import hint_for_mode
         if plan_mode:
+            text, _style = hint_for_mode("plan")
             return ANSI(
-                _ansi_fg(SEMANTIC.warning.rgb, "plan mode")
-                + " \033[2m[shift+tab]\033[0m  "
-                + "\033[2m? for shortcuts\033[0m"
+                _ansi_fg(SEMANTIC.warning.rgb, text.split(" [")[0])
+                + f" \033[2m[{text.split('[', 1)[1]}"
             )
         from core.accept_edits_state import has_pending_edits
         if has_pending_edits():
+            text, _style = hint_for_mode("accept")
             return ANSI(
-                _ansi_fg(SEMANTIC.secondary.rgb, "» accept edits on")
-                + " \033[2m[shift+tab]\033[0m  "
-                + "\033[2m? for shortcuts\033[0m"
+                _ansi_fg(SEMANTIC.secondary.rgb, text.split(" [")[0])
+                + f" \033[2m[{text.split('[', 1)[1]}"
             )
-        return ANSI(
-            f"\033[2m[shift+tab]\033[0m  "
-            f"\033[2m? for shortcuts\033[0m"
-        )
+        text, _style = hint_for_mode("default")
+        return ANSI(f"\033[2m{text}")
 
     bindings = KeyBindings()
 

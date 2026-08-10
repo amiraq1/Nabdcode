@@ -850,6 +850,20 @@ def _setup_repl_keybindings() -> KeyBindings:
 
     @bindings.add("c-o")
     def _on_ctrl_o(event) -> None:
+        # UI-CC-3: expand the most-recent collapsed block from CollapseStore.
+        from ui.cc_style import collapse_store
+        ids = collapse_store.ids()
+        if ids:
+            block = collapse_store.expand(ids[-1])
+            if block:
+                console.print(Panel(
+                    "\n".join(block) or "(empty)",
+                    title="[bento.execution.title] ◈ Expanded Output [/bento.execution.title]",
+                    border_style="bento.execution.border",
+                    box=BOX_EXECUTION,
+                    padding=(1, 2),
+                ))
+                return
         if _collapsed_blocks:
             raw = _collapsed_blocks[-1]
             console.print(Panel(
@@ -1044,9 +1058,14 @@ class TerminalVisualizer:
             args = data.get("args")
 
             # UI-CC-2: طيّ المخرجات (+N lines [ctrl+o to expand])
+            # UI-CC-3: خزّن الكتلة الكاملة في CollapseStore لاسترجاعها عبر /expand
             if output_text:
                 _erase_live_line()
-                for line in collapse_lines(output_text.splitlines(), keep=3):
+                all_lines = output_text.splitlines()
+                if len(all_lines) > 3:
+                    from ui.cc_style import collapse_store
+                    collapse_store.store(all_lines)
+                for line in collapse_lines(all_lines, keep=3):
                     console.print(f"[dim]{line}[/dim]")
 
             widget = ToolResultWidget(
