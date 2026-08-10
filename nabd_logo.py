@@ -2,7 +2,6 @@ import os
 import shutil
 
 from rich.console import Console
-from rich.text import Text
 from core.kernel.subprocess_guard import default_guard
 
 # Force .env loading before reading OPENROUTER_MODEL for the banner.
@@ -10,8 +9,6 @@ try:
     import core._env  # noqa: F401
 except Exception:
     pass
-
-from ui.design.theme.semantic import SEMANTIC
 
 console = Console()
 
@@ -26,61 +23,46 @@ def get_git_repository_name():
     return "Local Workspace"
 
 
-def _classic_logo_lines():
-    """Return the original ASCII art lines (kept for the classic option)."""
-    return [
+def draw(model_name=None):
+    if model_name is None:
+        model_name = os.getenv("OPENROUTER_MODEL", "ORCA-FLASH").split("/")[-1]
+    # تقسيم أسطر الشعار لتلوين كل سطر بشكل مستقل
+    logo_lines = [
         "█▄ █ ▄▀█ █▄▀ █▀▄ █▀▀ █▀█ █▀▄ █▀▀",  # السطر العلوي
         "█ ▀█ █▀█ █▄█ █▄▀ █▄▄ █▄█ █▄▀ ██▄"   # السطر السفلي
     ]
 
+    # تحديد الأكواد القياسية: الأول أبيض عريض، والثاني رصاصي/رمادي مخفف
+    colors = [
+        "[bold white]",  # Bold White
+        "[grey35]",      # Dark Gray / Gray
+    ]
+    reset = "[/]"
 
-def render_logo(model_name=None, style="minimal"):
-    """Render the NABD OS logo.
-
-    style="minimal" (default): a compact world-mark ``◈ agent`` in the
-    brand color, followed by the system metadata line.
-
-    style="classic": the original ASCII art banner, preserved verbatim.
-    """
-    if model_name is None:
-        model_name = os.getenv("OPENROUTER_MODEL", "ORCA-FLASH").split("/")[-1]
-
+    # جلب اسم المستودع الحالي ديناميكياً
     repo_name = get_git_repository_name()
+
+    # صياغة معلومات النظام بعد حذف الـ Version
     metadata = f"Repo: {repo_name}  •  Model: {model_name}"
+
     columns, _ = shutil.get_terminal_size()
 
     # Hard ANSI reset — consistent Termux clear (through Rich)
     console.print("\033c", end="")
 
-    if style == "classic":
-        colors = [
-            "[bold white]",  # Bold White
-            "[grey35]",      # Dark Gray / Gray
-        ]
-        reset = "[/]"
-        for line, color in zip(_classic_logo_lines(), colors):
-            padding = max(0, (columns - len(line)) // 2)
-            console.print(" " * padding + color + line + reset)
-        console.print()
-        console.print(metadata.center(columns))
-        console.print("-" * columns)
-        return
+    # 1. طباعة الشعار وحساب التوسط يدوياً لتفادي تشويه الألوان
+    for line, color in zip(logo_lines, colors):
+        padding = max(0, (columns - len(line)) // 2)
+        console.print(" " * padding + color + line + reset)
 
-    # ── minimal (default) ──
-    brand_style = SEMANTIC.brand.to_rich_style()
-    # World mark: ◈ agent  (teal)
-    padding = max(0, (columns - len("◈ agent")) // 2)
-    mark = Text(" " * padding + "◈ agent", style=brand_style)
-    console.print(mark)
     console.print()
+
+    # 2. طباعة معلومات النظام النظيفة بمنتصف الشاشة
     console.print(metadata.center(columns))
     console.print("-" * columns)
 
 
-# Backwards-compatible alias (main.py calls draw()).
-draw = render_logo
-print_nabd_logo = render_logo
-
+print_nabd_logo = draw
 
 if __name__ == "__main__":
-    render_logo()
+    draw()
