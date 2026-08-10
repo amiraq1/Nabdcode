@@ -11,6 +11,7 @@ STRUCTURE (CC reduction — Phase 6.2):
 
 from __future__ import annotations
 
+import time
 import json
 import os
 import sys
@@ -145,6 +146,20 @@ from ui.widgets.status_bar import AgentStatusBar
 from ui.cc_style import status_compact_line
 status_bar = AgentStatusBar()
 
+_step_start_time: float | None = None
+_timed_step: object = None
+
+def _mark_step(step: object) -> None:
+    """UI-CC-9b: بدء التوقيت لكل خطوة جديدة (المسار الحي)."""
+    global _step_start_time, _timed_step
+    if _step_start_time is None or _timed_step != step:
+        _step_start_time = time.monotonic()
+        _timed_step = step
+
+def _elapsed_for(step: object) -> float:
+    _mark_step(step)
+    return time.monotonic() - (_step_start_time or time.monotonic())
+
 def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
     """Subscribe all event handlers. Every output goes through renderer."""
     from core.kernel.events import bus
@@ -171,7 +186,7 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         # box that was rendered by the status bar (protected file untouched).
         from rich.console import Console
         Console().print(status_compact_line(
-            step=_turn_index, elapsed=0.0,
+            step=_turn_index, elapsed=_elapsed_for(_turn_index),
             thinking=True, tools=False, generating=False,
         ))
 
@@ -200,7 +215,7 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         # UI-CC-7: all phases done — compact line marks completion.
         from rich.console import Console
         Console().print(status_compact_line(
-            step=_turn_index, elapsed=p.get("duration", 0.0),
+            step=_turn_index, elapsed=p.get("duration") or _elapsed_for(_turn_index),
             thinking=True, tools=True, generating=True,
         ))
         renderer.flush()
