@@ -131,10 +131,10 @@ nabd_theme = CUSTOM_THEME
 
 PROMPT_STYLE = {
     "prompt": [
-        ("class:prompt", "╭─ nabd ~ "),
+        ("class:prompt", "❯ "),
     ],
     "continuation": [
-        ("class:prompt", "│ "),
+        ("class:prompt", "  "),
     ],
 }
 
@@ -144,13 +144,11 @@ PROMPT_STYLE = {
 # prompt is defined exactly once.
 # ───────────────────────────────────────────────────────
 
-# '╭─ nabd ~ ' in neon green (semantic prompt accent), bold
-PROMPT_HTML_PREFIX: str = (
-    "<style fg='green' bold='true'>╭─ nabd ~ </style>"
-)
-# '╰─❯ ' in neon cyan (semantic secondary accent), bold
+# BRAND-5: bare ❯ — no label text before the chevron
+PROMPT_HTML_PREFIX: str = ""
+# '❯ ' in neon cyan (semantic secondary accent), bold
 PROMPT_HTML_SUFFIX: str = (
-    "<style fg='cyan' bold='true'>╰─❯ </style>"
+    "<style fg='cyan' bold='true'>❯ </style>"
 )
 # Placeholder hint text (muted)
 PROMPT_HTML_PLACEHOLDER: str = "<style fg='grey'>Ask your question...</style>"
