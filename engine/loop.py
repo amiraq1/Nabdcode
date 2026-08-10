@@ -104,6 +104,7 @@ from engine._loop_helpers import (  # noqa: F401
     _build_dispatcher,
     _derive_read_hint,
     _type_name,
+    redact_leak_preview,
 )
 
 
@@ -624,7 +625,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # Prompt Leak Detector: check if raw model response leaked structural system markers
         if any(marker in response_text for marker in _LEAK_MARKERS):
             leak_preview = response_text[:200]
-            if self._note_provider_failure(f"Prompt Leak detected: {leak_preview}") is _LoopSignal.TERMINATE:
+            if self._note_provider_failure(redact_leak_preview(leak_preview)) is _LoopSignal.TERMINATE:
                 return LLMInvocationResult(
                     status=LLMInvocationStatus.FATAL_ERROR,
                     error_type="PromptLeak",
@@ -742,7 +743,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # ── Streaming Leak Detector (mirrors _invoke_llm_and_normalize) ──
         if any(marker in response_text for marker in _LEAK_MARKERS):
             leak_preview = response_text[:200]
-            if self._note_provider_failure(f"Prompt Leak detected: {leak_preview}") is _LoopSignal.TERMINATE:
+            if self._note_provider_failure(redact_leak_preview(leak_preview)) is _LoopSignal.TERMINATE:
                 return LLMInvocationResult(
                     status=LLMInvocationStatus.FATAL_ERROR,
                     error_type="PromptLeak",
