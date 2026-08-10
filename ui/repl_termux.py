@@ -65,6 +65,38 @@ _streaming_final: threading.Event = threading.Event()
 
 tool_result_list: ToolResultList = ToolResultList()
 
+# ── UX-1: Step tracking + Arabic status messages ──────────────────────────
+# Module-level step counter, updated from on_llm_request_started when the
+# engine emits llm_request_started with {"step": N}.  Read by the event
+# handlers in render_agent_events to render Arabic status lines.
+_current_step: int = 0
+
+
+def format_status_message(phase: str, step: int | None = None) -> str:
+    """Build an Arabic status message for the given pipeline phase.
+
+    Args:
+        phase: One of "thinking", "tools", "generating", "done".
+        step:  Optional 1-based step index (from RuntimeState.step_count).
+
+    Returns:
+        A human-readable Arabic string, e.g. "جاري التفكير... (الخطوة 1)".
+    """
+    _PHASE_AR = {
+        "thinking":   "جاري التفكير",
+        "tools":      "جاري تشغيل الأدوات",
+        "generating": "جاري الإنشاء",
+        "done":       "اكتمل",
+    }
+    label = _PHASE_AR.get(phase, phase)
+    try:
+        step_int = int(step) if step is not None else None
+    except (ValueError, TypeError):
+        step_int = None
+    if step_int is not None and step_int > 0:
+        return f"{label}... (الخطوة {step_int})"
+    return f"{label}..."
+
 
 def _ui_looks_like_tool_call(text: str) -> bool:
     """UI-side mirror of engine.loop._looks_like_tool_call.
@@ -672,6 +704,8 @@ async def render_agent_events(status_bar=None) -> None:
         token_buf = ""
         held_buf = ""
         _stream_line_buf = ""
+        _erase_live_line()
+        console.print(f"[dim]{format_status_message('done', _current_step)}[/dim]")
 
     def _on_thinking_start() -> None:
         """Begin compressed thought line for a new turn."""
@@ -684,6 +718,8 @@ async def render_agent_events(status_bar=None) -> None:
         _stream_line_buf = ""
         if hasattr(bridge, "_tokens_streamed"):
             bridge._tokens_streamed = False
+        _erase_live_line()
+        console.print(f"[dim]{format_status_message('thinking', _current_step)}[/dim]")
 
     def _on_thinking_stop() -> None:
         """Conclude thought phase, display collapsed reasoning."""
@@ -704,6 +740,8 @@ async def render_agent_events(status_bar=None) -> None:
         token_buf = ""
         held_buf = ""
         _stream_line_buf = ""
+        _erase_live_line()
+        console.print(f"[dim]{format_status_message('tools', _current_step)}[/dim]")
         action, label, meta = _parse_tool_event(name, args or {})
         print_badge(action, label, meta)
 
@@ -925,10 +963,22 @@ class TerminalVisualizer:
         # self._subscribe_with_fallback("loop_completed", self.on_loop_completed)
 
     def on_llm_request_started(self, data: dict):
-        """Reset streaming gate — only final-answer tokens will be streamed."""
+        """Reset streaming gate — only final-answer tokens will be streamed.
+
+        UX-1: Track step count from the engine payload and emit an Arabic
+        status line so the user sees progress (e.g. "جاري التفكير... (الخطوة 1)").
+        """
+        global _current_step
         _streaming_final.clear()
         self._navigation_enabled = False
         tool_result_list.clear()
+        if isinstance(data, dict) and "step" in data:
+            try:
+                _current_step = int(data["step"])
+            except (ValueError, TypeError):
+                pass
+        _erase_live_line()
+        console.print(f"[dim]{format_status_message('thinking', _current_step)}[/dim]")
 
     def on_tool_started(self, data: dict):
         """إظهار لوحة بدء الأداة مع سبينر متحرك عند بدء تشغيل أي أداة بناءً على دور الوكيل"""

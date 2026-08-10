@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -370,6 +371,56 @@ class OpenRouterClient:
 
 
 # ── Local (in-process) client ──────────────────────────────────────────────
+
+# TERM-2: Non-blocking Ollama availability probe.
+#
+# On Android/Termux an Ollama server (or its TCP port) may be slow or
+# absent entirely; a synchronous health check at boot would stall startup.
+# This module keeps a shared flag that is set asynchronously (daemon thread,
+# 2s timeout), and exposes ``ollama_available()`` for callers to branch on.
+# Defaults to False (conservative) until the probe succeeds.
+
+_OLLAMA_URL = "http://127.0.0.1:11434/api/tags"
+_OLLAMA_TIMEOUT = 2.0
+_OLLAMA_AVAILABLE: bool = False
+_OLLAMA_CHECKED: bool = False
+
+
+def check_ollama_async() -> None:
+    """Probe Ollama in a daemon thread; never blocks startup."""
+    def _probe() -> None:
+        global _OLLAMA_AVAILABLE, _OLLAMA_CHECKED
+        try:
+            import urllib.request
+            with urllib.request.urlopen(_OLLAMA_URL, timeout=_OLLAMA_TIMEOUT) as resp:
+                _OLLAMA_AVAILABLE = resp.status == 200
+        except Exception:
+            _OLLAMA_AVAILABLE = False
+        finally:
+            _OLLAMA_CHECKED = True
+
+    t = threading.Thread(target=_probe, daemon=True)
+    t.start()
+
+
+def ollama_available() -> bool:
+    """Return True once the async probe confirmed Ollama is reachable.
+
+    Returns False when the probe has not finished yet (conservative) —
+    callers should treat it as "not ready" and fall back to local models.
+    """
+    return _OLLAMA_AVAILABLE
+
+
+def ollama_probe_checked() -> bool:
+    """Return True once the async probe has completed (success or failure)."""
+    return _OLLAMA_CHECKED
+
+
+def _ollama_timeout() -> float:
+    """Expose the probe timeout for tests."""
+    return _OLLAMA_TIMEOUT
+
 
 class LocalClient:
     def __init__(self, config: LocalConfig | None = None) -> None:

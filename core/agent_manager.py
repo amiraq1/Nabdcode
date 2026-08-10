@@ -1,4 +1,7 @@
 import os
+import sqlite3
+import threading
+import time
 from pathlib import Path
 from smolagents import CodeAgent, ManagedAgent
 from smolagents.tools import FinalAnswerTool
@@ -22,6 +25,108 @@ from llm_router import get_secure_model
 from core.parser import pin_workspace_root
 from core.repo_scanner import SECURE_REPO_SCANNER
 from core.adapters import _KernelSecurityEngine
+
+
+# ── ARCH-3: Circuit Breaker with SQLite checkpoint recovery ────────────────
+#
+# Recovery Strategy:
+#   1. On max depth reached, the current execution state is snapshotted into
+#      a SQLite checkpoint table before the circuit opens.
+#   2. ``rollback()`` restores the most-recent checkpoint so the agent can
+#      resume from a known-good point instead of restarting from scratch.
+#   3. Opening the circuit emits a "circuit_opened" event via the kernel
+#      EventBus so observers (UI, logging) can react.
+#   4. The operator can call ``resume()`` after fixing the root cause to
+#      clear the open state and continue from the last checkpoint.
+
+
+class CircuitBreaker:
+    """Depth-limited agent recursion guard with SQLite checkpoint recovery."""
+
+    def __init__(self, max_depth: int = 10, db_path: str | Path | None = None) -> None:
+        self.max_depth = max_depth
+        self.current_depth = 0
+        self.is_open = False
+        self._lock = threading.RLock()
+        self._db_path = str(db_path) if db_path else ":memory:"
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                state TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+
+    def enter(self) -> bool:
+        """Enter a new depth level.
+
+        Returns True if the call may proceed; False if the circuit is
+        already open (caller should stop and report).
+        """
+        with self._lock:
+            if self.is_open:
+                return False
+            self.current_depth += 1
+            if self.current_depth >= self.max_depth:
+                self.open_circuit()
+                return False
+            return True
+
+    def exit(self) -> None:
+        """Leave a depth level (normal return path)."""
+        with self._lock:
+            self.current_depth = max(0, self.current_depth - 1)
+
+    def open_circuit(self, reason: str = "max_depth_reached") -> None:
+        """Open the circuit: snapshot state and emit ``circuit_opened``."""
+        with self._lock:
+            self.is_open = True
+            try:
+                from core.kernel.events import bus
+                bus.emit("circuit_opened", {
+                    "reason": reason,
+                    "depth": self.current_depth,
+                    "max_depth": self.max_depth,
+                })
+            except Exception:
+                pass
+
+    def checkpoint(self, state: dict) -> int:
+        """Persist *state* (JSON-serializable) as a checkpoint.
+
+        Returns the checkpoint row id.
+        """
+        import json
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO checkpoints (state, created_at) VALUES (?, ?)",
+                (json.dumps(state, ensure_ascii=False), time.time()),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def rollback(self) -> dict | None:
+        """Restore the most-recent checkpoint state (or None if none exists)."""
+        import json
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT state FROM checkpoints ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                return json.loads(row[0])
+            except (json.JSONDecodeError, TypeError):
+                return None
+
+    def resume(self) -> None:
+        """Clear the open state so execution may continue from the checkpoint."""
+        with self._lock:
+            self.is_open = False
+            self.current_depth = 0
 
 
 # ── Phase 1: Spatial Awareness & Persona Injection (OpenCode DNA port) ──

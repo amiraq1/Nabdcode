@@ -829,6 +829,13 @@ def _build_app() -> tuple:
         "BEHAVIOR:\n"
         "- Max 2 thoughts before action.\n"
         "- For complex calculations you MAY use execute_shell python3 -c \"print(...)\" but simple math answer directly.\n"
+        "\n"
+        "C) AFTER SHELL EXECUTION (CRITICAL):\n"
+        " - You ALREADY HAVE the command output from execute_shell.\n"
+        " - DO NOT call file_system.read to read files individually after execute_shell.\n"
+        " - Summarize the Shell output directly in your final_answer.\n"
+        " - Example: If 'ls' shows 12 files, say 'The directory contains 12 files: file1, file2, ...'\n"
+        " - NEVER call file_system.read after execute_shell unless explicitly asked.\n"
         + TODO_DISCIPLINE
     )
     state.append_message({"role": "system", "content": base_inst})
@@ -970,13 +977,41 @@ def main() -> None:
     import signal
     from core.cancellation import CancelToken
 
+    ctx, state, visualizer, base_inst, ExecutionLoop, ToolRequiredError = _build_app()
+
     def _handle_sigint(sig, frame):
-        """Honor Ctrl+C mid-generation: cancel the stream."""
-        CancelToken().cancel("user (Ctrl+C)")
+        """Emergency stop: save session and exit cleanly.
+
+        On first Ctrl+C during generation, cancel the stream. On second
+        Ctrl+C (or Ctrl+C outside generation), perform a full emergency
+        shutdown: persist session state and exit with code 0.
+        """
+        from rich.console import Console
+        from rich.panel import Panel
+
+        if CancelToken().is_cancelled:
+            # Second Ctrl+C: emergency stop
+            Console().print(
+                Panel(
+                    "[bold red]🛑 إيقاف طارئ — جاري إنهاء الجلسة...[/]",
+                    border_style="red",
+                )
+            )
+            try:
+                ctx.session_manager.messages = state.get_messages()
+                ctx.session_manager.todos = ctx.todo_manager.to_serializable()
+                ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
+                ctx.session_manager.save()
+                ctx.memory_manager.close()
+            except Exception:
+                pass
+            sys.exit(0)
+        else:
+            # First Ctrl+C: cancel the stream
+            CancelToken().cancel("user (Ctrl+C)")
 
     signal.signal(signal.SIGINT, _handle_sigint)
 
-    ctx, state, visualizer, base_inst, ExecutionLoop, ToolRequiredError = _build_app()
     _run_repl(ctx, state, visualizer, base_inst, ExecutionLoop, ToolRequiredError)
 
 

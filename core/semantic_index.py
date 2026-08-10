@@ -13,10 +13,13 @@ else:
 class TfIdfIndex:
     """Lightweight TF-IDF + cosine similarity for semantic search"""
 
+    _VERSION: str = "1.0"
+
     def __init__(self):
         self._doc_freq: Counter = Counter()
         self._doc_count = 0
         self._vocab = {}
+        self._stored_version: str = self._VERSION
 
     def index_chunks(self, chunks: List[MemoryChunk]) -> None:
         """Build TF-IDF index from chunks"""
@@ -28,6 +31,50 @@ class TfIdfIndex:
             unique_tokens = set(tokens)
             for token in unique_tokens:
                 self._doc_freq[token] += 1
+
+    # ── ARCH-1: Versioning & persistence ────────────────────────────────
+
+    @property
+    def version(self) -> str:
+        """Return the current index format version."""
+        return self._VERSION
+
+    def needs_rebuild(self) -> bool:
+        """Return True if the stored index version differs from the current version.
+
+        When the index format changes (e.g. tokenizer, TF weighting, or
+        serialization schema), ``_VERSION`` is bumped.  A persisted index
+        whose ``_stored_version`` does not match is considered stale and
+        must be rebuilt from source chunks.
+        """
+        return self._stored_version != self._VERSION
+
+    def serialize(self) -> dict:
+        """Serialize the index to a version-tagged dict for disk persistence."""
+        return {
+            "version": self._VERSION,
+            "doc_count": self._doc_count,
+            "doc_freq": dict(self._doc_freq),
+            "vocab": self._vocab,
+        }
+
+    def deserialize(self, data: dict) -> bool:
+        """Load index state from a serialized dict.
+
+        Returns True if the version matched and the index was loaded
+        successfully; False if the version is stale (caller should rebuild).
+        """
+        if not isinstance(data, dict):
+            return False
+        stored = data.get("version", "")
+        if stored != self._VERSION:
+            self._stored_version = stored
+            return False
+        self._doc_count = data.get("doc_count", 0)
+        self._doc_freq = Counter(data.get("doc_freq", {}))
+        self._vocab = data.get("vocab", {})
+        self._stored_version = stored
+        return True
 
     def search(self, query: str, chunks: List[MemoryChunk], top_k: int = 5) -> List[Tuple[MemoryChunk, float]]:
         """Search chunks by cosine similarity"""
