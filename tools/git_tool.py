@@ -210,18 +210,26 @@ class GitTool(BaseTool):
     args_schema = GitToolArgs
     
     ALLOWED = {"log", "diff", "status", "show", "branch", "tag"}
-    FORBIDDEN = {"commit", "push", "pull", "merge", "reset", "clean"}
+    WRITE_COMMANDS = {"add", "commit", "checkout", "restore"}
+    DANGEROUS_COMMANDS = {"push", "reset", "clean", "revert"}
     
-    def execute(self, command: str) -> str:
-        # 1. استخراج الأمر الأول
+    def execute(self, command: str, force_execute: bool = False) -> str | dict:
         cmd = command.split()[0] if command.split() else ""
-        # 2. فحص الـ forbidden (حماية مزدوجة)
-        if cmd in self.FORBIDDEN:
+        
+        if cmd in self.DANGEROUS_COMMANDS:
             raise ValueError(f"Git command '{cmd}' is forbidden")
-        # 3. فحص الـ allowlist
-        if cmd not in self.ALLOWED:
+            
+        if cmd in self.WRITE_COMMANDS:
+            if not force_execute:
+                return {
+                    "status": "consent_required",
+                    "command": command,
+                    "preview": "git diff --staged" if cmd == "commit" else f"git diff {command}"
+                }
+            # Otherwise proceed to execute safely
+        elif cmd not in self.ALLOWED:
             raise ValueError(f"Git command '{cmd}' not allowed. Allowed: {self.ALLOWED}")
-        # 4. تنفيذ آمن عبر subprocess مع timeout
+
         result = subprocess.run(
             ["git"] + command.split(),
             capture_output=True, text=True, timeout=10,

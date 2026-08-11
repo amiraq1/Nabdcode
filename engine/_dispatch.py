@@ -235,9 +235,30 @@ class _ToolDispatchMixin:
                     self._ctx.last_todo_sig = _todo_sig
         else:
             result = self.dispatcher.dispatch(tool_name, tool_args)
+            
+            if isinstance(getattr(result, "stdout", None), str) and "'consent_required'" in result.stdout:
+                import ast
+                try:
+                    parsed_res = ast.literal_eval(result.stdout)
+                except Exception:
+                    parsed_res = None
+                
+                if isinstance(parsed_res, dict) and parsed_res.get("status") == "consent_required":
+                    from engine.consent import ConsentManager
+                    blocked = ConsentManager().confirm(
+                        tool_name,
+                        {"command": parsed_res.get("command", ""), "preview": parsed_res.get("preview", "")},
+                        evidence_log=self.evidence_log,
+                        step=getattr(self.state, "step_count", 0)
+                    )
+                    if blocked is not None:
+                        result = blocked
+                    else:
+                        tool_args["force_execute"] = True
+                        result = self.dispatcher.dispatch(tool_name, tool_args)
+
             if _todo_sig and self._ctx is not None:
                 self._ctx.last_todo_sig = _todo_sig
-
         # ── Evidence Recording ───────────────────────────────────────────────
         cmd_summary = _extract_cmd_or_path(tool_args)
         # PATCH-R4.4: Extract workspace_relative_path from tool post-execution

@@ -18,7 +18,7 @@ def test_allowed_commands():
 def test_forbidden_commands():
     tool = GitTool()
     with pytest.raises(ValueError, match="forbidden"):
-        tool.execute("commit -m 'test'")
+        tool.execute("clean -fd")
     with pytest.raises(ValueError, match="forbidden"):
         tool.execute("push origin main")
 
