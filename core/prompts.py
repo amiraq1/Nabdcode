@@ -146,6 +146,7 @@ BASE_INSTRUCTIONS = (
         " - NEVER call file_system.read after execute_shell unless explicitly asked.\n"
         "\n"
         "E) OUTPUT DISCIPLINE (final answer quality):\n"
+        " - NEVER invent, mock, or hallucinate tool outputs. If a tool fails, returns an error, or is empty, state the exact error clearly. ممنوع اختلاق نتائج الأدوات؛ إذا فشلت الأداة، اذكر الخطأ بدقة.\n"
         "- FINAL ANSWER != WORK LOG: state the finding ONCE; recommendations\n"
         "  ONCE as a short bullet list; NEVER repeat the same sentence across\n"
         "  sections (results/recommendations/conclusion must not duplicate).\n"
