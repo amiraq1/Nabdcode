@@ -198,7 +198,17 @@ class GitPushTool(BaseTool):
 
 import subprocess
 
+class GitToolArgs(BaseModel):
+    command: str = Field(description="The git command to execute (e.g., 'log -n 3', 'status', 'diff')")
+
 class GitTool(BaseTool):
+    """
+    Execute read-only git commands safely.
+    Use this tool to view git history, status, diffs, and branch information.
+    Allowed commands: log, diff, status, show, branch, tag.
+    """
+    args_schema = GitToolArgs
+    
     ALLOWED = {"log", "diff", "status", "show", "branch", "tag"}
     FORBIDDEN = {"commit", "push", "pull", "merge", "reset", "clean"}
     
