@@ -236,7 +236,13 @@ def _handle_one_shot_query(
 
         outcome = engine.run(one_shot_query)
         display_text = outcome.safe_message or outcome.final_answer or "(Session completed - no text returned)"
-        ctx.renderer.stream_chunk(display_text)
+        import sys
+        if sys.stdout.isatty():
+            from rich.console import Console
+            import ui.cc_style as cc_style
+            Console().print(cc_style.render_final_answer(display_text))
+        else:
+            ctx.renderer.stream_chunk(display_text)
         ctx.renderer.flush()
     except ToolRequiredError as exc:
         _cleanup_after_streamed_failure(state, ctx, exc)
