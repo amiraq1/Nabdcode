@@ -43,10 +43,10 @@ def test_no_inline_running_tools_panel() -> None:
 
 def test_compact_line_printed_on_step() -> None:
     """status_compact_line must be called and its output printed in the
-    step-start and step-end handlers in main.py."""
-    src = MAIN.read_text(encoding="utf-8")
-    assert "status_compact_line(" in src
-    assert "Console().print(status_compact_line(" in src
+    step-start and step-end handlers in ui/event_wiring.py."""
+    wiring_src = (ROOT / "ui" / "event_wiring.py").read_text(encoding="utf-8")
+    assert "status_compact_line(" in wiring_src
+    assert "Console().print(status_compact_line(" in wiring_src
 
 
 # ── ع3: protected_untouched ─────────────────────────────────────────────────
