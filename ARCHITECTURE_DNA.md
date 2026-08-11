@@ -6,27 +6,29 @@
 
 | Metric | Computed Value |
 | :--- | :--- |
-| **Files Scanned** | `442` |
-| **Files Successfully Parsed** | `442` |
+| **Files Scanned** | `448` |
+| **Files Successfully Parsed** | `448` |
 | **Files Skipped** | `1` |
 | **Parse Failures** | `0` |
 | **Total Classes Detected** | `711` |
-| **Total Functions/Methods Detected** | `3980` |
+| **Total Functions/Methods Detected** | `4001` |
 
 ## 2. Deterministic Quality Scorecard
 
 | Dimension | Score (0-100) | Assessment |
 | :--- | :--- | :--- |
-| **Overall Composite Score** | **35** | 🔴 Critical Attention Required |
-| Architecture & Layer Discipline | `85` | Base 100 (-15 per layer violation) |
+| **Overall Composite Score** | **27** | 🔴 Critical Attention Required |
+| Architecture & Layer Discipline | `55` | Base 100 (-15 per layer violation) |
 | Security & Trust Boundaries | `0` | Base 100 (-10 per security risk) |
 | Complexity & Nesting Health | `0` | Base 100 (-10 per CC >= 15 hotspot) |
-| Dependency & Coupling Health | `80` | Base 100 (-20 per circular cycle) |
+| Dependency & Coupling Health | `60` | Base 100 (-20 per circular cycle) |
 | Documentation Coverage | `48` | Computed docstring ratio |
 | Maintainability Index | `0` | Penalizes dead code & unused imports |
 
 ### Itemized Score Deductions
 
+- [-15 Arch] core/command_dispatcher.py: Layer Violation: Core kernel cannot import UI renderer. Found import `ui.widgets.scan_display`.
+- [-15 Arch] core/command_dispatcher.py: Layer Violation: Core kernel cannot import UI renderer. Found import `ui.cc_style`.
 - [-15 Arch] core/commands/auto_scan.py: Layer Violation: Core kernel cannot import UI renderer. Found import `ui.repl_termux`.
 - [-10 Security] core/kernel/subprocess_guard.py:290 (SUBPROCESS_EXECUTION)
 - [-10 Security] core/kernel/subprocess_guard.py:394 (SUBPROCESS_EXECUTION)
@@ -40,8 +42,6 @@
 - [-10 Security] tests/test_fix_path_traversal.py:15 (SUBPROCESS_EXECUTION)
 - [-10 Security] tests/test_gate11_fresh_process.py:141 (SUBPROCESS_EXECUTION)
 - [-10 Security] tests/test_gate11_fresh_process.py:166 (SUBPROCESS_EXECUTION)
-- [-10 Security] tests/test_phase21_evidence_restore.py:235 (SUBPROCESS_EXECUTION)
-- [-10 Security] tests/test_phase21_evidence_restore.py:269 (SUBPROCESS_EXECUTION)
 
 ## 3. Verified Security & Architectural Evidence Log
 
@@ -77,7 +77,6 @@
 | [engine/loop.py](file://engine/loop.py#L416) | `ExecutionLoop._invoke_llm_and_normalize` | 416 | **COMPLEX-01** | HIGH_CYCLOMATIC_COMPLEXITY | Function cyclomatic complexity is 26 (threshold >= 15). | HIGH | Observed |
 | [llm_router.py](file://llm_router.py#L90) | `ProviderRouter.generate_stream` | 90 | **COMPLEX-01** | HIGH_CYCLOMATIC_COMPLEXITY | Function cyclomatic complexity is 20 (threshold >= 15). | HIGH | Observed |
 | [main.py](file://main.py#L49) | `_summarise_tool` | 49 | **COMPLEX-01** | HIGH_CYCLOMATIC_COMPLEXITY | Function cyclomatic complexity is 15 (threshold >= 15). | HIGH | Observed |
-| [main.py](file://main.py#L491) | `_process_slash_command` | 491 | **COMPLEX-01** | HIGH_CYCLOMATIC_COMPLEXITY | Function cyclomatic complexity is 32 (threshold >= 15). | HIGH | Observed |
 | [scripts/finalize.py](file://scripts/finalize.py#L74) | `count_tests` | 74 | **SEC-01** | SUBPROCESS_EXECUTION | Process execution via `subprocess.run` | HIGH | Observed |
 | [smolagents/__init__.py](file://smolagents/__init__.py#L196) | `CodeAgent._try_fast_path` | 196 | **COMPLEX-01** | HIGH_CYCLOMATIC_COMPLEXITY | Function cyclomatic complexity is 15 (threshold >= 15). | HIGH | Observed |
 | [smolagents/__init__.py](file://smolagents/__init__.py#L248) | `CodeAgent._run_react_loop` | 248 | **COMPLEX-01** | HIGH_CYCLOMATIC_COMPLEXITY | Function cyclomatic complexity is 15 (threshold >= 15). | HIGH | Observed |
@@ -116,6 +115,8 @@
 | [tools/secure_tools.py](file://tools/secure_tools.py#L669) | `SecureShellTool.forward` | 669 | **COMPLEX-01** | HIGH_CYCLOMATIC_COMPLEXITY | Function cyclomatic complexity is 16 (threshold >= 15). | HIGH | Observed |
 | [ui/repl_termux.py](file://ui/repl_termux.py#L146) | `_strip_tool_call_lines` | 146 | **COMPLEX-01** | HIGH_CYCLOMATIC_COMPLEXITY | Function cyclomatic complexity is 22 (threshold >= 15). | HIGH | Observed |
 | [ui/repl_termux.py](file://ui/repl_termux.py#L900) | `extract_clean_answer` | 900 | **COMPLEX-01** | HIGH_CYCLOMATIC_COMPLEXITY | Function cyclomatic complexity is 16 (threshold >= 15). | HIGH | Observed |
+| [core/command_dispatcher.py](file://core/command_dispatcher.py#L1) | `<module>` | 1 | **ARCH-01** | ARCHITECTURE_LAYER_VIOLATION | Layer Violation: Core kernel cannot import UI renderer. Found import `ui.widgets.scan_display`. | HIGH | Observed |
+| [core/command_dispatcher.py](file://core/command_dispatcher.py#L1) | `<module>` | 1 | **ARCH-01** | ARCHITECTURE_LAYER_VIOLATION | Layer Violation: Core kernel cannot import UI renderer. Found import `ui.cc_style`. | HIGH | Observed |
 | [core/commands/auto_scan.py](file://core/commands/auto_scan.py#L1) | `<module>` | 1 | **ARCH-01** | ARCHITECTURE_LAYER_VIOLATION | Layer Violation: Core kernel cannot import UI renderer. Found import `ui.repl_termux`. | HIGH | Observed |
 
 ## 4. Module Coupling & Instability Rankings (Top 15)
@@ -125,12 +126,12 @@
 | `engine/loop.py` | `46` | `37` | `0.45` |
 | `core/evidence.py` | `57` | `1` | `0.02` |
 | `engine/state.py` | `51` | `1` | `0.02` |
-| `main.py` | `14` | `29` | `0.67` |
+| `main.py` | `18` | `23` | `0.56` |
 | `tools/models.py` | `39` | `0` | `0.00` |
 | `ui/design/theme/semantic.py` | `33` | `1` | `0.03` |
+| `core/kernel/events.py` | `31` | `1` | `0.03` |
 | `core/app_context.py` | `11` | `20` | `0.65` |
 | `core/parser.py` | `26` | `5` | `0.16` |
-| `core/kernel/events.py` | `30` | `1` | `0.03` |
 | `engine/_loop_helpers.py` | `20` | `10` | `0.33` |
 | `engine/deep_agent.py` | `11` | `16` | `0.59` |
 | `engine/tool_registry.py` | `25` | `1` | `0.04` |
@@ -140,12 +141,13 @@
 
 ### Strongly Connected Components (Circular Dependencies)
 
-- **Cycle:** `ui/widgets/tool_result_list.py` <---> `ui/repl_termux.py` <---> `core/commands/auto_scan.py`
+- **Cycle:** `core/commands/auto_scan.py` <---> `ui/widgets/tool_result_list.py` <---> `ui/repl_termux.py`
+- **Cycle:** `ui/event_wiring.py` <---> `main.py` <---> `core/command_dispatcher.py`
 
 ## 5. Execution & Call Graph DNA
 
 - **Detected Recursive Functions (3):** `core.agent_manager:walk`, `core.display:shorten_paths`, `core.repo_scanner:walk`
-- **Detected Orphan Functions (3369):** `adapters.lightpanda_adapter:LightpandaAdapter.__init__`, `adapters.lightpanda_adapter:LightpandaAdapter._get_free_port`, `adapters.lightpanda_adapter:LightpandaAdapter._sanitize_and_compact_result`, `adapters.lightpanda_adapter:LightpandaAdapter.execute_tool`, `adapters.lightpanda_adapter:LightpandaAdapter.start`, `adapters.lightpanda_adapter:LightpandaAdapter.stop`, `core.accept_edits_state:_compact_journal`, `core.accept_edits_state:_detect_invalid_event_sequence`, `core.accept_edits_state:_get_path_lock_registry_snapshot`, `core.accept_edits_state:_highlight_word_changes`
+- **Detected Orphan Functions (3392):** `adapters.lightpanda_adapter:LightpandaAdapter.__init__`, `adapters.lightpanda_adapter:LightpandaAdapter._get_free_port`, `adapters.lightpanda_adapter:LightpandaAdapter._sanitize_and_compact_result`, `adapters.lightpanda_adapter:LightpandaAdapter.execute_tool`, `adapters.lightpanda_adapter:LightpandaAdapter.start`, `adapters.lightpanda_adapter:LightpandaAdapter.stop`, `core.accept_edits_state:_compact_journal`, `core.accept_edits_state:_detect_invalid_event_sequence`, `core.accept_edits_state:_get_path_lock_registry_snapshot`, `core.accept_edits_state:_highlight_word_changes`
 
 ---
 *Generated by `scripts/dna_forensics.py` — Principal Automated Source Code DNA Engine.*
