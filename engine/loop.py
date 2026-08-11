@@ -104,6 +104,7 @@ from engine._loop_helpers import (  # noqa: F401
     _build_dispatcher,
     _derive_read_hint,
     _type_name,
+    redact_leak_preview,
 )
 
 
@@ -624,7 +625,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # Prompt Leak Detector: check if raw model response leaked structural system markers
         if any(marker in response_text for marker in _LEAK_MARKERS):
             leak_preview = response_text[:200]
-            if self._note_provider_failure(f"Prompt Leak detected: {leak_preview}") is _LoopSignal.TERMINATE:
+            if self._note_provider_failure(redact_leak_preview(leak_preview)) is _LoopSignal.TERMINATE:
                 return LLMInvocationResult(
                     status=LLMInvocationStatus.FATAL_ERROR,
                     error_type="PromptLeak",
@@ -742,7 +743,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # ── Streaming Leak Detector (mirrors _invoke_llm_and_normalize) ──
         if any(marker in response_text for marker in _LEAK_MARKERS):
             leak_preview = response_text[:200]
-            if self._note_provider_failure(f"Prompt Leak detected: {leak_preview}") is _LoopSignal.TERMINATE:
+            if self._note_provider_failure(redact_leak_preview(leak_preview)) is _LoopSignal.TERMINATE:
                 return LLMInvocationResult(
                     status=LLMInvocationStatus.FATAL_ERROR,
                     error_type="PromptLeak",
@@ -1792,11 +1793,13 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                                 _tok, f"[UNVERIFIED] {_tok}"
                             )
                     self._last_response = tool_output
-                    self.state.update_status("COMPLETED")
-                    bus.emit("loop_completed", {
-                        "reason": "exact_action_gate_capped",
-                        "output": tool_output,
-                    })
+                    from engine._loop_helpers import _commit_terminal_outcome
+                    _commit_terminal_outcome(
+                        self,
+                        status="COMPLETED",
+                        reason="exact_action_gate_capped",
+                        output=tool_output,
+                    )
 
     def _run_once(self) -> None:
         """Execute a single loop iteration, delegating to the extracted helpers."""
@@ -1813,6 +1816,20 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
 
         if self._check_repetition_guard(response_text, normalized_resp) is _LoopSignal.TERMINATE:
             return
+
+        # UX-10: Mechanical Tool-Enforcement
+        from core.refusal_detector import is_refusal
+        if is_refusal(response_text) and not any(getattr(r, "success", False) for r in self.evidence_log.get_records()):
+            if getattr(self, "_refusal_retry_count", 0) < 3:
+                self._refusal_retry_count = getattr(self, "_refusal_retry_count", 0) + 1
+                import time
+                self.state.append_message({
+                    "role": "user",
+                    "content": "You MUST call a tool first"
+                })
+                self.state.increment_step()
+                time.sleep(getattr(self, "POLL_DELAY", 0.5))
+                return
 
         self._last_response = response_text
         bridge = get_bridge()

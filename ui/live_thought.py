@@ -75,6 +75,8 @@ class LiveThoughtCompressor:
         self._step_counter = 0
         self._token_count: int = 0
         self._ansi = _supports_ansi()
+        # UI-CC-2: last concluded thought-phase duration (seconds).
+        self.elapsed_seconds: int = 0
 
     # ── Phase control ──────────────────────────────────────────────────
     def start(self) -> None:
@@ -127,6 +129,8 @@ class LiveThoughtCompressor:
             return None
         self._active = False
         total_time = max(0, int(time.time() - self._start_ts))
+        # UI-CC-2: expose the duration for the thought indicator.
+        self.elapsed_seconds = total_time
         icon, label = _get_thinking_label(total_time)
         token_info = _fmt_tokens(self._token_count)
         # Erase the live line entirely. The frozen thinking placeholder
@@ -179,9 +183,10 @@ class LiveThoughtCompressor:
 # ── High-contrast bento badges ──────────────────────────────────────────
 # Color aliases resolved at render time; fall back to plain text if no ANSI.
 _badge_rgb = SEMANTIC.action_badge.rgb
-_badge_open = f"\033[48;2;{_badge_rgb[0]};{_badge_rgb[1]};{_badge_rgb[2]};38;2;255;255;255;1m"
+_w = SEMANTIC.text_bright.rgb
+_badge_open = f"\033[48;2;{_badge_rgb[0]};{_badge_rgb[1]};{_badge_rgb[2]};38;2;{_w[0]};{_w[1]};{_w[2]};1m"
 _thinking_rgb = SEMANTIC.thinking.rgb
-_thinking_open = f"\033[48;2;{_thinking_rgb[0]};{_thinking_rgb[1]};{_thinking_rgb[2]};38;2;255;255;255;1m"
+_thinking_open = f"\033[48;2;{_thinking_rgb[0]};{_thinking_rgb[1]};{_thinking_rgb[2]};38;2;{_w[0]};{_w[1]};{_w[2]};1m"
 _BENTO_COLORS = {
     "READ": (_badge_open, "\033[0m"),
     "SHELL": (_badge_open, "\033[0m"),

@@ -1,5 +1,6 @@
 [
   "agent_handoff",
+  "circuit_opened",
   "clarify_triggered",
   "context_compacted",
   "deep_checkpoint_saved",

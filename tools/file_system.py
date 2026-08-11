@@ -11,7 +11,7 @@ from typing import Any, Final
 from tools.base import BaseTool
 from tools.models import ToolResult
 from core.sanitize import sanitize
-from core.kernel.events import bus
+
 import core.accept_edits_state as aes
 
 
@@ -62,11 +62,12 @@ class FileSystemTool(BaseTool):
 
     MAX_READ_SIZE: Final[int] = 1_000_000  # 1 MB
 
-    def __init__(self, workspace: str | Path = ".", snapshot_engine: Any = None) -> None:
+    def __init__(self, workspace: str | Path = ".", snapshot_engine: Any = None, bus: Any = None) -> None:
         self.workspace = Path(workspace).resolve()
         # Optional SnapshotEngine for pre-write backups (enables /undo).
         # When None, writes proceed without snapshotting (no behavior change).
         self._snap = snapshot_engine
+        self.bus = bus
 
     def execute(self, **kwargs) -> ToolResult:
 
@@ -160,14 +161,16 @@ class FileSystemTool(BaseTool):
                 return self._list(target, recursive=bool(kwargs.get("recursive", False)))
 
             if action is FileAction.READ:
-                bus.emit("file_read", {"path": path, "action": "read"})
+                if self.bus:
+                    self.bus.emit("file_read", {"path": path, "action": "read"})
                 return self._read(target)
 
             if action is FileAction.READ_MANY:
                 return self._handle_read_many(kwargs)
 
             if action is FileAction.EDIT:
-                bus.emit("file_modified", {"path": path, "action": "edit"})
+                if self.bus:
+                    self.bus.emit("file_modified", {"path": path, "action": "edit"})
                 return self._handle_edit(path, target, kwargs)
 
             # ── Pre-write snapshot (enables /undo) ───────────────────────
@@ -184,7 +187,8 @@ class FileSystemTool(BaseTool):
                     pass
 
             if action is FileAction.WRITE:
-                bus.emit("file_written", {"path": path, "action": "write"})
+                if self.bus:
+                    self.bus.emit("file_written", {"path": path, "action": "write"})
                 return self._write(target, content)
 
             if action is FileAction.APPEND:

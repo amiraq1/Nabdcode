@@ -15,16 +15,61 @@ Design principles:
 RTL constraint (Am+8 D-6): full bidi shaping is NOT implemented here. Width is
 measured in display columns; visual ordering is delegated to the terminal. The
 data layer never reorders text and never injects RLM/LRM to fake support.
+
+TERM-1 (Am+9): when ``arabic_reshaper`` and ``bidi`` ARE installed (e.g. a
+desktop Linux box with a C toolchain), ``render_arabic()`` performs proper
+Arabic character shaping + logical-to-visual reordering. On Termux/Android
+these packages typically cannot be compiled (they need the ``fribidi`` C
+library), so the import is lazy and the function degrades gracefully to the
+bidi-isolation fallback below. The data layer is untouched: shaping is
+display-only.
 """
 
 from __future__ import annotations
 
 import re
+import sys
 import unicodedata
 
 
 # ── ANSI escape sequence regex ──────────────────────────────────────────────
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+# TERM-1: Lazy optional deps (fribidi-based).  Import failure must NEVER
+# break startup — on Android/Termux these wheels are usually unavailable.
+_HAS_BIDI = False
+try:
+    import arabic_reshaper  # type: ignore[import-untyped]
+    from bidi.algorithm import get_display  # type: ignore[import-untyped]
+    _HAS_BIDI = True
+except (ImportError, OSError):
+    arabic_reshaper = None
+    get_display = None
+
+
+def render_arabic(text: str) -> str:
+    """Render Arabic text for terminal display.
+
+    Uses proper shaping (arabic-reshaper) + logical-to-visual reordering
+    (python-bidi) when both are installed.  Falls back to bidi-isolation
+    marks (``safe_display``) otherwise, so Termux without ``fribidi``
+    still renders readable text.
+
+    Returns the display-ready string.  Never raises.
+    """
+    if not text:
+        return text
+    if _HAS_BIDI and is_arabic(text):
+        try:
+            return get_display(arabic_reshaper.reshape(text))
+        except Exception:
+            pass
+    return safe_display(text)
+
+
+def has_bidi_support() -> bool:
+    """Return True when arabic-reshaper + python-bidi are importable."""
+    return _HAS_BIDI
 
 
 def strip_ansi(text: str) -> str:

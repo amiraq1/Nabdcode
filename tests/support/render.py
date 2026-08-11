@@ -40,6 +40,7 @@ def make_console(
         width=width,
         height=height,
         force_terminal=True,
+        force_interactive=True,
         color_system="truecolor",
         theme=theme,
     )

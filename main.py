@@ -11,10 +11,11 @@ STRUCTURE (CC reduction — Phase 6.2):
 
 from __future__ import annotations
 
+import time
 import json
 import os
 import sys
-
+import threading
 from typing import Any
 from pathlib import Path
 from core.utils import safe_strip
@@ -28,6 +29,9 @@ from ui.theme import (
     PROMPT_HTML_SUFFIX,
     PROMPT_HTML_PLACEHOLDER,
 )
+from core.prompts import BASE_INSTRUCTIONS
+base_inst = BASE_INSTRUCTIONS
+
 
 _last_echoed_input: str = ""
 
@@ -141,198 +145,9 @@ def _extract_final_answer_text(raw: Any) -> str:
 
 
 # ── Event Wiring ───────────────────────────────────────────────────────────
+from ui.event_wiring import (wire_events, _mark_step, _elapsed_for)  # ARCH-5
 from ui.widgets.status_bar import AgentStatusBar
 status_bar = AgentStatusBar()
-
-def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
-    """Subscribe all event handlers. Every output goes through renderer."""
-    from core.kernel.events import bus
-    from engine.ui_theme import map_tool_to_badge
-
-    renderer = ctx.renderer
-    metrics = ctx.metrics
-    todo_manager = ctx.todo_manager
-
-    _last_tool_args: dict = {}
-    _last_stage: str = "init"
-    _last_tool_name: str = ""
-    _turn_index: int = 0
-
-    _token_buf: str = ""
-    _held_buf: str = ""
-
-    def _on_llm_started(p: dict) -> None:
-        nonlocal _turn_index, _token_buf, _held_buf
-        _token_buf = ""
-        _held_buf = ""
-        _turn_index += 1
-        status_bar.start()
-
-    def _on_llm_token(p: dict) -> None:
-        # When the interactive TerminalVisualizer owns the TTY (REPL mode), it
-        # is the single renderer and wire_events yields to it. In one-shot mode
-        # the visualizer is built without listeners, so this flag stays False
-        # and wire_events is the sole renderer. Exactly one renderer per mode.
-        if getattr(bus, "_on_tool_completed_active", False):
-            return
-        nonlocal _token_buf, _held_buf
-        content = p.get("token", "")
-        # Buffer intermediate tokens locally and DISCARD — never stream to
-        # stdout. Only the final answer (rendered separately after engine.run()
-        # returns) may reach stdout. This guarantees no reasoning, planning,
-        # scratchpad, or chain-of-thought text leaks to the terminal.
-        _token_buf += content
-        stripped = _token_buf.lstrip()
-        if stripped.startswith("{") or stripped.startswith("final_answer"):
-            return
-        if "final_answer".startswith(stripped):
-            _held_buf += content
-            return
-
-    def _on_llm_completed(p: dict) -> None:
-        status_bar.stop()
-        renderer.flush()
-        metrics.record_api_call(duration=p.get("duration", 1.0))
-
-    def _on_tool_started(p: dict) -> None:
-        if getattr(bus, "_on_tool_completed_active", False):
-            return
-        nonlocal _last_tool_args, _last_tool_name
-        tool = p.get("tool") or p.get("name", "")
-        args = p.get("args") or {}
-        _last_tool_args = args
-        _last_tool_name = tool
-        renderer.tool_start(tool, args)
-        renderer.flush()
-
-    def _on_tool_completed(p: dict) -> None:
-        if getattr(bus, "_on_tool_completed_active", False):
-            return
-        nonlocal _last_stage
-        result = p.get("result")
-        if result is None:
-            return
-        tool = p.get("tool") or ""
-        success = p.get("success", getattr(result, "success", False))
-        output = (getattr(result, "stdout", "") or "").strip()
-        stderr = (getattr(result, "stderr", "") or "").strip()
-        diff_text = p.get("diff") or getattr(result, "diff", "")
-        kind = map_tool_to_badge(tool, _last_tool_args)
-
-        if kind == "EDIT":
-            _last_stage = "edit"
-        elif kind == "SHELL":
-            _last_stage = "shell"
-        elif kind == "READ":
-            _last_stage = "read"
-
-        # Build summary line
-        summary = ""
-        if not success:
-            snippet = (stderr or output).splitlines()[0][:80] if (stderr or output) else "failed"
-            summary = snippet
-        elif kind == "READ" and output:
-            n = len(output.splitlines())
-            summary = f"{n} lines"
-        elif kind == "SHELL" and output:
-            n = len(output.splitlines())
-            cmd = _last_tool_args.get("command", "")[:40]
-            summary = f"{cmd} ({n} lines)"
-        elif kind in ("SEARCH", "MEMORY") and output:
-            count = output.count("[")
-            summary = f"{count} results"
-
-        renderer.tool_end(
-            tool,
-            success=success,
-            output=output,
-            summary=summary,
-            diff=diff_text if kind == "EDIT" and diff_text else "",
-        )
-        renderer.flush()
-
-        # Render TODO list when the todo_write tool completes
-        if tool == "todo_write" and todo_manager is not None:
-            items = [
-                {"content": it.text, "status": it.status.value}
-                for it in todo_manager.all()
-            ]
-            renderer.todos(items)
-            renderer.flush()
-
-    def _on_max_steps(p: dict) -> None:
-        renderer.think_end()
-        renderer.error_badge("PAUSED", "Max steps reached, continuing...")
-        renderer.flush()
-
-    def _on_loop_error(p: dict) -> None:
-        renderer.think_end()
-        renderer.error_badge("ENGINE", p.get("error", "unknown"))
-        renderer.flush()
-
-    def _on_loop_completed(p: dict) -> None:
-        # The engine terminated the turn (connection_lost / budget_exhausted /
-        # goal_not_met / etc.). Surface the reason/error to the user instead of
-        # returning silently to the prompt.
-        reason = p.get("reason", "completed")
-        output = p.get("output", "")
-        renderer.think_end()
-        if reason in ("connection_lost",) or not output or isinstance(output, Exception):
-            err_msg = str(output) if output else f"Agent stopped: {reason}. Check network/OpenRouter key & credit."
-            renderer.error_badge("ENGINE", err_msg)
-        else:
-            # ❌ الكود القديم الذي يسبب ظهور صندوقين (Double-Render): تم تعطيله
-            pass
-        renderer.flush()
-
-    def _on_provider_failover(p: dict) -> None:
-        prov = p.get("provider", "?")
-        renderer.dim_line(f"retrying {prov}...")
-        renderer.flush()
-
-    def _on_deep_plan(p: dict) -> None:
-        renderer.badge_line("PLAN", "Analyzing task & structuring execution steps...", "cyan")
-        renderer.flush()
-
-    def _on_deep_exec(p: dict) -> None:
-        renderer.badge_line("EXEC", "Running plan steps sequentially...", "green")
-        renderer.flush()
-
-    def _on_deep_review(p: dict) -> None:
-        renderer.badge_line("REVIEW", "Reflecting on final output quality...", "yellow")
-        renderer.flush()
-
-    def _on_deep_replan(p: dict) -> None:
-        renderer.badge_line("RE-PLAN", "Review failed. Injecting critique & re-planning...", "red")
-        renderer.flush()
-
-    def _on_hitl_triggered(p: dict) -> None:
-        step = p.get("step", "")
-        renderer.badge_line("HITL", f"Human approval requested for sensitive step: '{step}'", "yellow")
-        renderer.flush()
-
-    def _on_clarify_triggered(p: dict) -> None:
-        question = p.get("question", "")
-        renderer.badge_line("CLARIFY", f"Interactive steering required: {question}", "yellow")
-        renderer.flush()
-
-    bus.subscribe("llm_request_started", _on_llm_started)
-    status_bar.wire()  # السهم: الشريط يسمع الناقل
-    bus.subscribe("llm_token", _on_llm_token)
-    bus.subscribe("llm_request_completed", _on_llm_completed)
-    bus.subscribe("tool_started", _on_tool_started)
-    bus.subscribe("tool_completed", _on_tool_completed)
-    bus.subscribe("loop_max_steps_reached", _on_max_steps)
-    bus.subscribe("loop_error", _on_loop_error)
-    bus.subscribe("loop_completed", _on_loop_completed)
-    bus.subscribe("llm_provider_failover", _on_provider_failover)
-    bus.subscribe("deep_plan", _on_deep_plan)
-    bus.subscribe("deep_exec", _on_deep_exec)
-    bus.subscribe("deep_review", _on_deep_review)
-    bus.subscribe("deep_replan", _on_deep_replan)
-    bus.subscribe("hitl_triggered", _on_hitl_triggered)
-    bus.subscribe("clarify_triggered", _on_clarify_triggered)
-
 
 # ── System Setup ───────────────────────────────────────────────────────────
 
@@ -421,7 +236,13 @@ def _handle_one_shot_query(
 
         outcome = engine.run(one_shot_query)
         display_text = outcome.safe_message or outcome.final_answer or "(Session completed - no text returned)"
-        ctx.renderer.stream_chunk(display_text)
+        import sys
+        if sys.stdout.isatty():
+            from rich.console import Console
+            import ui.cc_style as cc_style
+            Console().print(cc_style.render_final_answer(display_text))
+        else:
+            ctx.renderer.stream_chunk(display_text)
         ctx.renderer.flush()
     except ToolRequiredError as exc:
         _cleanup_after_streamed_failure(state, ctx, exc)
@@ -445,195 +266,7 @@ def _handle_one_shot_query(
 # ── Slash-command handler ──────────────────────────────────────────────────
 
 
-def _validate_fix_path(filepath: str) -> bool:
-    """Return True if filepath is safe, False otherwise."""
-    from core.kernel.security import get_workspace_root
-    try:
-        workspace_root = get_workspace_root()
-        resolved_target = (workspace_root / filepath).resolve()
-        resolved_target.relative_to(workspace_root)
-        return True
-    except (ValueError, OSError):
-        return False
-
-def _process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
-    if user_input.lower() in ("clear", "/clear", "/reset", "/c"):
-        state.clear_context()
-        state.set_messages([{"role": "system", "content": base_inst}])
-        if hasattr(ctx.evidence_log, "clear"):
-            ctx.evidence_log.clear()
-        elif isinstance(ctx.evidence_log, list):
-            ctx.evidence_log.clear()
-        if hasattr(ctx.todo_manager, "clear"):
-            ctx.todo_manager.clear()
-        from core.accept_edits_state import reset_session
-        reset_session()
-        try:
-            workspace_dir = get_workspace_root() if 'get_workspace_root' in globals() else Path.cwd()
-            checkpoint_file = workspace_dir / CHECKPOINT_FILENAME
-            if checkpoint_file.exists():
-                checkpoint_file.unlink()
-                ctx.logger.info("Workspace checkpoint cleared.")
-        except Exception as e:
-            ctx.logger.warning(f"Failed to unlink checkpoint: {e}")
-        sys.stdout.write("\n\033[92m✨ [System] Context and history have been cleared. Ready for a new task!\033[0m\n\n")
-        sys.stdout.flush()
-        return True
-
-    if user_input.lower().startswith("/undo"):
-        parts = user_input.split(maxsplit=1)
-        undo_path = parts[1].strip() if len(parts) > 1 else ""
-        if not undo_path:
-            sys.stdout.write("\n\033[91m⚠ Usage: /undo <filepath>\033[0m\n\n")
-        else:
-            sys.stdout.write(f"\n{ctx.snapshot_engine.undo(undo_path)}\n\n")
-        sys.stdout.flush()
-        return True
-
-    if user_input.strip() in ("فحص", "فحص مستودع", "scan", "scan repo", "/deep-scan"):
-        from core.repo_scanner import SECURE_REPO_SCANNER
-        try:
-            from rich.console import Console
-            from ui.widgets.scan_display import render_scan_result
-            render_scan_result(
-                Console(),
-                SECURE_REPO_SCANNER()._deep_scan(get_workspace_root()),
-            )
-        except Exception as _scan_exc:
-            sys.stdout.write(f"\n\033[91m⚠ deep scan failed: {_scan_exc}\033[0m\n\n")
-        sys.stdout.flush()
-        return True
-
-    if user_input.lower().startswith(("/refactor", "nabd refactor", "/dag", "/resume", "nabd resume")):
-        parts = user_input.split()
-        is_resume = user_input.lower().startswith(("/resume", "nabd resume"))
-        target_files_list = parts[1:] if len(parts) > 1 and not is_resume else ["target_dummy.py"]
-        try:
-            from llm_router import get_secure_model
-            from tools.secure_tools import SecureGraphifyTool
-            from core.dag.launcher import launch_nabdos_core
-            from engine.consent import ConsentManager
-            llm = get_secure_model()
-            ws = str(get_workspace_root() if 'get_workspace_root' in globals() else Path.cwd())
-            graphify = SecureGraphifyTool(workspace_dir=ws)
-            taste_rules = ["All functions MUST have strict Type Hints.", "Use clear docstrings and comments."]
-            # S-2-FINAL: توصيل الموافقة الفعلي — ConsentManager يُكيَّف إلى
-            # ConsentCallback (confirm()→None = موافقة). كل أمر DAG طرفي
-            # يُعرض على البشر قبل التنفيذ (أو يُسجَّل رفضًا عند غياب الإجابة).
-            consent_manager = ConsentManager()
-            consent_callback = lambda t, a: consent_manager.confirm(
-                t, a, evidence_log=ctx.evidence_log, step=getattr(state, "step_count", 0)
-            ) is None
-            launch_nabdos_core(
-                llm_engine=llm,
-                graphify_tool=graphify,
-                workspace_dir=ws,
-                target_files=target_files_list,
-                taste_rules=taste_rules,
-                resume=is_resume,
-                consent_callback=consent_callback,
-            )
-        except Exception as dag_err:
-            sys.stdout.write(f"\n\033[91m❌ [DAG Launcher Error] {dag_err}\033[0m\n\n")
-        sys.stdout.flush()
-        return True
-
-    if user_input.lower().startswith("/fix"):
-        import ast as _ast
-        import re as _re
-        import subprocess as _sp
-
-        remainder = user_input[len("/fix"):].strip()
-        _m = _re.match(r'(.+?)\s*(?:->|→)\s*(.+)', remainder)
-        if not _m:
-            sys.stdout.write(
-                "\n\033[91m⚠ Usage: /fix <filepath> → <function_name>\033[0m\n\n"
-            )
-            sys.stdout.flush()
-            return True
-
-        filepath = _m.group(1).strip()
-        func_name = _m.group(2).strip()
-
-        try:
-            if not _validate_fix_path(filepath):
-                sys.stdout.write("\n\033[91m⚠ Error: path outside workspace\033[0m\n\n")
-                sys.stdout.flush()
-                return
-
-            target = Path(filepath)
-            if not target.exists():
-                sys.stdout.write(f"\n\033[91m⚠ File not found: {filepath}\033[0m\n\n")
-                sys.stdout.flush()
-                return True
-
-            content = target.read_text(encoding="utf-8")
-            tree = _ast.parse(content, filename=filepath)
-
-            # Find function — walk top-level and class methods
-            found = None
-            for node in _ast.walk(tree):
-                if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == func_name:
-                    found = node
-                    break
-
-            if not found:
-                sys.stdout.write(
-                    f"\n\033[91m⚠ Function '{func_name}' not found in {filepath}\033[0m\n\n"
-                )
-                sys.stdout.flush()
-                return True
-
-            lines = content.splitlines()
-            start = found.lineno - 1
-            end = getattr(found, "end_lineno", len(lines))
-            func_lines = lines[start:end]
-
-            # 1. Display the function with line numbers
-            sys.stdout.write(
-                f"\n\033[94m📄 {filepath} — function: {func_name}"
-                f" (L{found.lineno}-{end})\033[0m\n"
-            )
-            sys.stdout.write(f"\033[90m{'─' * 60}\033[0m\n")
-            for i, line in enumerate(func_lines, start=found.lineno):
-                sys.stdout.write(f"\033[2m{i:4d}│\033[0m {line}\n")
-            sys.stdout.write(f"\033[90m{'─' * 60}\033[0m\n")
-            sys.stdout.flush()
-
-            # 2. Run tests
-            sys.stdout.write("\n\033[94m🧪 Running ui tests...\033[0m\n")
-            sys.stdout.flush()
-            result = _sp.run(
-                ["python3", "-m", "pytest", "tests/", "-k", "ui", "-v"],
-                cwd=str(Path.cwd()),
-                capture_output=True, text=True, timeout=60,
-            )
-            sys.stdout.write(result.stdout + "\n")
-            if result.stderr:
-                sys.stdout.write(f"\033[91m{result.stderr}\033[0m\n")
-            if result.returncode == 0:
-                sys.stdout.write("\033[92m✅ All tests passed!\033[0m\n\n")
-            else:
-                sys.stdout.write(
-                    f"\033[91m❌ Tests failed (exit code {result.returncode})"
-                    " — fix the function above, then re-run /fix\033[0m\n\n"
-                )
-            sys.stdout.flush()
-
-        except SyntaxError as exc:
-            sys.stdout.write(f"\n\033[91m⚠ Syntax error in {filepath}: {exc}\033[0m\n\n")
-            sys.stdout.flush()
-        except _sp.TimeoutExpired:
-            sys.stdout.write("\n\033[91m⚠ Tests timed out after 60s\033[0m\n\n")
-            sys.stdout.flush()
-        except Exception as exc:
-            sys.stdout.write(f"\n\033[91m⚠ Error: {exc}\033[0m\n\n")
-            sys.stdout.flush()
-
-        return True
-
-    return False
-
+from core.command_dispatcher import (process_slash_command as _process_slash_command, validate_fix_path as _validate_fix_path)  # ARCH-6
 
 # ── Interactive turn handler ───────────────────────────────────────────────
 
@@ -809,28 +442,6 @@ def _build_app() -> tuple:
     # the session restore data and is shared by visualizer, loop,
     # dispatcher, and the shutdown handler.
 
-    base_inst = (
-        "You are an advanced Autonomous Agent running on a Linux environment.\n"
-        "CRITICAL RULE: Respond ONLY in English.\n"
-        "\n"
-        "=== TASK CLASSIFICATION - APPLY THIS FIRST ===\n"
-        "A) GENERAL / GREETINGS / MATH / FACTS / COUNTRIES (e.g. 'hi', 'hello', 'iraq', '1+1', 'what is Iraq?'):\n"
-        " - Answer DIRECTLY from your own knowledge.\n"
-        " - DO NOT call file_system, web_search, search_memory, todo_write, execute_shell, or ANY tool.\n"
-        " - NEVER say 'I don\\'t have information' or 'I don\\'t have sufficient evidence' for this category.\n"
-        " - Examples: 'hi' -> 'Hello! How can I help?'; 'iraq' -> 2-3 sentences about Iraq; '1+1' -> '2'.\n"
-        "\n"
-        "B) CODEBASE / FILESYSTEM / PROJECT TASKS:\n"
-        " - You MUST use the appropriate tool.\n"
-        " - Every factual statement about codebase/filesystem must be backed by tool output or verified memory.\n"
-        " - Never invent file names, architectures, or statistics.\n"
-        " - WORKSPACE ROOT: Your current working directory IS the repository root. Use relative paths.\n"
-        "\n"
-        "BEHAVIOR:\n"
-        "- Max 2 thoughts before action.\n"
-        "- For complex calculations you MAY use execute_shell python3 -c \"print(...)\" but simple math answer directly.\n"
-        + TODO_DISCIPLINE
-    )
     state.append_message({"role": "system", "content": base_inst})
 
     return ctx, state, visualizer, base_inst, ExecutionLoop, ToolRequiredError
@@ -861,25 +472,6 @@ def _run_repl(
     from prompt_toolkit.key_binding import KeyBindings
 
     plan_mode: bool = False
-
-    def _bottom_toolbar():
-        if plan_mode:
-            return ANSI(
-                _ansi_fg(SEMANTIC.warning.rgb, "plan mode")
-                + " \033[2m[shift+tab]\033[0m  "
-                + "\033[2m? for shortcuts\033[0m"
-            )
-        from core.accept_edits_state import has_pending_edits
-        if has_pending_edits():
-            return ANSI(
-                _ansi_fg(SEMANTIC.secondary.rgb, "» accept edits on")
-                + " \033[2m[shift+tab]\033[0m  "
-                + "\033[2m? for shortcuts\033[0m"
-            )
-        return ANSI(
-            f"\033[2m[shift+tab]\033[0m  "
-            f"\033[2m? for shortcuts\033[0m"
-        )
 
     bindings = KeyBindings()
 
@@ -924,7 +516,6 @@ def _run_repl(
                     HTML(
                         f"{PROMPT_HTML_PREFIX}\n{PROMPT_HTML_SUFFIX}"
                     ),
-                    bottom_toolbar=_bottom_toolbar,
                     placeholder=HTML(PROMPT_HTML_PLACEHOLDER),
                 ).strip()
             except (KeyboardInterrupt, EOFError):
@@ -970,13 +561,41 @@ def main() -> None:
     import signal
     from core.cancellation import CancelToken
 
+    ctx, state, visualizer, base_inst, ExecutionLoop, ToolRequiredError = _build_app()
+
     def _handle_sigint(sig, frame):
-        """Honor Ctrl+C mid-generation: cancel the stream."""
-        CancelToken().cancel("user (Ctrl+C)")
+        """Emergency stop: save session and exit cleanly.
+
+        On first Ctrl+C during generation, cancel the stream. On second
+        Ctrl+C (or Ctrl+C outside generation), perform a full emergency
+        shutdown: persist session state and exit with code 0.
+        """
+        from rich.console import Console
+        from rich.panel import Panel
+
+        if CancelToken().is_cancelled:
+            # Second Ctrl+C: emergency stop
+            Console().print(
+                Panel(
+                    "[bold red]🛑 إيقاف طارئ — جاري إنهاء الجلسة...[/]",
+                    border_style="red",
+                )
+            )
+            try:
+                ctx.session_manager.messages = state.get_messages()
+                ctx.session_manager.todos = ctx.todo_manager.to_serializable()
+                ctx.session_manager.evidence = ctx.evidence_log.to_serializable().get("records", [])
+                ctx.session_manager.save()
+                ctx.memory_manager.close()
+            except Exception:
+                pass
+            sys.exit(0)
+        else:
+            # First Ctrl+C: cancel the stream
+            CancelToken().cancel("user (Ctrl+C)")
 
     signal.signal(signal.SIGINT, _handle_sigint)
 
-    ctx, state, visualizer, base_inst, ExecutionLoop, ToolRequiredError = _build_app()
     _run_repl(ctx, state, visualizer, base_inst, ExecutionLoop, ToolRequiredError)
 
 

@@ -27,7 +27,16 @@ def _isolate_tool_registry():
     saved_root = core.kernel.security._WORKSPACE_ROOT
     core.kernel.security._WORKSPACE_ROOT = None
     
+    import os
+    saved_term = os.environ.get("TERM")
+    os.environ["TERM"] = "xterm-256color"
+    
     yield
+    
+    if saved_term is None:
+        del os.environ["TERM"]
+    else:
+        os.environ["TERM"] = saved_term
     
     registry._tools = saved_tools
     core.kernel.security._WORKSPACE_ROOT = saved_root

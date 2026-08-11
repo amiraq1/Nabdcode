@@ -57,6 +57,13 @@ class AppContext:
         """
         config = AgentConfig()
         pin_workspace_root(config.workspace_root)
+        # TERM-2: kick off the non-blocking Ollama probe so startup is never
+        # stalled waiting on a possibly-absent local model server.
+        try:
+            from core.llm import check_ollama_async
+            check_ollama_async()
+        except Exception:
+            pass
         storage = UnifiedStorage(root_dir=Path(config.root_dir))
         storage.set_sqlite_path(os.path.join(config.root_dir, "workspace_memory.db"))
         session_mgr = storage.session_manager

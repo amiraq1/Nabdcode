@@ -113,9 +113,10 @@ class CoderAgent:
             SecureGraphifyTool,
         ) = _lazy_secure_tools()
 
+        from core.kernel.events import bus
         self._agent = CodeAgent(
             tools=[
-                SecureFileSystemTool(workspace=workspace_path),
+                SecureFileSystemTool(workspace=workspace_path, bus=bus),
                 SecureWebSearchTool(),
                 SecureCodeIntelligenceTool(workspace=workspace_path),
                 SecurePythonREPLTool(workspace=workspace_path),

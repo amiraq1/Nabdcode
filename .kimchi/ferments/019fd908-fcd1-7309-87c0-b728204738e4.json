@@ -1,0 +1,127 @@
+{
+  "id": "019fd908-fcd1-7309-87c0-b728204738e4",
+  "name": "Repository Security Audit Report",
+  "description": "hi",
+  "status": "paused",
+  "worktree": {
+    "path": "/data/data/com.termux/files/home/smart-agent",
+    "branch": "am8/d-0",
+    "commit": "0735e30e5c95094fbe0e1221faccc46c88826738"
+  },
+  "scoping": {
+    "goal": {
+      "answer": "Produce a validated markdown audit report that confirms or refutes each finding in ARCHITECTURE_DNA.md, classifies severity, and adds concrete remediation guidance for the smart-agent repository.",
+      "confirmedAt": "2026-08-06T21:52:28.142Z"
+    },
+    "criteria": {
+      "answer": "AUDIT_REPORT.md exists at /data/data/com.termux/files/home/smart-agent/AUDIT_REPORT.md and contains sections for Security, Architecture, Complexity, and Documentation findings (verify: `test -f AUDIT_REPORT.md && grep -c '^## ' AUDIT_REPORT.md` returns >= 4)\nEvery entry listed in ARCHITECTURE_DNA.md rows 9–30 appears in AUDIT_REPORT.md with a Confirmed or False-Positive verdict, a file:line citation, and a severity tag (verify: `grep -cE 'Confirmed|False-Positive' AUDIT_REPORT.md` >= 22)\nEach Security finding (SEC-01, SEC-02) in the report includes an exploitability assessment and a remediation step citing the exact function/file to change\nReport is written in English per AGENT.md Language & Communication Policy, contains no Arabic prose, and uses only information verifiable from existing files in the repo",
+      "confirmedAt": "2026-08-06T21:52:28.142Z"
+    },
+    "constraints": {
+      "answer": "Audit-only: do not modify any source files in core/, engine/, tools/, ui/, scripts/, adapters/, or main.py, Do not introduce new dependencies or run destructive commands, Report must cite file:line for every finding, not just file names, English only — no Arabic prose in output per AGENT.md",
+      "confirmedAt": "2026-08-06T21:52:28.142Z"
+    },
+    "phases": {
+      "answer": "Audit",
+      "confirmedAt": "2026-08-06T21:52:28.142Z"
+    },
+    "assumptions": {
+      "answer": "The user wants an audit-only report (no source code fixes) — this is the safest default since the user cancelled the deliverable question; Security focus is highest priority because the security score is 10/100 vs 85/100 for architecture — the most dangerous gap; Medium depth: validate top 22 findings from ARCHITECTURE_DNA.md via targeted reads rather than re-running the forensic scanner; Report format: markdown at repo root, one file, four sections matching the four quality dimensions from ARCHITECTURE_DNA.md",
+      "confirmedAt": "2026-08-06T21:52:28.142Z"
+    }
+  },
+  "phases": [
+    {
+      "id": "phase-1",
+      "index": 1,
+      "name": "Audit",
+      "goal": "Read flagged source files, classify each finding, write AUDIT_REPORT.md",
+      "description": "",
+      "constraints": [
+        "No source file edits",
+        "No new dependencies"
+      ],
+      "parallel": false,
+      "status": "planned",
+      "steps": [
+        {
+          "id": "step-1",
+          "index": 1,
+          "description": "Read the 5 security-flagged files (core/kernel/subprocess_guard.py, core/self_refinement.py, core/test_matrix_evaluator.py, core/utils.py, scripts/finalize.py) — validate each SEC-01/SEC-02 finding with file:line evidence",
+          "status": "pending",
+          "verification": {
+            "command": "grep -cE 'SEC-01|SEC-02' audit_progress.log | head -5",
+            "retries": 2,
+            "retryDelayMs": 1000
+          },
+          "parallel": false
+        },
+        {
+          "id": "step-2",
+          "index": 2,
+          "description": "Read the 2 architecture-flagged files (ui/repl_termux.py, core/adapters.py) — check ACTUAL import statements to confirm or refute ARCH-01 violations",
+          "status": "pending",
+          "verification": {
+            "command": "grep -nE '^import|from' ui/repl_termux.py core/adapters.py 2>/dev/null | head -10",
+            "retries": 2,
+            "retryDelayMs": 1000
+          },
+          "parallel": false
+        },
+        {
+          "id": "step-3",
+          "index": 3,
+          "description": "Read the 5 highest-CC complexity-flagged files (core/investigation.py, engine/_convergence.py, engine/_budget.py, engine/deep_agent.py, tools/file_system.py) — count actual cyclomatic paths",
+          "status": "pending",
+          "verification": {
+            "command": "grep -nE 'if |elif |for |while |except|and |or ' audit_progress.log 2>/dev/null | head -5",
+            "retries": 2,
+            "retryDelayMs": 1000
+          },
+          "parallel": false
+        },
+        {
+          "id": "step-4",
+          "index": 4,
+          "description": "Check documentation coverage by sampling 5 engine/core modules for docstring presence",
+          "status": "pending",
+          "verification": {
+            "command": "grep -cE '''' engine/loop.py | head -3",
+            "retries": 2,
+            "retryDelayMs": 1000
+          },
+          "parallel": false
+        },
+        {
+          "id": "step-5",
+          "index": 5,
+          "description": "Write AUDIT_REPORT.md with findings, severity, and remediation guidance to repo root",
+          "status": "pending",
+          "verification": {
+            "command": "test -f /data/data/com.termux/files/home/smart-agent/AUDIT_REPORT.md && grep -cE '^## [^#]' AUDIT_REPORT.md",
+            "retries": 2,
+            "retryDelayMs": 1000
+          },
+          "parallel": false
+        }
+      ]
+    }
+  ],
+  "decisions": [],
+  "memories": [],
+  "createdAt": "2026-08-06T21:44:32.721Z",
+  "updatedAt": "2026-08-06T21:52:28.692Z",
+  "goal": "Produce a validated markdown audit report that confirms or refutes each finding in ARCHITECTURE_DNA.md, classifies severity, and adds concrete remediation guidance for the smart-agent repository.",
+  "successCriteria": [
+    "AUDIT_REPORT.md exists at /data/data/com.termux/files/home/smart-agent/AUDIT_REPORT.md and contains sections for Security, Architecture, Complexity, and Documentation findings (verify: `test -f AUDIT_REPORT.md && grep -c '^## ' AUDIT_REPORT.md` returns >= 4)",
+    "Every entry listed in ARCHITECTURE_DNA.md rows 9–30 appears in AUDIT_REPORT.md with a Confirmed or False-Positive verdict, a file:line citation, and a severity tag (verify: `grep -cE 'Confirmed|False-Positive' AUDIT_REPORT.md` >= 22)",
+    "Each Security finding (SEC-01, SEC-02) in the report includes an exploitability assessment and a remediation step citing the exact function/file to change",
+    "Report is written in English per AGENT.md Language & Communication Policy, contains no Arabic prose, and uses only information verifiable from existing files in the repo"
+  ],
+  "constraints": [
+    "Audit-only: do not modify any source files in core/, engine/, tools/, ui/, scripts/, adapters/, or main.py",
+    "Do not introduce new dependencies or run destructive commands",
+    "Report must cite file:line for every finding, not just file names",
+    "English only — no Arabic prose in output per AGENT.md"
+  ]
+}

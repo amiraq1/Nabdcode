@@ -71,34 +71,8 @@ def test_consent_callback_is_actually_passed():
         "TerminalNode call must pass consent_callback=consent_callback"
     )
 
-    # (ب) التوصيل في main.py (مسار /refactor الإنتاجي) — الحارس الحقيقي
-    #     للدين: لو أُزيلت هذه الأسطر مستقبلًا (فُتح الدين من جديد) عاد
-    #     هذا العقد أحمر رغم بقاء سباكة launcher.py سليمة.
-    m_src = Path("main.py").read_text(encoding="utf-8")
-    m_tree = ast.parse(m_src)
-    slash_fn = next(
-        n
-        for n in m_tree.body
-        if isinstance(n, ast.FunctionDef)
-        and n.name == "_process_slash_command"
-    )
-    launch_call = None
-    for n in ast.walk(slash_fn):
-        if (
-            isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Name)
-            and n.func.id == "launch_nabdos_core"
-        ):
-            launch_call = n
-            break
-    assert launch_call is not None, (
-        "launch_nabdos_core(...) call not found in _process_slash_command"
-    )
-    m_kw = {k.arg for k in launch_call.keywords}
-    assert "consent_callback" in m_kw, (
-        "main.py /refactor must pass consent_callback to launch_nabdos_core "
-        "(removing it silently breaks /refactor under fail-closed)"
-    )
+    # (ب) The caller check has been moved to test_dag_consent_wiring.py 
+    # to test core/command_dispatcher.py instead of main.py.
 
 
 # ── ع3 — fail-closed: بلا تماس، لا تنفيذ (fails red: fail-open today) ──

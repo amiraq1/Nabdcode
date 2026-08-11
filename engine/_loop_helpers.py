@@ -705,3 +705,24 @@ def _commit_terminal_outcome(
             safe_message=final_output,
             final_answer=final_output,
         ))
+
+
+# ── SEC-4: redact leaked prompt previews from user-facing errors ────────────
+
+import logging as _logging
+
+_redact_logger = _logging.getLogger(__name__)
+
+
+def redact_leak_preview(preview: str) -> str:
+    """Return a redacted, operator-safe error message for a prompt leak.
+
+    The full *preview* is logged at DEBUG level (operator-visible in logs)
+    but the user-facing message only states the reason and the byte length —
+    never the leaked content itself.
+
+    Returns: ``"Prompt Leak detected [content redacted, {n} chars]"``
+    """
+    preview = preview or ""
+    _redact_logger.debug("Prompt leak preview (%d chars): %s", len(preview), preview)
+    return f"Prompt Leak detected [content redacted, {len(preview)} chars]"

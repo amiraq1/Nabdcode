@@ -75,9 +75,12 @@ class TestVerifyProtocol(unittest.TestCase):
     def test_footer_count_equals_violation_lines(self):
         out = run_script().stdout
         listed = len([l for l in out.splitlines() if l.startswith("- ")])
-        m = re.search(r"^verify_protocol: ([0-9]+) violation", out, re.M)
-        self.assertIsNotNone(m)
-        self.assertEqual(int(m.group(1)), listed)
+        if "verify_protocol: clean" in out:
+            self.assertEqual(listed, 0)
+        else:
+            m = re.search(r"^verify_protocol: ([0-9]+) violation", out, re.M)
+            self.assertIsNotNone(m)
+            self.assertEqual(int(m.group(1)), listed)
 
 
 if __name__ == "__main__":

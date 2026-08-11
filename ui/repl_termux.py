@@ -31,7 +31,6 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from core.ui_bridge import get_bridge
-from ui.widgets.status_bar import AgentStatusBar
 from ui.widgets.tool_result import ToolResultWidget
 from ui.widgets.tool_result_list import ToolResultList
 from ui.design.theme.semantic import SEMANTIC
@@ -40,6 +39,22 @@ from core.permissions import ShellPermissions
 from core.kernel.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor
 from core.utils import safe_strip
+from ui.cc_style import (
+    badge_for_tool,
+    collapse_lines,
+    diff_pairs,
+    error_line,
+    final_answer_header,
+    format_tokens,
+    next_status_verb,
+    render_final_answer,
+    should_print_compact,
+    status_compact_line,
+    status_line,
+    thought_line,
+    todo_line,
+    tool_header_line,
+)
 from ui.theme import (
     BOX_EXECUTION,
     BOX_FINAL,
@@ -64,6 +79,38 @@ import threading
 _streaming_final: threading.Event = threading.Event()
 
 tool_result_list: ToolResultList = ToolResultList()
+
+# ── UX-1: Step tracking + Arabic status messages ──────────────────────────
+# Module-level step counter, updated from on_llm_request_started when the
+# engine emits llm_request_started with {"step": N}.  Read by the event
+# handlers in render_agent_events to render Arabic status lines.
+_current_step: int = 0
+
+
+def format_status_message(phase: str, step: int | None = None) -> str:
+    """Build an Arabic status message for the given pipeline phase.
+
+    Args:
+        phase: One of "thinking", "tools", "generating", "done".
+        step:  Optional 1-based step index (from RuntimeState.step_count).
+
+    Returns:
+        A human-readable Arabic string, e.g. "جاري التفكير... (الخطوة 1)".
+    """
+    _PHASE_AR = {
+        "thinking":   "جاري التفكير",
+        "tools":      "جاري تشغيل الأدوات",
+        "generating": "جاري الإنشاء",
+        "done":       "اكتمل",
+    }
+    label = _PHASE_AR.get(phase, phase)
+    try:
+        step_int = int(step) if step is not None else None
+    except (ValueError, TypeError):
+        step_int = None
+    if step_int is not None and step_int > 0:
+        return f"{label}... (الخطوة {step_int})"
+    return f"{label}..."
 
 
 def _ui_looks_like_tool_call(text: str) -> bool:
@@ -632,9 +679,11 @@ async def render_agent_events(status_bar=None) -> None:
     """
     bridge = get_bridge()
 
-    if status_bar is None:
-        status_bar = AgentStatusBar(console=console)
-        status_bar.wire()
+    # UI-CC-6: the status box is no longer rendered from the REPL — the
+    # compact ✓/▶/○ line (status_compact_line) is the feedback instead.
+    # AgentStatusBar is left untouched (protected file); we simply never
+    # construct/wire it here, so all `if status_bar:` branches are no-ops.
+    status_bar = None
 
     try:
         def _on_plan_updated(todos):
@@ -672,6 +721,8 @@ async def render_agent_events(status_bar=None) -> None:
         token_buf = ""
         held_buf = ""
         _stream_line_buf = ""
+        _erase_live_line()
+        console.print(f"[dim]{format_status_message('done', _current_step)}[/dim]")
 
     def _on_thinking_start() -> None:
         """Begin compressed thought line for a new turn."""
@@ -684,6 +735,8 @@ async def render_agent_events(status_bar=None) -> None:
         _stream_line_buf = ""
         if hasattr(bridge, "_tokens_streamed"):
             bridge._tokens_streamed = False
+        _erase_live_line()
+        console.print(f"[dim]{format_status_message('thinking', _current_step)}[/dim]")
 
     def _on_thinking_stop() -> None:
         """Conclude thought phase, display collapsed reasoning."""
@@ -691,6 +744,14 @@ async def render_agent_events(status_bar=None) -> None:
         _display_thought_content(compressor)
         if status_bar:
             status_bar.stop()
+        # UI-CC-2: مؤشر التفكير مع عدد الثواني
+        elapsed = getattr(compressor, "elapsed_seconds", 0)
+        try:
+            elapsed = int(elapsed)
+        except (ValueError, TypeError):
+            elapsed = 0
+        _erase_live_line()
+        console.print(f"[dim]{thought_line(elapsed)}[/dim]")
 
     def _on_thought_chunk(content: str) -> None:
         """Accumulate a raw reasoning chunk."""
@@ -704,6 +765,8 @@ async def render_agent_events(status_bar=None) -> None:
         token_buf = ""
         held_buf = ""
         _stream_line_buf = ""
+        _erase_live_line()
+        console.print(f"[dim]{format_status_message('tools', _current_step)}[/dim]")
         action, label, meta = _parse_tool_event(name, args or {})
         print_badge(action, label, meta)
 
@@ -798,6 +861,20 @@ def _setup_repl_keybindings() -> KeyBindings:
 
     @bindings.add("c-o")
     def _on_ctrl_o(event) -> None:
+        # UI-CC-3: expand the most-recent collapsed block from CollapseStore.
+        from ui.cc_style import collapse_store
+        ids = collapse_store.ids()
+        if ids:
+            block = collapse_store.expand(ids[-1])
+            if block:
+                console.print(Panel(
+                    "\n".join(block) or "(empty)",
+                    title="[bento.execution.title] ◈ Expanded Output [/bento.execution.title]",
+                    border_style="bento.execution.border",
+                    box=BOX_EXECUTION,
+                    padding=(1, 2),
+                ))
+                return
         if _collapsed_blocks:
             raw = _collapsed_blocks[-1]
             console.print(Panel(
@@ -873,6 +950,8 @@ def extract_clean_answer(raw_text: Any) -> str:
 
 
 class TerminalVisualizer:
+    _step_start_time: float | None = None
+    _timed_step: object = None
     """المسؤول عن التقاط أحداث الـ Event Bus وتحويلها إلى لوحات بصرية متحركة داخل Termux"""
 
     def __init__(self, event_bus, state, register_listeners: bool = True):
@@ -880,6 +959,7 @@ class TerminalVisualizer:
         self.state = state
         self.live_context = None
         self._navigation_enabled: bool = False
+        self._last_compact: str | None = None  # UI-CC-8: dedup tracker
         if self.event_bus:
             self.event_bus._final_answer_rendered = False
         # Single-renderer rule (plan 1.1): only ONE renderer owns stdout. In
@@ -890,63 +970,81 @@ class TerminalVisualizer:
         if register_listeners:
             self._register_listeners()
 
-    def _subscribe_with_fallback(self, event_name, handler):
-        """Wrap handler with try/except to prevent subscriber crashes."""
-        def safe_handler(data):
-            try:
-                handler(data)
-            except Exception as e:
-                try:
-                    console.print(
-                        Panel(
-                            f"[red]Subscriber error for {event_name}: {e}[/red]",
-                            title="[bold red]EVENTBUS ERROR[/bold red]",
-                            border_style="red"
-                        )
-                    )
-                except Exception:
-                    pass
-        register_fn = getattr(self.event_bus, "on", None) or getattr(self.event_bus, "subscribe", None)
-        if register_fn:
-            register_fn(event_name, safe_handler)
-
     def _register_listeners(self):
         """ربط الأحداث بالدالات البصرية المناسبة لها مع دعم دالتي on و subscribe وتحصين المشتركين ضد الانهيار"""
         if not self.event_bus:
             return
         self.event_bus._on_tool_completed_active = True
-        self._subscribe_with_fallback("tool_started", self.on_tool_started)
-        self._subscribe_with_fallback("tool_completed", self.on_tool_completed)
-        self._subscribe_with_fallback("agent_handoff", self.on_agent_handoff)
-        self._subscribe_with_fallback("tool_auth_violation", self.on_tool_auth_violation)
-        self._subscribe_with_fallback("show_final_answer", self.on_final_answer)
-        self._subscribe_with_fallback("llm_request_started", self.on_llm_request_started)
+        self.event_bus.subscribe("tool_started", self.on_tool_started)
+        self.event_bus.subscribe("tool_completed", self.on_tool_completed)
+        self.event_bus.subscribe("agent_handoff", self.on_agent_handoff)
+        self.event_bus.subscribe("tool_auth_violation", self.on_tool_auth_violation)
+        self.event_bus.subscribe("show_final_answer", self.on_final_answer)
+        self.event_bus.subscribe("llm_request_started", self.on_llm_request_started)
         # ❌ قم بتعطيل هذا السطر لمنع الواجهة من رسم صناديق فارغة من تلقاء نفسها (الخطوة الأولى: المايسترو الأوحد)
-        # self._subscribe_with_fallback("loop_completed", self.on_loop_completed)
+        # self.event_bus.subscribe("loop_completed", self.on_loop_completed)
 
     def on_llm_request_started(self, data: dict):
-        """Reset streaming gate — only final-answer tokens will be streamed."""
+        """Reset streaming gate — only final-answer tokens will be streamed.
+
+        UX-1: Track step count from the engine payload and emit an Arabic
+        status line so the user sees progress (e.g. "جاري التفكير... (الخطوة 1)").
+        """
+        global _current_step
         _streaming_final.clear()
         self._navigation_enabled = False
         tool_result_list.clear()
+        if isinstance(data, dict) and "step" in data:
+            try:
+                _current_step = int(data["step"])
+            except (ValueError, TypeError):
+                pass
+        # UI-CC-9: بدء التوقيت للخطوة الجديدة
+        if self._step_start_time is None or self._timed_step != data.get("step"):
+            self._step_start_time = time.monotonic()
+            self._timed_step = data.get("step")
+        _erase_live_line()
+        console.print(f"[dim]{format_status_message('thinking', _current_step)}[/dim]")
+        # UI-CC-5: compact single-line status (Thinking active).
+        # UI-CC-8: suppress duplicate compact lines.
+        _compact = status_compact_line(
+            step=_current_step, elapsed=time.monotonic() - (self._step_start_time or time.monotonic()),
+            thinking=True, tools=False, generating=False,
+        )
+        if should_print_compact(self._last_compact, str(_compact)):
+            console.print(_compact)
+            self._last_compact = str(_compact)
 
     def on_tool_started(self, data: dict):
-        """إظهار لوحة بدء الأداة مع سبينر متحرك عند بدء تشغيل أي أداة بناءً على دور الوكيل"""
+        """إظهار رأس الأداة بأسلوب Claude Code (شارة + الوسيط الأساسي)."""
         try:
             self.stop()  # إيقاف أي سياق عرض نشط أولاً
 
             role = data.get("role", "ORCHESTRATOR")
             tool_name = data.get("tool") or data.get("tool_name") or "tool"
+            args = data.get("args") or {}
+
+            # UI-CC-2: شارة الأداة (READ/EDIT/SHELL/...) + الوسيط الأساسي
+            _erase_live_line()
+            header = tool_header_line(tool_name, args)
+            from ui.cc_style import BADGE_STYLE
+            if '  ' in header:
+                badge, arg = header.split('  ', 1)
+                console.print(f"[{BADGE_STYLE}] {badge} [/] {arg}")
+            else:
+                console.print(f"[{BADGE_STYLE}] {header} [/]")
+            # UI-CC-5: compact status line (Thinking done, Tools active).
+            # UI-CC-8: suppress duplicate compact lines.
+            _compact = status_compact_line(
+                step=_current_step, elapsed=time.monotonic() - (self._step_start_time or time.monotonic()),
+                thinking=True, tools=True, generating=False,
+            )
+            if should_print_compact(self._last_compact, str(_compact)):
+                console.print(_compact)
+                self._last_compact = str(_compact)
 
             # اختيار لون السبينر حسب قبعة الوكيل الحالي
             color = "cyan" if role == "ORCHESTRATOR" else "green" if role == "CODER" else "yellow"
-
-            # لوحة بدء الأداة
-            panel = Panel(
-                Text(f"Executing: {tool_name} [{role}]", style="neon_cyan"),
-                **PANEL_STYLES["tool_start"]
-            )
-            console.print(panel)
 
             spinner = Spinner("dots", text=Text(f" [{role}] Running tool: {tool_name}...", style=f"bold {color}"))
             self.live_context = Live(spinner, console=console, refresh_per_second=10, transient=True)
@@ -974,6 +1072,17 @@ class TerminalVisualizer:
             summary = data.get("summary", "")
             diff = data.get("diff", "")
             args = data.get("args")
+
+            # UI-CC-2: طيّ المخرجات (+N lines [ctrl+o to expand])
+            # UI-CC-3: خزّن الكتلة الكاملة في CollapseStore لاسترجاعها عبر /expand
+            if output_text:
+                _erase_live_line()
+                all_lines = output_text.splitlines()
+                if len(all_lines) > 3:
+                    from ui.cc_style import collapse_store
+                    collapse_store.store(all_lines)
+                for line in collapse_lines(all_lines, keep=3):
+                    console.print(f"[dim]{line}[/dim]")
 
             widget = ToolResultWidget(
                 tool_name=tool_name,
@@ -1059,33 +1168,14 @@ class TerminalVisualizer:
 
         safe_width = min(console.size.width - 4, 80)
 
-        current_text = ""
-        panel = Panel(
-            Markdown(current_text),
-            border_style="neon_purple",
-            box=BOX_FINAL,
-            padding=(1, 2),
-            width=safe_width,
-            title="[bold neon_purple]◆ FINAL ANSWER[/bold neon_purple]",
-            subtitle="[dim]Task completed successfully[/dim]",
-            subtitle_align="right"
-        )
-
+        # UI-CC-5: compact header + Markdown, no heavy panel frame.
+        console.print("\n")
+        console.print(final_answer_header())
+        console.print(render_final_answer(output))
         console.print("\n")
 
-        words = output.split(" ")
-        chunk_size = 10  # V3: was 3 — 10 words/update × 0.01s = <1s for 600w (was ~8s)
-
-        with Live(panel, console=console, auto_refresh=False) as live:
-            for i in range(0, len(words), chunk_size):
-                chunk = " ".join(words[i:i + chunk_size])
-                current_text += (" " if current_text else "") + chunk
-
-                panel.renderable = Markdown(current_text)
-                live.update(panel, refresh=True)
-                time.sleep(0.01)  # V3: was 0.04 — reduced alongside chunk_size increase
-
-        console.print("\n")
+        return
+        # (legacy animated-Panel path removed in UI-CC-5)
 
     def on_loop_completed(self, data: dict):
         """Handle final answer or error from ExecutionLoop with Panel styling and resilience against VerifyError."""
@@ -1131,11 +1221,11 @@ class TerminalVisualizer:
             if self.event_bus and getattr(self.event_bus, "_final_answer_rendered", False):
                 return
 
-            panel = Panel(
-                Text(response_text, style="white"),
-                **PANEL_STYLES[style_key]
-            )
-            console.print(panel)
+            # UI-CC-5: compact lines instead of heavy panels.
+            if style_key == "error":
+                console.print(error_line(response_text))
+            else:
+                console.print(Text(response_text, style="white"))
             console.print()  # A.3: Fix missing newline before next prompt
         except Exception as exc:
             try:
