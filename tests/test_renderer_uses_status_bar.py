@@ -12,19 +12,16 @@ import pytest
 
 def test_renderer_wires_to_status_bar():
     """C1: AgentStatusBar must be imported and wired (not started) in main.py."""
-    source = pathlib.Path('main.py').read_text(encoding='utf-8')
-    tree = ast.parse(source)
+    # ARCH-5: wire() moved to ui/event_wiring.py
+    # ARCH-5b: status_bar instance remains in main.py (lazy-resolution)
+    main_src = pathlib.Path('main.py').read_text(encoding='utf-8')
+    assert "AgentStatusBar" in main_src, "AgentStatusBar must be imported in main.py"
+    
+    wiring_src = pathlib.Path('ui/event_wiring.py').read_text(encoding='utf-8')
+    assert "status_bar.wire()" in wiring_src, "status_bar.wire() must be called in event_wiring"
+    assert "status_bar.start(" not in wiring_src, "C1: start() must NOT be called on protected bar"
 
-    # 1. Verify AgentStatusBar is imported
-    has_import = False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            if node.module == "ui.widgets.status_bar":
-                if any(alias.name == "AgentStatusBar" for alias in node.names):
-                    has_import = True
-                    break
-    assert has_import, "AgentStatusBar must be imported in main.py"
-
+    tree = ast.parse(wiring_src)
     # 2. Verify status_bar.wire() is called in wire_events
     has_wire = False
     has_start = False

@@ -69,7 +69,10 @@ def test_footer_and_expand_wired() -> None:
     assert "hint_for_mode" not in main_src, (
         "BRAND-4: hint_for_mode must NOT be called in main.py (toolbar removed)"
     )
-    assert "/expand" in main_src
+    # ARCH-6: /expand moved to core/command_dispatcher.py
+    import pathlib
+    dispatcher_src = pathlib.Path("core/command_dispatcher.py").read_text(encoding="utf-8")
+    assert "/expand" in dispatcher_src
 
     repl_src = REPL.read_text(encoding="utf-8")
     assert "collapse_store" in repl_src
