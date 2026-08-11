@@ -28,7 +28,7 @@ class SafeExecutionSandbox:
     _FORBIDDEN_ATTRIBUTES = {
         "chmod", "chown", "fork", "kill", "popen", "read_bytes", "read_text",
         "remove", "rmdir", "rmtree", "system", "unlink", "write_bytes",
-        "write_text",
+        "write_text", "__subclasses__", "__globals__", "__builtins__", "__class__",
     }
 
     @classmethod
