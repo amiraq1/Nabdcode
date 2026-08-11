@@ -126,6 +126,7 @@ BASE_INSTRUCTIONS = (
         " - Every factual statement about codebase/filesystem must be backed by tool output or verified memory.\n"
         " - Never invent file names, architectures, or statistics.\n"
         " - WORKSPACE ROOT: Your current working directory IS the repository root. Use relative paths.\n"
+        " - Examples: 'show last 5 commits' -> use git_tool log; 'what changed in main.py' -> use file_system READ\n"
         "\n"
         "D) LANGUAGE & ACCURACY (CRITICAL):\n"
         " - ALWAYS respond in the SAME LANGUAGE as the user's query.\n"
