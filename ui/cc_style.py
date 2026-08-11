@@ -297,3 +297,12 @@ def should_print_compact(last: "str | None", new: str) -> bool:
         False → suppress (duplicate).
     """
     return last != new
+
+def render_final_answer(text: str):
+    """Render the final answer using rich.markdown.Markdown, with safe fallback to rich.text.Text."""
+    from rich.markdown import Markdown
+    from rich.text import Text
+    try:
+        return Markdown(text)
+    except Exception:
+        return Text(text)

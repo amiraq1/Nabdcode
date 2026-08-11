@@ -40,13 +40,19 @@ from core.kernel.state import RuntimeState
 from ui.live_thought import LiveThoughtCompressor
 from core.utils import safe_strip
 from ui.cc_style import (
+    badge_for_tool,
     collapse_lines,
+    diff_pairs,
     error_line,
     final_answer_header,
+    format_tokens,
+    next_status_verb,
+    render_final_answer,
     should_print_compact,
     status_compact_line,
     status_line,
     thought_line,
+    todo_line,
     tool_header_line,
 )
 from ui.theme import (
@@ -1185,7 +1191,7 @@ class TerminalVisualizer:
         # UI-CC-5: compact header + Markdown, no heavy panel frame.
         console.print("\n")
         console.print(final_answer_header())
-        console.print(Markdown(output))
+        console.print(render_final_answer(output))
         console.print("\n")
 
         return
