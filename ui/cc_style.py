@@ -235,11 +235,11 @@ def status_compact_line(
 
     def phase(label: str, done: bool, active: bool) -> None:
         if done:
-            t.append("✓ ", style="green")
-            t.append(label, style="green")
+            t.append("✓ ", style="dim green")
+            t.append(label, style="dim green")
         elif active:
-            t.append("▶ ", style="cyan")
-            t.append(label, style="cyan")
+            t.append("▶ ", style="dim cyan")
+            t.append(label, style="dim cyan")
         else:
             t.append("○ ", style="dim")
             t.append(label, style="dim")
