@@ -557,12 +557,13 @@ class SecureFileSystemTool(SecureTool):
     def __init__(
         self,
         workspace: str | None = None,
+        bus: Any = None,
         *args: Any,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         from tools.file_system import FileSystemTool
-        self._tool = FileSystemTool(workspace=workspace or ".")
+        self._tool = FileSystemTool(workspace=workspace or ".", bus=bus)
 
     @property
     def args_schema(self) -> Type["BaseModel"] | None:

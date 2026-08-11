@@ -241,7 +241,7 @@ def initialize_secure_agent(workspace_path: str = ".") -> CodeAgent:
             # SecureTestRunner(),      # 🛑 تم سحب الصلاحية (Tool Fixation guard)
             SecureSemanticMemoryTool(),
             # Real edit/exec capability so the Executor description is truthful.
-            SecureFileSystemTool(workspace=workspace_path),
+            SecureFileSystemTool(workspace=workspace_path, bus=bus),
             SecureShellTool(security_engine=_KernelSecurityEngine()),
             SecureWebSearchTool(),
             SecureBrowserTool(workspace_dir=workspace_path),
