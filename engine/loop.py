@@ -1815,6 +1815,20 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         if self._check_repetition_guard(response_text, normalized_resp) is _LoopSignal.TERMINATE:
             return
 
+        # UX-10: Mechanical Tool-Enforcement
+        from core.refusal_detector import is_refusal
+        if is_refusal(response_text) and not any(getattr(r, "success", False) for r in self.evidence_log.get_records()):
+            if getattr(self, "_refusal_retry_count", 0) < 3:
+                self._refusal_retry_count = getattr(self, "_refusal_retry_count", 0) + 1
+                import time
+                self.state.append_message({
+                    "role": "user",
+                    "content": "You MUST call a tool first"
+                })
+                self.state.increment_step()
+                time.sleep(getattr(self, "POLL_DELAY", 0.5))
+                return
+
         self._last_response = response_text
         bridge = get_bridge()
         bridge.emit("on_agent_thought", content=response_text)

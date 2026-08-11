@@ -2,8 +2,4 @@ main.py God-Object — خطة v3.0 قيد التنفيذ
 - FINDING-01 → resolved
 - [legacy-debt] DAG-2 → resolved
 
-- [model-grounding] ORCA-FLASH المحلي يتجاهل قاعدة Tool-first أحياناً
-  ويرفض من افتراض («لا أستطيع قراءة…») رغم وجود الأداة.
-  القاعدة مُرساة في core/prompts.py للنماذج الأقوى.
-  ترشيح مستقبلي: UX-9 صياغة أمرية قصيرة للنماذج الصغيرة،
-  أو فرض ميكانيكي في المحرك (إعادة محاولة عند رفضٍ بلا استدعاء أداة).
+- [model-grounding] ORCA-FLASH mechanical tool-enforcement → resolved
