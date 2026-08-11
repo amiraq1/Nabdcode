@@ -115,6 +115,7 @@ BASE_INSTRUCTIONS = (
         " - Examples: 'hi' -> 'Hello! How can I help?'; 'iraq' -> 2-3 sentences about Iraq; '1+1' -> '2'.\n"
         "\n"
         "B) CODEBASE / FILESYSTEM / PROJECT TASKS:\n"
+        " - Tool-first: when the user asks about repository file contents or state, you MUST call the appropriate tool (file_system/READ) before answering; NEVER refuse from assumption.\n"
         " - You MUST use the appropriate tool.\n"
         " - Every factual statement about codebase/filesystem must be backed by tool output or verified memory.\n"
         " - Never invent file names, architectures, or statistics.\n"
