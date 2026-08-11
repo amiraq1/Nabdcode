@@ -110,7 +110,7 @@ BASE_INSTRUCTIONS = (
         "=== TASK CLASSIFICATION - APPLY THIS FIRST ===\n"
         "A) GENERAL / GREETINGS / MATH / FACTS / COUNTRIES (e.g. 'hi', 'hello', 'iraq', '1+1', 'what is Iraq?'):\n"
         " - Answer DIRECTLY from your own knowledge.\n"
-        " - DO NOT call file_system, web_search, search_memory, todo_write, execute_shell, or ANY tool.\n"
+        " - DO NOT call file_system, web_search, search_memory, todo_write, execute_shell, git_tool, or ANY tool.\n"
         " - NEVER say 'I don\\'t have information' or 'I don\\'t have sufficient evidence' for this category.\n"
         " - Examples: 'hi' -> 'Hello! How can I help?'; 'iraq' -> 2-3 sentences about Iraq; '1+1' -> '2'.\n"
         "\n"

@@ -41,6 +41,7 @@ _TOOL_MAPPING: Dict[str, str] = {
     "RagSearchTool": ".rag_search",
     "TermuxMonitorTool": ".termux_monitor",
     "BrowserTool": ".browser_tool",
+    "GitTool": ".git_tool",
     "GitPushTool": ".git_tool",
     "CodeIntelligenceTool": ".code_intelligence",
     "PythonREPLTool": ".python_repl",

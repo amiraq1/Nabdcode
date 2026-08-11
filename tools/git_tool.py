@@ -195,3 +195,26 @@ class GitPushTool(BaseTool):
         ),
         evidence_log=evidence_log,
         )
+
+import subprocess
+
+class GitTool(BaseTool):
+    ALLOWED = {"log", "diff", "status", "show", "branch", "tag"}
+    FORBIDDEN = {"commit", "push", "pull", "merge", "reset", "clean"}
+    
+    def execute(self, command: str) -> str:
+        # 1. استخراج الأمر الأول
+        cmd = command.split()[0] if command.split() else ""
+        # 2. فحص الـ forbidden (حماية مزدوجة)
+        if cmd in self.FORBIDDEN:
+            raise ValueError(f"Git command '{cmd}' is forbidden")
+        # 3. فحص الـ allowlist
+        if cmd not in self.ALLOWED:
+            raise ValueError(f"Git command '{cmd}' not allowed. Allowed: {self.ALLOWED}")
+        # 4. تنفيذ آمن عبر subprocess مع timeout
+        result = subprocess.run(
+            ["git"] + command.split(),
+            capture_output=True, text=True, timeout=10,
+            cwd="."  # فقط في cwd الحالي
+        )
+        return result.stdout or result.stderr
