@@ -4,9 +4,9 @@ import inspect
 
 
 def _get_base_inst() -> str:
-    """Extract base_inst source text from main.py (as source string)."""
-    src = inspect.getsource(importlib.import_module("main"))
-    return src
+    """Return the BASE_INSTRUCTIONS from core.prompts."""
+    from core.prompts import BASE_INSTRUCTIONS
+    return BASE_INSTRUCTIONS
 
 
 # ---------------------------------------------------------------------------

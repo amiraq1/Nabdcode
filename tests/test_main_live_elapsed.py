@@ -3,11 +3,11 @@ import time
 from pathlib import Path
 
 def test_no_hardcoded_zero_elapsed():
-    src = Path("main.py").read_text()
-    assert "elapsed=0.0," not in src, "ما زال elapsed=0.0 ثابتاً في main.py"
+    src = Path("ui/event_wiring.py").read_text()
+    assert "elapsed=0.0," not in src, "ما زال elapsed=0.0 ثابتاً في ui/event_wiring.py"
 
 def test_live_sites_use_elapsed_for():
-    src = Path("main.py").read_text()
+    src = Path("ui/event_wiring.py").read_text()
     assert src.count("_elapsed_for(_turn_index)") >= 2
 
 def test_elapsed_for_increases():

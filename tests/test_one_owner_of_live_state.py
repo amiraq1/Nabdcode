@@ -17,12 +17,12 @@ FORBIDDEN = ("status_start", "status_tick", "status_end")
 
 
 def _wire_events_node() -> ast.AST:
-    src = pathlib.Path("main.py").read_text(encoding="utf-8")
+    src = pathlib.Path("ui/event_wiring.py").read_text(encoding="utf-8")
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name == "wire_events":
                 return node
-    raise AssertionError("wire_events not found in main.py")
+    raise AssertionError("wire_events not found in ui/event_wiring.py")
 
 
 def test_the_guarded_names_still_exist_on_the_renderer() -> None:
