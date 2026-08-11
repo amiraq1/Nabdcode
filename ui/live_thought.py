@@ -183,9 +183,10 @@ class LiveThoughtCompressor:
 # ── High-contrast bento badges ──────────────────────────────────────────
 # Color aliases resolved at render time; fall back to plain text if no ANSI.
 _badge_rgb = SEMANTIC.action_badge.rgb
-_badge_open = f"\033[48;2;{_badge_rgb[0]};{_badge_rgb[1]};{_badge_rgb[2]};38;2;255;255;255;1m"
+_w = SEMANTIC.text_bright.rgb
+_badge_open = f"\033[48;2;{_badge_rgb[0]};{_badge_rgb[1]};{_badge_rgb[2]};38;2;{_w[0]};{_w[1]};{_w[2]};1m"
 _thinking_rgb = SEMANTIC.thinking.rgb
-_thinking_open = f"\033[48;2;{_thinking_rgb[0]};{_thinking_rgb[1]};{_thinking_rgb[2]};38;2;255;255;255;1m"
+_thinking_open = f"\033[48;2;{_thinking_rgb[0]};{_thinking_rgb[1]};{_thinking_rgb[2]};38;2;{_w[0]};{_w[1]};{_w[2]};1m"
 _BENTO_COLORS = {
     "READ": (_badge_open, "\033[0m"),
     "SHELL": (_badge_open, "\033[0m"),

@@ -1793,11 +1793,13 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                                 _tok, f"[UNVERIFIED] {_tok}"
                             )
                     self._last_response = tool_output
-                    self.state.update_status("COMPLETED")
-                    bus.emit("loop_completed", {
-                        "reason": "exact_action_gate_capped",
-                        "output": tool_output,
-                    })
+                    from engine._loop_helpers import _commit_terminal_outcome
+                    _commit_terminal_outcome(
+                        self,
+                        status="COMPLETED",
+                        reason="exact_action_gate_capped",
+                        output=tool_output,
+                    )
 
     def _run_once(self) -> None:
         """Execute a single loop iteration, delegating to the extracted helpers."""

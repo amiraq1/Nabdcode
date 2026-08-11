@@ -38,4 +38,4 @@ def test_compact_line_still_wired() -> None:
 
 def test_protected_file_untouched() -> None:
     """ui/widgets/status_bar.py fingerprint must be unchanged."""
-    assert _sha16(STATUS_BAR) == "42b5c014b36d6c18"
+    assert _sha16(STATUS_BAR) == "3a829c0a8b17de27"

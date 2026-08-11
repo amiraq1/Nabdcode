@@ -970,39 +970,19 @@ class TerminalVisualizer:
         if register_listeners:
             self._register_listeners()
 
-    def _subscribe_with_fallback(self, event_name, handler):
-        """Wrap handler with try/except to prevent subscriber crashes."""
-        def safe_handler(data):
-            try:
-                handler(data)
-            except Exception as e:
-                try:
-                    console.print(
-                        Panel(
-                            f"[red]Subscriber error for {event_name}: {e}[/red]",
-                            title="[bold red]EVENTBUS ERROR[/bold red]",
-                            border_style="red"
-                        )
-                    )
-                except Exception:
-                    pass
-        register_fn = getattr(self.event_bus, "on", None) or getattr(self.event_bus, "subscribe", None)
-        if register_fn:
-            register_fn(event_name, safe_handler)
-
     def _register_listeners(self):
         """ربط الأحداث بالدالات البصرية المناسبة لها مع دعم دالتي on و subscribe وتحصين المشتركين ضد الانهيار"""
         if not self.event_bus:
             return
         self.event_bus._on_tool_completed_active = True
-        self._subscribe_with_fallback("tool_started", self.on_tool_started)
-        self._subscribe_with_fallback("tool_completed", self.on_tool_completed)
-        self._subscribe_with_fallback("agent_handoff", self.on_agent_handoff)
-        self._subscribe_with_fallback("tool_auth_violation", self.on_tool_auth_violation)
-        self._subscribe_with_fallback("show_final_answer", self.on_final_answer)
-        self._subscribe_with_fallback("llm_request_started", self.on_llm_request_started)
+        self.event_bus.subscribe("tool_started", self.on_tool_started)
+        self.event_bus.subscribe("tool_completed", self.on_tool_completed)
+        self.event_bus.subscribe("agent_handoff", self.on_agent_handoff)
+        self.event_bus.subscribe("tool_auth_violation", self.on_tool_auth_violation)
+        self.event_bus.subscribe("show_final_answer", self.on_final_answer)
+        self.event_bus.subscribe("llm_request_started", self.on_llm_request_started)
         # ❌ قم بتعطيل هذا السطر لمنع الواجهة من رسم صناديق فارغة من تلقاء نفسها (الخطوة الأولى: المايسترو الأوحد)
-        # self._subscribe_with_fallback("loop_completed", self.on_loop_completed)
+        # self.event_bus.subscribe("loop_completed", self.on_loop_completed)
 
     def on_llm_request_started(self, data: dict):
         """Reset streaming gate — only final-answer tokens will be streamed.
