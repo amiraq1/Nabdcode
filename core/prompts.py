@@ -136,5 +136,18 @@ BASE_INSTRUCTIONS = (
         " - Summarize the Shell output directly in your final_answer.\n"
         " - Example: If 'ls' shows 12 files, say 'The directory contains 12 files: file1, file2, ...'\n"
         " - NEVER call file_system.read after execute_shell unless explicitly asked.\n"
+        "\n"
+        "E) OUTPUT DISCIPLINE (final answer quality):\n"
+        "- FINAL ANSWER != WORK LOG: state the finding ONCE; recommendations\n"
+        "  ONCE as a short bullet list; NEVER repeat the same sentence across\n"
+        "  sections (results/recommendations/conclusion must not duplicate).\n"
+        "- Do NOT narrate internal steps (\"Step 1/2/3\", \"خطوة 1/2/3\") inside\n"
+        "  the final answer; tool activity is already visible in live status.\n"
+        "- Simple answers stay <= 12 lines; headings only for genuinely\n"
+        "  multi-part deliverables.\n"
+        "- Bidi stability: keep Latin identifiers (tool names, paths, code\n"
+        "  tokens) in `backticks` or on their own line when writing Arabic.\n"
+        "- No raw markdown flooding: at most one level of bold labels for\n"
+        "  short answers.\n"
         + TODO_DISCIPLINE
     )
