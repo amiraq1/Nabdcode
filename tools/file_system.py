@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from tools.base import BaseTool
+from core.security.decision_ladder import DecisionLadder, Decision
 from tools.models import ToolResult
 from core.sanitize import sanitize
 
@@ -72,6 +73,23 @@ class FileSystemTool(BaseTool):
     def execute(self, **kwargs) -> ToolResult:
 
         action = kwargs.get("action")
+
+        # ── Decision Ladder Gate for FileSystemTool ──
+        # Build a pseudo-command for the ladder to evaluate
+        _fs_path = kwargs.get("path", "") or kwargs.get("file_path", "")
+        if _fs_path:
+            _pseudo_cmd = f"filesystem {action} {_fs_path}"
+            _ladder = DecisionLadder(workspace_root=os.getcwd())
+            _decision = _ladder.evaluate(_pseudo_cmd)
+            if _decision.is_denied:
+                return ToolResult(
+                    success=False,
+                    stdout="",
+                    stderr=f"SECURITY DENIED at step {_decision.step} ({_decision.step_name})",
+                    returncode=1,
+                    status="denied",
+                )
+        # ── End Decision Ladder Gate ──
         if not action and "mode" in kwargs:
             mode_map = {"r": "read", "rb": "read", "w": "write", "wb": "write", "a": "append", "ab": "append"}
             action = mode_map.get(str(kwargs.get("mode")).lower().strip(), "write")
