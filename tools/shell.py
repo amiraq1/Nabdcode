@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Final, Any, Optional
 
 from tools.base import BaseTool
+from core.security.decision_ladder import DecisionLadder, Decision
 from tools.models import ToolResult
 
 from tools.protocols import (
@@ -135,6 +137,19 @@ class ShellTool(BaseTool):
                 returncode=-1,
                 status="error"
             )
+
+        # ── Decision Ladder Gate ──
+        _ladder = DecisionLadder(workspace_root=os.getcwd())
+        _decision = _ladder.evaluate(command)
+        if _decision.is_denied:
+            return ToolResult(
+                success=False,
+                stdout="",
+                stderr=f"SECURITY DENIED at step {_decision.step} ({_decision.step_name}): {_decision.reason}",
+                returncode=1,
+                status="denied",
+            )
+        # ── End Decision Ladder Gate ──
 
         # Security Validation (via injected engine)
         is_safe, reason = self._security.validate(command)

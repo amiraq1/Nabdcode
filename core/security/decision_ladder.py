@@ -205,10 +205,50 @@ class DecisionLadder:
                         return Decision.DENY
         return None
 
-    # ── Step 4: File Sensitivity ─────────────────────────────
+    # ── Step 4: File Sensitivity (Protected Files) ───────────
     def _step_04_file_sensitivity(self, cmd: str, ctx: Dict) -> Optional[Decision]:
-        # Placeholder: protected files detection
-        return None
+        """
+        Protect critical files WITHIN the workspace.
+        Even if a command is inside workspace_root, certain files
+        are constitutionally protected and cannot be modified/deleted.
+        
+        Protected patterns:
+          - Constitutional fingerprints (status_bar, bar_hears, clock_turns)
+          - Security ladder itself (decision_ladder.py)
+          - Git internals (.git/)
+        """
+        # Files that are constitutionally protected (read-only for agent)
+        protected_patterns = [
+            'ui/widgets/status_bar.py',
+            'tests/test_the_bar_hears_the_bus.py',
+            'tests/test_the_bar_clock_turns.py',
+            'core/security/decision_ladder.py',
+            '.git/',
+            '.gitignore',
+        ]
+        
+        # Commands that modify files
+        modify_commands = ['rm', 'mv', 'cp', 'sed', 'awk', 'echo', 'cat', 'truncate',
+                          'chmod', 'chown', 'touch', 'mkdir', 'rmdir', 'ln',
+                          '>', '>>', 'tee', 'dd']
+        
+        # Check if command is a modification command
+        is_modify = any(cmd.strip().startswith(mc) or f' {mc} ' in cmd 
+                       for mc in modify_commands)
+        
+        if not is_modify:
+            return None  # Read-only commands pass through
+        
+        # Check if any protected file is targeted
+        for protected in protected_patterns:
+            if protected in cmd:
+                # Allow reading protected files, deny modification
+                if cmd.strip().startswith('cat') or cmd.strip().startswith('head') or \
+                   cmd.strip().startswith('tail') or cmd.strip().startswith('grep'):
+                    return None  # Reading is OK
+                return Decision.DENY
+        
+        return None  # Pass to next step
 
     # ── Step 5: Destructive Detection ────────────────────────
     def _step_05_destructive(self, cmd: str, ctx: Dict) -> Optional[Decision]:
