@@ -132,3 +132,15 @@ def test_the_bar_hears_tool_started(monkeypatch):
     )
 
 
+def test_the_bar_hears_show_final_answer(monkeypatch):
+    """Contract 3: show_final_answer must drive the real bar to complete (all done)."""
+    ctx = _make_ctx(monkeypatch)
+    _emit_and_check(
+        ctx,
+        monkeypatch,
+        _FINAL_ANSWER,
+        {"final_answer": "done"},
+        "Generating",
+        "done",
+        "show_final_answer -> all phases done",
+    )

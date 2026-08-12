@@ -79,6 +79,7 @@ class AgentStatusBar:
         bus.subscribe("llm_request_started", self._on_llm_start)
         bus.subscribe("tool_started", self._on_tool_start)
         bus.subscribe("loop_completed", self._on_loop_completed)
+        bus.subscribe("show_final_answer", self._on_show_final_answer)
         self._wired = True
 
     # ── Event handlers ─────────────────────────────────────────────────
@@ -96,6 +97,8 @@ class AgentStatusBar:
     def _on_loop_completed(self, payload: Any) -> None:
         self.set_active("Generating")
 
+    def _on_show_final_answer(self, payload: Any) -> None:
+        self.set_complete()
 
     # ── Public API ─────────────────────────────────────────────────────
 

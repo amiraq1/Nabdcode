@@ -235,9 +235,27 @@ class _ToolDispatchMixin:
                     self._ctx.last_todo_sig = _todo_sig
         else:
             result = self.dispatcher.dispatch(tool_name, tool_args)
+            
+            # GIT-P1-4: typed consent detection — no more dict-in-stdout + ast.literal_eval.
+            if getattr(result, "status", "") == "consent_required":
+                _consent_meta = getattr(result, "metadata", None) or {}
+                blocked = ConsentManager().confirm(
+                    tool_name,
+                    {
+                        "command": _consent_meta.get("command", ""),
+                        "preview": _consent_meta.get("preview", ""),
+                    },
+                    evidence_log=self.evidence_log,
+                    step=getattr(self.state, "step_count", 0),
+                )
+                if blocked is not None:
+                    result = blocked
+                else:
+                    tool_args["force_execute"] = True
+                    result = self.dispatcher.dispatch(tool_name, tool_args)
+
             if _todo_sig and self._ctx is not None:
                 self._ctx.last_todo_sig = _todo_sig
-
         # ── Evidence Recording ───────────────────────────────────────────────
         cmd_summary = _extract_cmd_or_path(tool_args)
         # PATCH-R4.4: Extract workspace_relative_path from tool post-execution

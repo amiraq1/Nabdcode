@@ -40,7 +40,10 @@ _TOOL_MAPPING: Dict[str, str] = {
     "TodoWriteTool": ".todo",
     "RagSearchTool": ".rag_search",
     "TermuxMonitorTool": ".termux_monitor",
+    "TaskTool": ".task_tool",
+
     "BrowserTool": ".browser_tool",
+    "GitTool": ".git_tool",
     "GitPushTool": ".git_tool",
     "CodeIntelligenceTool": ".code_intelligence",
     "PythonREPLTool": ".python_repl",
