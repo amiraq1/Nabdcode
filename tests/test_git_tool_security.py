@@ -1,9 +1,28 @@
-import pytest
+import subprocess
+
 from tools.git_tool import GitTool
+from tools.models import ToolResult
+
+
+class _FakeGitResult:
+    def __init__(self, stdout="ok", stderr="", returncode=0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+def _patch_git_run(monkeypatch, stdout="ok", stderr="", returncode=0):
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: _FakeGitResult(stdout=stdout, stderr=stderr, returncode=returncode),
+    )
+
 
 def test_git_tool_exists():
     tool = GitTool()
     assert callable(tool.execute)
+
 
 def test_allowed_commands():
     tool = GitTool()
@@ -15,28 +34,40 @@ def test_allowed_commands():
     assert "tag" in tool.ALLOWED
     assert "commit" not in tool.ALLOWED
 
+
 def test_forbidden_commands():
     tool = GitTool()
-    with pytest.raises(ValueError, match="forbidden"):
-        tool.execute("clean -fd")
-    with pytest.raises(ValueError, match="forbidden"):
-        tool.execute("push origin main")
+    res = tool.execute("clean -fd")
+    assert isinstance(res, ToolResult)
+    assert res.success is False
+    assert "forbidden" in res.stderr
+    res = tool.execute("push origin main")
+    assert isinstance(res, ToolResult)
+    assert res.success is False
+    assert "forbidden" in res.stderr
+
 
 def test_not_allowed_commands():
     tool = GitTool()
-    with pytest.raises(ValueError, match="not allowed"):
-        tool.execute("rebase -i HEAD~3")
+    res = tool.execute("rebase -i HEAD~3")
+    assert isinstance(res, ToolResult)
+    assert res.success is False
+    assert "not allowed" in res.stderr
 
-def test_safe_execution():
+
+def test_safe_execution(monkeypatch):
     tool = GitTool()
+    _patch_git_run(monkeypatch, stdout="commit1\ncommit2\ncommit3\ncommit4\ncommit5")
     res = tool.execute("log --oneline -5")
-    assert isinstance(res, str)
-    # The output should have 5 lines (commits) or less if repo has <5 commits
-    
-def test_no_shell_injection():
+    assert isinstance(res, ToolResult)
+    assert res.success is True
+    assert "commit" in res.stdout
+
+
+def test_no_shell_injection(monkeypatch):
     tool = GitTool()
-    # It should pass only the first part to split, or treat the whole as arguments
-    # Wait, if we use subprocess.run(["git"] + command.split(), shell=False), it will 
-    # just pass it as arguments to git, so shell injection is not possible.
-    # We can check that it doesn't crash or that it just passes arguments safely.
-    pass
+    # shell=False: metacharacters become literal git args, never a shell.
+    _patch_git_run(monkeypatch, stdout="safe")
+    res = tool.execute("log -n 3; echo hacked")
+    assert isinstance(res, ToolResult)
+    assert res.success is True

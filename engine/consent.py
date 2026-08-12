@@ -38,6 +38,7 @@ from tools.models import ToolResult
 _CONSENT_REQUIRED_TOOLS: frozenset[str] = frozenset(
     {
         "execute_shell",
+        "git_push",  # GIT-P0-2: pushing to a remote is an externally visible side effect.
     }
 )
 

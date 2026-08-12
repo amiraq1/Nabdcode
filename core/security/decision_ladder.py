@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
@@ -201,7 +202,11 @@ class DecisionLadder:
                     if f'/{sensitive}' in abs_target or abs_target.endswith(f'/{sensitive}'):
                         return Decision.DENY
                 if abs_target.startswith('/') and not abs_target.startswith(abs_workspace):
-                    if not abs_target.startswith('/tmp'):
+                    # Allow the OS scratch directory (portable: /tmp on most Linux
+                    # hosts, $PREFIX/tmp on Termux/Android) — the same privilege
+                    # class as the historical /tmp allowance.
+                    _scratch = (tempfile.gettempdir(), "/tmp")
+                    if not any(abs_target.startswith(p) for p in _scratch):
                         return Decision.DENY
         return None
 

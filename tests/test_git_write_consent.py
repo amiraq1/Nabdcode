@@ -1,50 +1,65 @@
-import pytest
 import subprocess
+
 from tools.git_tool import GitTool
+from tools.models import ToolResult
+
+
+class _FakeGitResult:
+    def __init__(self, stdout="ok", stderr="", returncode=0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+def _patch_git_run(monkeypatch, stdout="ok", stderr="", returncode=0):
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: _FakeGitResult(stdout=stdout, stderr=stderr, returncode=returncode),
+    )
+
 
 def test_write_requires_consent():
     tool = GitTool()
     res = tool.execute("add .")
-    assert isinstance(res, dict)
-    assert res.get("status") == "consent_required"
-    assert res.get("command") == "add ."
-    assert "preview" in res
+    assert isinstance(res, ToolResult)
+    assert res.status == "consent_required"
+    assert res.metadata.get("command") == "add ."
+    assert "preview" in res.metadata
+
 
 def test_consent_approved_executes(monkeypatch):
-    # Simulate force_execute=True
+    # Simulate force_execute=True (set by the engine after user approval).
     tool = GitTool()
-    # Mock subprocess.run
-    def mock_run(*args, **kwargs):
-        class MockResult:
-            stdout = "success"
-            stderr = ""
-            returncode = 0
-        return MockResult()
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    
+    _patch_git_run(monkeypatch, stdout="success")
     res = tool.execute("commit -m 'test'", force_execute=True)
-    assert res == "success"
+    assert isinstance(res, ToolResult)
+    assert res.success is True
+    assert "success" in res.stdout
+
 
 def test_consent_denied_aborts():
-    # If a user denies in loop.py, it doesn't call tool again. 
+    # If a user denies in loop.py, it doesn't call tool again.
     # But if the engine intercepts, we can test that logic later.
     pass
 
+
 def test_dangerous_commands_blocked():
     tool = GitTool()
-    with pytest.raises(ValueError, match="Forbidden|forbidden"):
-        tool.execute("push origin main")
-    with pytest.raises(ValueError, match="Forbidden|forbidden"):
-        tool.execute("reset --hard")
-        
+    res = tool.execute("push origin main")
+    assert isinstance(res, ToolResult)
+    assert res.success is False
+    assert "forbidden" in res.stderr
+    res = tool.execute("reset --hard")
+    assert isinstance(res, ToolResult)
+    assert res.success is False
+    assert "forbidden" in res.stderr
+
+
 def test_anchors_alive(monkeypatch):
     tool = GitTool()
-    def mock_run(*args, **kwargs):
-        class MockResult:
-            stdout = "log"
-            stderr = ""
-            returncode = 0
-        return MockResult()
-    monkeypatch.setattr(subprocess, "run", mock_run)
+    _patch_git_run(monkeypatch, stdout="log")
     res = tool.execute("log -n 3")
-    assert res == "log"
+    assert isinstance(res, ToolResult)
+    assert res.success is True
+    assert "log" in res.stdout

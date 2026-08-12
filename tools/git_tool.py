@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import time
 import uuid
 from typing import Any, Dict, Optional, Type
@@ -15,6 +16,17 @@ from core.kernel.subprocess_guard import default_guard
 
 
 GIT_ARG_VALIDATOR = re.compile(r'^[a-zA-Z0-9_./-]+$')
+
+# Output truncation ceiling — prevents unbounded git output (huge `log`/`diff`
+# results) from bloating the LLM context window and the evidence ledger (GIT-P1-6).
+MAX_GIT_OUTPUT: int = 12000
+
+
+def _truncate_git_output(text: str, limit: int = MAX_GIT_OUTPUT) -> str:
+    """Clamp a git output string to ``limit`` chars, marking truncation."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n... [truncated by git_tool]"
 
 
 # ── Pydantic argument schema ──
@@ -47,7 +59,7 @@ def push_and_verify_evidence(
     """Execute git push and automatically record deterministic git diff verification evidence."""
     # 1. Execute real git push
     push_res = default_guard.run_git(["git", "push", remote, branch], timeout=30)
-    push_raw = (push_res[1] or "") + (push_res[2] or "")
+    push_raw = _truncate_git_output((push_res[1] or "") + (push_res[2] or ""))
     push_rec = EvidenceRecord(
         tool_name="git_push",
         input=f"{remote} {branch}",
@@ -61,7 +73,7 @@ def push_and_verify_evidence(
     # 2. Automatically execute git diff HEAD origin/main without manual intervention
     diff_target = f"{remote}/{branch}"
     diff_res = default_guard.run_git(["git", "diff", "HEAD", diff_target], timeout=30)
-    diff_raw = (diff_res[1] or "") + (diff_res[2] or "")
+    diff_raw = _truncate_git_output((diff_res[1] or "") + (diff_res[2] or ""))
     diff_rec = EvidenceRecord(
         tool_name="git_diff",
         input=f"HEAD {diff_target}",
@@ -196,43 +208,122 @@ class GitPushTool(BaseTool):
         evidence_log=evidence_log,
         )
 
-import subprocess
+
+# ── GitToolArgs ─────────────────────────────────────────────────────────
+# GIT-P0-1: `force_execute` is a first-class schema field so the engine's
+# post-approval re-dispatch (`engine/_dispatch.py` sets force_execute=True)
+# actually reaches `execute()` instead of being silently dropped by Pydantic.
 
 class GitToolArgs(BaseModel):
     command: str = Field(description="The git command to execute (e.g., 'log -n 3', 'status', 'diff')")
+    force_execute: bool = Field(
+        False,
+        description="Execute write commands without the consent gate (internal use only, set by the engine after user approval).",
+    )
+
 
 class GitTool(BaseTool):
     """
-    Execute read-only git commands safely.
-    Use this tool to view git history, status, diffs, and branch information.
-    Allowed commands: log, diff, status, show, branch, tag.
+    Execute git commands safely, returning a typed ``ToolResult``.
+
+    Read-only commands (log, diff, status, show, branch, tag) execute
+    directly. Write commands (add, commit, checkout, restore) require the
+    consent gate: without ``force_execute`` they return a ToolResult with
+    ``status="consent_required"``. Destructive commands (push, reset, clean,
+    revert) are forbidden outright.
     """
     args_schema = GitToolArgs
-    
+
     ALLOWED = {"log", "diff", "status", "show", "branch", "tag"}
     WRITE_COMMANDS = {"add", "commit", "checkout", "restore"}
     DANGEROUS_COMMANDS = {"push", "reset", "clean", "revert"}
-    
-    def execute(self, command: str, force_execute: bool = False) -> str | dict:
-        cmd = command.split()[0] if command.split() else ""
-        
+    # Flags that grant file-write side effects to "read-only" commands (GIT-P0-3).
+    # ``-o`` is the short form of ``--output=<file>`` in git diff/show.
+    BLOCKED_READ_FLAGS = ("--output", "-o")
+
+    def execute(self, command: str = "", force_execute: bool = False) -> ToolResult:
+        # Normalize: tolerate an optional leading "git " prefix from the model.
+        cmd_str = (command or "").strip()
+        if cmd_str.startswith("git "):
+            cmd_str = cmd_str[4:].strip()
+
+        # GIT-P0-3: block file-writing flags smuggled into "read-only" commands.
+        tokens = cmd_str.split()
+        if any(t.startswith("--output=") or t in self.BLOCKED_READ_FLAGS for t in tokens):
+            return ToolResult(
+                success=False,
+                stderr="--output/-o is not allowed in git read mode (it writes files).",
+                returncode=-1,
+                status="error",
+            )
+
+        cmd = tokens[0] if tokens else ""
+
         if cmd in self.DANGEROUS_COMMANDS:
-            raise ValueError(f"Git command '{cmd}' is forbidden")
-            
+            return ToolResult(
+                success=False,
+                stderr=f"Git command '{cmd}' is forbidden",
+                returncode=-1,
+                status="error",
+            )
+
         if cmd in self.WRITE_COMMANDS:
             if not force_execute:
-                return {
-                    "status": "consent_required",
-                    "command": command,
-                    "preview": "git diff --staged" if cmd == "commit" else f"git diff {command}"
-                }
+                return ToolResult(
+                    success=False,
+                    stderr=f"Git write command '{cmd}' requires consent (force_execute not set).",
+                    returncode=-1,
+                    status="consent_required",
+                    metadata={
+                        "command": command,
+                        "preview": (
+                            "git diff --staged" if cmd == "commit"
+                            else "git diff --cached" if cmd == "add"
+                            else f"git diff {cmd} --"
+                        ),
+                    },
+                )
             # Otherwise proceed to execute safely
         elif cmd not in self.ALLOWED:
-            raise ValueError(f"Git command '{cmd}' not allowed. Allowed: {self.ALLOWED}")
+            return ToolResult(
+                success=False,
+                stderr=f"Git command '{cmd}' not allowed. Allowed: {sorted(self.ALLOWED)}",
+                returncode=-1,
+                status="error",
+            )
 
-        result = subprocess.run(
-            ["git"] + command.split(),
-            capture_output=True, text=True, timeout=10,
-            cwd="."  # فقط في cwd الحالي
+        try:
+            result = subprocess.run(
+                ["git"] + tokens,
+                capture_output=True, text=True, timeout=10,
+                cwd=".",  # فقط في cwd الحالي
+            )
+        except FileNotFoundError:
+            return ToolResult(
+                success=False,
+                stderr="git executable not found.",
+                returncode=-1,
+                status="error",
+            )
+        except subprocess.TimeoutExpired:
+            return ToolResult(
+                success=False,
+                stderr="git command timed out after 10s.",
+                returncode=-1,
+                status="error",
+            )
+
+        out = _truncate_git_output(result.stdout or result.stderr)
+        if result.returncode != 0:
+            return ToolResult(
+                success=False,
+                stdout=out,
+                returncode=result.returncode,
+                status="error",
+            )
+        return ToolResult(
+            success=True,
+            stdout=out,
+            returncode=0,
+            status="success",
         )
-        return result.stdout or result.stderr
