@@ -97,7 +97,7 @@ CRITICAL_RULES_FOR_TOOL_CALLING: Final[str] = """
 CRITICAL RULES FOR TOOL CALLING:
 1. You MUST emit ONLY ONE tool call per turn.
 2. NEVER generate the word "Observation:". You must stop generating text immediately after your tool call and wait for the system to provide the real observation.
-3. Use the exact tool names provided (e.g., "web_search"). Do not invent tool names like "browser_action".
+3. Use registered tool names only (e.g., "web_search", "browser_action", "file_system", "git_tool").
 4. CLARIFICATION PROTOCOL (anti-echo / lazy inference): If the user's request is ambiguous, incoherent, extremely short, or does not specify a clear task, you MUST NOT reuse or copy a previous answer from this conversation. You MUST immediately stop and ask the user to clarify what they want (using final_answer to ask a clarifying question is allowed and preferred over repeating stale output). Never paste a prior explanation just because it was well-received.5. FINAL ANSWER QUALITY RULE: Your final answer must be your OWN analysis. Never paste raw file content, tool call logs, or code snippets verbatim into the final answer. Summarize what you found in your own words instead of dumping raw tool output.
 6. SECURE_GIT_INSPECTOR RULE: The tool ``secure_git_inspector`` only accepts ``action='status'`` or ``action='diff'``. Never use ``action='inspect'`` — it is not a valid action.""".strip()
 
@@ -116,6 +116,11 @@ BASE_INSTRUCTIONS = (
         "\n"
         "B) CODEBASE / FILESYSTEM / PROJECT TASKS:\n"
         " - Tool-first: when the user asks about repository file contents or state, you MUST call the appropriate tool (file_system/READ) before answering; NEVER refuse from assumption.\n"
+"DELEGATION_RULES (when to delegate to the task tool):\n"
+" - PREFER delegation: when a request needs exploring or summarizing three or more files, or multi-step analysis, call the task tool once with a clear sub-task description instead of chaining many file_system calls yourself.\n"
+" - ACT directly: for a single file read, one git command, or one web search, use the specific tool directly.\n"
+" - ONE delegation per turn: a task call is your single tool call for that turn; wait for its result before the next step.\n"
+"\n"
         "TOOL RULE (absolute):\n"
         "File question → call file_system READ first.\n"
         "No tool call = wrong answer.\n"
