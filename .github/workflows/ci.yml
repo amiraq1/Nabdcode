@@ -1,0 +1,82 @@
+# NBD-07 (wave E): non-interactive CI. Jobs are independent so the failing
+# stage is obvious. Publishing is deliberately NOT automated from PRs —
+# the release owner enables it manually only after the clean-install smoke
+# job passes on the artifact (plan §6).
+name: ci
+
+on:
+  push:
+    branches: [main, "release/*"]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: |
+          python -m compileall -q core engine tools ui adapters skills smolagents main.py llm_router.py
+          echo "COMPILE_OK"
+
+  unit-regression:
+    runs-on: ubuntu-latest
+    env:
+      NABD_AUTO_APPROVE: "1"   # non-interactive consent in tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-test.txt
+          python -m pip install -e .
+      - name: Run unit regression (offline)
+        run: python -m pytest tests/ -q -m "not slow"
+        # No API keys, no network: providers are injected by the tests.
+
+  security-negative:
+    runs-on: ubuntu-latest
+    env:
+      NABD_AUTO_APPROVE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-test.txt
+          python -m pip install -e .
+      - name: Run hardening regression (NBD-01..07)
+        run: python -m pytest tests/test_nbd_hardening.py -q
+
+  package-build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir dist
+      - name: Clean-install smoke (outside source tree)
+        run: |
+          python -m venv /tmp/nbd-smoke-venv
+          /tmp/nbd-smoke-venv/bin/python -m pip install dist/*.whl
+          cd /tmp && /tmp/nbd-smoke-venv/bin/python -c \
+            "import main; import core.kernel.security; import ui.design.theme.semantic; \
+             import adapters.lightpanda_adapter; import skills; print('SMOKE_OK')"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nabd-os-wheel
+          path: dist/*.whl

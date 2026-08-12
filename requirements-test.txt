@@ -1,0 +1,4 @@
+# NBD-07: one documented command to create the test environment:
+#   python -m pip install -r requirements-test.txt
+# Tests must run fully offline: no API keys, no network, no interactive prompts.
+pytest>=7.0

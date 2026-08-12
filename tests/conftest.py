@@ -13,13 +13,20 @@ same set of tools that were present at import-time (before any test
 registered extra ones), and that any test-registered tools are removed
 after each test function.
 """
+import os
 import pytest
 from engine.tool_registry import registry
 
 
 @pytest.fixture(autouse=True)
 def _isolate_tool_registry():
-    """Clear the global tool registry and pinned workspace root before every test."""
+    """Clear the global tool registry and pinned workspace root before every test.
+
+    NBD-07: ``NABD_AUTO_APPROVE=1`` is set for the whole session so consent-gated
+    tool paths run non-interactively. Tests that exercise the DENY path must
+    inject a ``ConsentManager(prompt_func=...)`` (or unset the env var) — the
+    product code no longer auto-approves based on a pytest-specific flag.
+    """
     saved_tools = dict(registry._tools)
     registry._tools.clear()
     
@@ -27,9 +34,10 @@ def _isolate_tool_registry():
     saved_root = core.kernel.security._WORKSPACE_ROOT
     core.kernel.security._WORKSPACE_ROOT = None
     
-    import os
     saved_term = os.environ.get("TERM")
     os.environ["TERM"] = "xterm-256color"
+    saved_approve = os.environ.get("NABD_AUTO_APPROVE")
+    os.environ["NABD_AUTO_APPROVE"] = "1"
     
     yield
     
@@ -37,6 +45,10 @@ def _isolate_tool_registry():
         del os.environ["TERM"]
     else:
         os.environ["TERM"] = saved_term
+    if saved_approve is None:
+        os.environ.pop("NABD_AUTO_APPROVE", None)
+    else:
+        os.environ["NABD_AUTO_APPROVE"] = saved_approve
     
     registry._tools = saved_tools
     core.kernel.security._WORKSPACE_ROOT = saved_root
