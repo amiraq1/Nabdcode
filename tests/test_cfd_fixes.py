@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -141,7 +140,10 @@ def _fake_discovery_ctx(tmp_path):
     class _Cfg:
         workspace_root = tmp_path
 
-    return SimpleNamespace(
+    # PR10-05: typed ToolDependencyContext, not a bare SimpleNamespace.
+    from core.tool_factory import ToolDependencyContext
+
+    return ToolDependencyContext(
         config=_Cfg(),
         memory_manager=None,
         todo_manager=None,
@@ -158,6 +160,19 @@ def test_cfd_discovery_skips_unnamed_base_class(tmp_path):
 
     discovered = discover_tools(_fake_discovery_ctx(tmp_path))
     assert "unnamed_tool" not in discovered, "base SecureTool must not be discovered"
+
+
+def test_pr10_01_git_tool_discovered_as_git(tmp_path):
+    """PR10-01 regression: GitTool must be discovered under its own name "git",
+    never the placeholder, and must be absent from the registry otherwise."""
+    from core.tool_factory import discover_tools
+    from tools.git_tool import GitTool
+
+    discovered = discover_tools(_fake_discovery_ctx(tmp_path))
+    assert "unnamed_tool" not in discovered
+    assert "git" in discovered, "GitTool lost from discovery (PR10-01)"
+    assert isinstance(discovered["git"], GitTool)
+    assert discovered["git"].name == "git"
 
 
 def test_cfd_discovery_injects_workspace_dir(tmp_path):

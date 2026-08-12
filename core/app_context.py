@@ -153,20 +153,21 @@ class AppContext:
         # CFD-appctx-1: discovery receives a REAL dependency context (config,
         # managers, security engine, workspace) — never the class object — so
         # auto-discovered tools actually get their constructor dependencies.
-        from types import SimpleNamespace as _SN
-        _discovery_ctx = _SN(
-            config=config,
-            memory_manager=memory_mgr,
-            todo_manager=todo_manager,
-            _security_engine=_security_engine,
-            workspace=config.workspace_root,
-            workspace_root=config.workspace_root,
-            workspace_dir=config.workspace_root,
-            memory=memory_mgr,
-        )
+        # PR10-05: typed ToolDependencyContext (not SimpleNamespace) pins the
+        # injection contract. Everything lives INSIDE the fail-open try so a
+        # tool_factory import failure can never break boot.
         try:
-            from core.tool_factory import discover_tools
-
+            from core.tool_factory import ToolDependencyContext, discover_tools
+            _discovery_ctx = ToolDependencyContext(
+                config=config,
+                memory_manager=memory_mgr,
+                todo_manager=todo_manager,
+                _security_engine=_security_engine,
+                workspace=config.workspace_root,
+                workspace_root=config.workspace_root,
+                workspace_dir=config.workspace_root,
+                memory=memory_mgr,
+            )
             for _name, _tool in discover_tools(_discovery_ctx).items():
                 if _name not in registry:
                     try:

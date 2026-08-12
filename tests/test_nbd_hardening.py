@@ -326,8 +326,20 @@ def test_nbd07_product_code_has_no_pytest_env_dependency():
 
 @pytest.mark.slow
 def test_nbd01_wheel_clean_install_imports_runtime_packages(tmp_path):
-    """Build the wheel, install it into a clean venv, and import the boot path
-    from a directory OUTSIDE the source tree."""
+    """Build the wheel, verify its METADATA declares the runtime deps, then
+    attempt a TRULY clean install (venv WITHOUT --system-site-packages, deps
+    resolved from the index) and import the boot path from OUTSIDE the tree.
+
+    PR10-02: the pre-fix version used ``venv --system-site-packages`` +
+    ``pip install --no-deps``, which could silently borrow ``rich``/
+    ``cryptography`` from the host and pass even if the metadata were wrong.
+    The venv is now isolated. On platforms without prebuilt wheels for the
+    compiled deps (e.g. cryptography/pydantic-core on Termux/Android), pip
+    cannot resolve them from the index; that is a platform limitation, not a
+    wheel defect — the test SKIPS honestly in that case, and the CI
+    ``package-build-and-smoke`` job (ubuntu, network) performs the definitive
+    clean install from the index.
+    """
     if shutil.which("pip") is None and not shutil.which(f"{sys.executable} -m pip"):
         pytest.skip("pip unavailable")
     wheels = tmp_path / "wheels"
@@ -356,22 +368,65 @@ def test_nbd01_wheel_clean_install_imports_runtime_packages(tmp_path):
     ):
         assert required in names, f"wheel is missing {required}"
 
-    # 3) Clean venv + install the artifact (force-reinstall wins over any
-    #    system-wide same-version install).
+    # 2b) PR10-02: METADATA must declare every runtime dependency. This is the
+    #     offline, network-independent gate — it runs on EVERY platform and
+    #     fails if the metadata/declared deps are wrong.
+    meta_name = next(n for n in names if n.endswith(".dist-info/METADATA"))
+    metadata = zipfile.ZipFile(wheel).read(meta_name).decode("utf-8", "replace")
+    declared: set[str] = set()
+    for line in metadata.splitlines():
+        if line.startswith("Requires-Dist:"):
+            spec = line.split(":", 1)[1].strip()
+            name = re.split(r"[<>=!~;\s]+", spec, maxsplit=1)[0].strip()
+            # Normalise: PEP 503 canonicalises '_' and '-' identically.
+            declared.add(name.lower().replace("_", "-"))
+    for dep in ("cryptography", "prompt-toolkit", "pydantic", "rich"):
+        assert dep in declared, f"wheel METADATA missing Requires-Dist: {dep}"
+
+    # 3) TRULY clean venv: NO --system-site-packages (host packages must not
+    #    leak in), install the wheel WITH deps resolved from the index.
     venv_dir = tmp_path / "venv"
     subprocess.run(
-        [sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)],
+        [sys.executable, "-m", "venv", str(venv_dir)],
         check=True, timeout=180, capture_output=True,
     )
     venv_py = venv_dir / "bin" / "python"
     inst = subprocess.run(
-        [str(venv_py), "-m", "pip", "install", "--force-reinstall", "--no-deps",
-         "--quiet", str(wheel)],
-        capture_output=True, text=True, timeout=300,
+        [str(venv_py), "-m", "pip", "install", "--quiet", str(wheel)],
+        capture_output=True, text=True, timeout=600,
     )
-    assert inst.returncode == 0, inst.stderr[-2000:]
+    if inst.returncode != 0:
+        err = inst.stderr[-2000:].lower()
+        # Honest skip ONLY for platform/offline dependency-resolution limits;
+        # anything else (bad metadata, broken wheel) must FAIL loudly.
+        # PR10-02 (review): the skip list is deliberately NARROW — only
+        # platform-build markers that a correctly-declared dependency set hits
+        # on Termux/Android (compiled wheels absent). Generic resolution
+        # failures ("no matching distribution", "could not find a version")
+        # MUST NOT skip: they are exactly how a misspelled/undeclared
+        # dependency surfaces, and PR10-02 exists to catch that class of bug.
+        if any(k in err for k in (
+            "failed to determine android api level",
+            "maturin",
+            "can't find rust compiler",
+            "cargo",
+            "building wheel for cryptography",
+            "building wheel for pydantic-core",
+            "[errno 2] no such file or directory: 'gcc'",
+            "error: command 'gcc' failed",
+            "network is unreachable",
+            "temporary failure in name resolution",
+            "connection timed out",
+        )):
+            pytest.skip(
+                "Platform cannot resolve compiled deps (cryptography/pydantic-core) "
+                "from the index (e.g. Termux/Android). CI package-build-and-smoke "
+                "performs the definitive clean install on ubuntu."
+            )
+        assert False, f"clean install failed (non-platform reason): {inst.stderr[-1500:]}"
 
-    # 4) Boot-path imports from OUTSIDE the repo (tmp_path is outside).
+    # 4) Boot-path imports from OUTSIDE the repo (tmp_path is outside), and
+    #    confirm the imports resolve from the venv, never the host/system.
     smoke = textwrap.dedent(
         """
         import core
@@ -382,6 +437,7 @@ def test_nbd01_wheel_clean_install_imports_runtime_packages(tmp_path):
         import ui.design.theme.semantic
         import adapters.lightpanda_adapter
         import skills, smolagents
+        import rich, pydantic, cryptography, prompt_toolkit
         print("SMOKE_OK")
         """
     )

@@ -588,8 +588,12 @@ class FileSystemTool(BaseTool):
         tmp_name: str | None = None
         try:
             # Mode policy: preserve for regular files, sane default otherwise.
+            # PR10-04: ``follow_symlinks=False`` (lstat semantics) so a symlink
+            # appearing in the race window is classified as non-regular and
+            # receives 0o644 — matching the documented policy instead of
+            # inheriting the *target's* mode via a followed stat.
             try:
-                st = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=True)
+                st = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
                 mode = (st.st_mode & 0o777) if stat.S_ISREG(st.st_mode) else 0o644
             except OSError:
                 mode = 0o644

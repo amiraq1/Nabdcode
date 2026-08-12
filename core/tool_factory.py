@@ -9,11 +9,37 @@ live, read-only context registry from the system memory/state and binds it to
 each skill before invocation, so skills can self-adapt without importing core.
 """
 
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import inspect
 
 from smolagents import Tool
+
+
+@dataclass
+class ToolDependencyContext:
+    """PR10-05: explicit dependency bag for auto-discovery injection.
+
+    Replaces the ad-hoc ``SimpleNamespace`` so the injection contract is
+    pinned: every field ``_build_tool_with_deps`` may read is declared here,
+    and callers (``AppContext.build``, tests) construct one instead of a bare
+    namespace. Fields mirror the AppContext surface that tool constructors
+    consume (workspace, workspace_root, workspace_dir, managers, security
+    engine).
+    """
+
+    config: Any = None
+    workspace: Any = None
+    workspace_root: Any = None
+    workspace_dir: Any = None
+    memory_manager: Any = None
+    todo_manager: Any = None
+    _security_engine: Any = None
+    memory: Any = None
+
+    # Extra fields a future tool might need; never silently required.
+    extra: Dict[str, Any] = field(default_factory=dict)
 
 from skills import load_skills
 from skills.base_skill import BaseSkill
