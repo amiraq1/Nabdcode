@@ -1,9 +1,15 @@
 # tools/python_repl.py
 """
-Python REPL Tool — secure, AST-hardened, zero-dependency execution sandbox tailored for Termux / Edge environments.
+Python REPL Tool — DISABLED by default (NBD-02 / wave A containment).
 
-Provides:
-  • PythonREPLTool — executes Python snippets inside .nabd/sandbox with AST security filtering and circuit-breaking timeouts.
+This tool executes Python snippets via the standard interpreter WITHOUT an
+OS-level sandbox: the AST filter is a convenience layer only and is NOT a
+security boundary (``open``/``pathlib``/stdlib networking are unrestricted).
+
+Until a real runtime confinement (PRoot / restricted mount) is implemented
+and verified on the target device, the tool is not registered in the tool
+registry by default and returns ``capability_unavailable`` when called
+while disabled. Enable explicitly with ``NABD_ENABLE_PYTHON_REPL=1``.
 """
 
 from __future__ import annotations
@@ -16,6 +22,14 @@ from typing import Any, Final, Optional, Tuple, Type
 from tools.base import BaseModel, BaseTool, Field
 from tools.models import ToolResult
 from core.kernel.subprocess_guard import default_guard
+
+
+_ENABLE_ENV: Final[str] = "NABD_ENABLE_PYTHON_REPL"
+
+
+def _repl_enabled() -> bool:
+    """Return True only when the operator explicitly opted in."""
+    return os.getenv(_ENABLE_ENV, "0").lower() in ("1", "true", "yes")
 
 
 class PythonREPLArgs(BaseModel):
@@ -31,8 +45,9 @@ class PythonREPLTool(BaseTool):
 
     name: Final[str] = "python_repl"
     description: Final[str] = (
-        "A Python shell for executing code. Useful for math, data analysis, and logic testing. "
-        "You MUST use print() to see the output. Execution happens in an isolated .nabd/sandbox directory."
+        "Python execution tool. DISABLED by default (no OS-level sandbox exists yet — "
+        "the AST filter is NOT a security boundary). Enable with NABD_ENABLE_PYTHON_REPL=1. "
+        "If enabled, use print() to see the output; scripts run in .nabd/sandbox without isolation."
     )
     inputs: dict = {
         "code": {
@@ -84,6 +99,20 @@ class PythonREPLTool(BaseTool):
             return True, ""
 
     def execute(self, **kwargs) -> ToolResult:
+        # NBD-02 (wave A containment): fail-closed unless explicitly enabled.
+        if not _repl_enabled():
+            return ToolResult(
+                success=False,
+                stderr=(
+                    "python_repl is disabled by default (NBD-02 containment): it runs "
+                    "without OS-level sandbox isolation. Set NABD_ENABLE_PYTHON_REPL=1 "
+                    "to enable, or use a restricted runtime."
+                ),
+                returncode=-1,
+                status="capability_unavailable",
+                metadata={"tool": self.name},
+            )
+
         code = kwargs.get("code")
         if not isinstance(code, str) or not code.strip():
             return ToolResult(

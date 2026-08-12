@@ -43,6 +43,16 @@ class _ToolDispatchMixin:
     # ------------------------------------------------------------------
     # _dispatch_and_record_evidence — decomposed into 3 focused stages
     # ------------------------------------------------------------------
+
+    @property
+    def _consent_mgr(self) -> ConsentManager:
+        """Resolve the loop's injected ConsentManager (NBD-05).
+
+        Production ExecutionLoop always injects one instance; this fallback
+        keeps standalone mixin users / test dummies fail-safe without
+        recreating managers per turn.
+        """
+        return getattr(self, "consent_manager", None) or ConsentManager()
     def _handle_consent_and_edit_gate(
         self, tool_name: str, tool_args: object
     ) -> bool:
@@ -53,8 +63,10 @@ class _ToolDispatchMixin:
         when execution should proceed to dispatch.
         """
         # ── Consent Loop (Phase 2 Public Release Protocol) ──────────────────
-        if ConsentManager().requires_confirmation(tool_name, tool_args):
-            blocked = ConsentManager().confirm(
+        # NBD-05: ONE injected ConsentManager instance drives the whole loop
+        # (tests replace its prompt function without env/stdin hacks).
+        if self._consent_mgr.requires_confirmation(tool_name, tool_args):
+            blocked = self._consent_mgr.confirm(
                 tool_name, tool_args,
                 evidence_log=self.evidence_log,
                 step=getattr(self.state, "step_count", 0),
@@ -143,15 +155,19 @@ class _ToolDispatchMixin:
 
             if not _decision_box.get("approved", False):
                 _bridge.emit("status_update", message="✋ Edit rejected by user.")
+                # NBD-05: an edit rejection is consent_denied, never success=True.
                 _result = ToolResult(
-                    success=True,
+                    success=False,
                     stdout="USER REJECTED THE EDIT. Manual override. Please revise your approach.",
                     stderr="",
+                    returncode=-1,
+                    status="consent_denied",
+                    metadata={"blocked_by": "user"},
                 )
                 self.evidence_log.record(
                     tool=tool_name,
                     command_or_path=_extract_cmd_or_path(tool_args),
-                    success=True,
+                    success=False,
                     output_snippet="Edit rejected by user",
                     action=(
                         str(
@@ -239,7 +255,7 @@ class _ToolDispatchMixin:
             # GIT-P1-4: typed consent detection — no more dict-in-stdout + ast.literal_eval.
             if getattr(result, "status", "") == "consent_required":
                 _consent_meta = getattr(result, "metadata", None) or {}
-                blocked = ConsentManager().confirm(
+                blocked = self._consent_mgr.confirm(
                     tool_name,
                     {
                         "command": _consent_meta.get("command", ""),

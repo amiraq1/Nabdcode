@@ -136,9 +136,13 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         model_identifier: str | None = None,
         no_stream: bool = False,
         exact_action_mode: bool = False,
+        consent_manager: Any | None = None,
     ) -> None:
 
         self.state = state
+        # NBD-05: one injected ConsentManager drives the whole loop; tests
+        # inject a prompt function instead of env/stdin hacks.
+        self.consent_manager = consent_manager or ConsentManager()
         # Dependency Injection: the dispatcher is injected (or built lazily) so
         # engine.loop never needs a module-level import of engine.dispatcher.
         self.dispatcher = dispatcher or _build_dispatcher(state)

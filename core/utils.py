@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+import subprocess
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -74,9 +75,15 @@ def _handle_piped(cmd_str: str, timeout: int) -> Tuple[int, str, str]:
 # 4. Simple (non-piped, non-bg) command  (CC ~ 2)
 # ---------------------------------------------------------------------------
 
-def _handle_simple(args: List[str], timeout: int) -> Tuple[int, str, str]:
-    """Run a single command via the centralized SubprocessGuard (shell=False)."""
-    code, out, err = default_guard.run_agent_command(" ".join(args), timeout=timeout)
+def _handle_simple(cmd_str: str, timeout: int) -> Tuple[int, str, str]:
+    """Run a single command via the centralized SubprocessGuard (shell=False).
+
+    NBD-04: the ORIGINAL command text is handed to the guard (which re-tokenizes
+    deterministically), never a ``" ".join(args)`` reconstruction — that join
+    silently destroyed quoted argument boundaries (e.g. a path named
+    ``input file.txt`` became two argv elements).
+    """
+    code, out, err = default_guard.run_agent_command(cmd_str, timeout=timeout)
     return code, sanitize(out), sanitize(err)
 
 
@@ -131,8 +138,10 @@ def safe_execute_command(command: str, timeout: int = 300) -> Tuple[int, str, st
         except Exception:
             pass  # fall through to simple command
 
-        # 4. Default: simple command
-        return _handle_simple(tokens, timeout)
+        # 4. Default: simple command — pass the ORIGINAL text (NBD-04), the
+        #    guard re-tokenizes identically to ``tokens`` but keeps quoted
+        #    boundaries intact. ``tokens`` remains the validated reference.
+        return _handle_simple(cmd_str, timeout)
 
     except subprocess.TimeoutExpired:
         return -1, "", f"Command execution timed out after {timeout} seconds."

@@ -3,6 +3,8 @@ from __future__ import annotations
 import difflib
 import os
 import errno
+import secrets
+import stat
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 from pathlib import Path
@@ -75,11 +77,15 @@ class FileSystemTool(BaseTool):
         action = kwargs.get("action")
 
         # ── Decision Ladder Gate for FileSystemTool ──
-        # Build a pseudo-command for the ladder to evaluate
+        # Build a pseudo-command for the ladder to evaluate.
+        # CFD-fs-2: the ladder MUST judge paths against THIS tool's pinned
+        # workspace (self.workspace), never os.getcwd() — the process cwd can
+        # differ from NABD_WORKSPACE_ROOT, which would make the second
+        # containment layer evaluate against the wrong root.
         _fs_path = kwargs.get("path", "") or kwargs.get("file_path", "")
         if _fs_path:
             _pseudo_cmd = f"filesystem {action} {_fs_path}"
-            _ladder = DecisionLadder(workspace_root=os.getcwd())
+            _ladder = DecisionLadder(workspace_root=str(self.workspace))
             _decision = _ladder.evaluate(_pseudo_cmd)
             if _decision.is_denied:
                 return ToolResult(
@@ -540,39 +546,9 @@ class FileSystemTool(BaseTool):
                 },
             )
 
-        # Normal path: write immediately using secure file operations
-        # Create parent directories using secure mkdir
-        parent_dir = target.parent
-        parent_dir.mkdir(parents=True, exist_ok=True)
-
-        # Use secure file writing with O_CREAT | O_EXCL to prevent race conditions
-        parent_fd = os.open(str(parent_dir), os.O_RDONLY)
-        try:
-            basename = target.name
-            # Try to create the file exclusively
-            try:
-                fd = os.open(basename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666, dir_fd=parent_fd)
-                created = True
-            except FileExistsError:
-                # File exists, open for writing (but still with O_NOFOLLOW)
-                fd = os.open(basename, os.O_WRONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
-                created = False
-
-            try:
-                # Write the content
-                os.write(fd, new_content.encode('utf-8'))
-            except Exception as e:
-                # If there was an error and we just created the file, remove it
-                if created:
-                    try:
-                        os.unlink(basename, dir_fd=parent_fd)
-                    except:
-                        pass  # Best effort cleanup
-                raise
-            finally:
-                os.close(fd)
-        finally:
-            os.close(parent_fd)
+        # Normal path: full replacement via the atomic primitive (NBD-03).
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self._atomic_replace_contents(target, new_content.encode("utf-8"))
 
         summary = f"Updated {path_str} with {additions} additions and {removals} removals"
 
@@ -589,6 +565,83 @@ class FileSystemTool(BaseTool):
         )
 
     # ------------------------------------------------------------------
+
+    def _atomic_replace_contents(self, target: Path, data: bytes) -> None:
+        """Atomically replace *target*'s contents with *data* (NBD-03).
+
+        Single full-replacement primitive shared by ``write`` / ``edit`` /
+        ``replace``. Writes to a unique temp file in the parent directory
+        (``O_CREAT|O_EXCL|O_NOFOLLOW``), writes ALL bytes in a loop, fsyncs,
+        then ``os.replace`` over the target via ``dir_fd`` handles and fsyncs
+        the parent directory. Readers observe either the complete old file or
+        the complete new file — never a truncated mix, and never a leftover
+        tail from a shorter write.
+
+        The target itself is never opened for writing: an existing symlink is
+        *replaced* (not followed), so no write can escape through a link.
+        Mode policy: existing regular files keep their mode; new files and
+        non-regular entries (symlinks/sockets) get 0o644 (subject to umask)
+        — wide permissions are never inherited from a link.
+        """
+        parent_dir = target.parent
+        parent_fd = os.open(str(parent_dir), os.O_RDONLY | os.O_DIRECTORY)
+        tmp_name: str | None = None
+        try:
+            # Mode policy: preserve for regular files, sane default otherwise.
+            try:
+                st = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=True)
+                mode = (st.st_mode & 0o777) if stat.S_ISREG(st.st_mode) else 0o644
+            except OSError:
+                mode = 0o644
+
+            # Unique temp file: O_EXCL + O_NOFOLLOW defeats symlink races.
+            for _ in range(20):
+                candidate = f".{target.name}.nbd-tmp-{os.getpid()}-{secrets.token_hex(4)}"
+                try:
+                    fd = os.open(
+                        candidate,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        mode,
+                        dir_fd=parent_fd,
+                    )
+                    tmp_name = candidate
+                    break
+                except FileExistsError:
+                    continue
+            if tmp_name is None:
+                raise OSError("Could not allocate a unique temp file for atomic replace.")
+
+            try:
+                # Write loop: os.write may write fewer bytes than requested.
+                view = memoryview(data)
+                total = 0
+                while total < len(view):
+                    written = os.write(fd, view[total:])
+                    if written == 0:
+                        raise OSError("Short write with no progress during atomic replace.")
+                    total += written
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+            # Atomic swap, then make the rename durable (best-effort dir fsync).
+            os.replace(tmp_name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            tmp_name = None  # rename succeeded; nothing left to clean up
+            try:
+                dir_fd = os.open(str(parent_dir), os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass  # directory fsync unsupported on some filesystems
+        finally:
+            if tmp_name is not None:
+                try:
+                    os.unlink(tmp_name, dir_fd=parent_fd)
+                except OSError:
+                    pass
+            os.close(parent_fd)
 
     def _compute_diff(self, filename: str, old_content: str, new_content: str) -> tuple[str, int, int]:
         lines = list(difflib.unified_diff(
@@ -625,40 +678,13 @@ class FileSystemTool(BaseTool):
             except Exception:
                 old_content = ""
 
-        # Create parent directories using secure mkdir
+        # Create parent directories, then full replacement via the atomic
+        # primitive (NBD-03) — one shared path for every full overwrite.
         path.parent.mkdir(
             parents=True,
             exist_ok=True,
         )
-
-        # Use secure file writing with O_CREAT | O_EXCL to prevent race conditions
-        parent_fd = os.open(str(path.parent), os.O_RDONLY)
-        try:
-            basename = path.name
-            # Try to create the file exclusively
-            try:
-                fd = os.open(basename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666, dir_fd=parent_fd)
-                created = True
-            except FileExistsError:
-                # File exists, open for writing (but still with O_NOFOLLOW)
-                fd = os.open(basename, os.O_WRONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
-                created = False
-
-            try:
-                # Write the content
-                os.write(fd, str(content).encode('utf-8'))
-            except Exception as e:
-                # If there was an error and we just created the file, remove it
-                if created:
-                    try:
-                        os.unlink(basename, dir_fd=parent_fd)
-                    except:
-                        pass  # Best effort cleanup
-                raise
-            finally:
-                os.close(fd)
-        finally:
-            os.close(parent_fd)
+        self._atomic_replace_contents(path, str(content).encode("utf-8"))
 
         diff_text, additions, deletions = self._compute_diff(path.name, old_content, str(content))
 
@@ -789,20 +815,8 @@ class FileSystemTool(BaseTool):
             updated = content.replace(old_text, new_text, count)
             occurrences = min(content.count(old_text), count)
 
-        # Use secure file writing with O_CREAT | O_TRUNC to prevent race conditions
-        parent_fd = os.open(str(path.parent), os.O_RDONLY)
-        try:
-            basename = path.name
-            # Open file for writing with O_NOFOLLOW to prevent symlink attacks
-            # Use O_CREAT in case we're creating a new file, O_TRUNC to overwrite
-            fd = os.open(basename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, dir_fd=parent_fd)
-            try:
-                # Write the updated content
-                os.write(fd, updated.encode('utf-8'))
-            finally:
-                os.close(fd)
-        finally:
-            os.close(parent_fd)
+        # Full replacement via the shared atomic primitive (NBD-03).
+        self._atomic_replace_contents(path, updated.encode("utf-8"))
 
         diff_text, additions, deletions = self._compute_diff(path.name, content, updated)
 
