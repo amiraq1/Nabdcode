@@ -252,8 +252,37 @@ class DecisionLadder:
 
     # ── Step 5: Destructive Detection ────────────────────────
     def _step_05_destructive(self, cmd: str, ctx: Dict) -> Optional[Decision]:
-        # Placeholder: write/delete on critical paths → ASK
-        return None
+        """
+        Detect destructive operations that could wipe work,
+        even if they target paths within the workspace.
+        
+        Triggers ASK (consent required) for:
+          - Bulk deletions (rm -rf with wildcards or directories)
+          - Git destructive operations (reset --hard, clean -fd)
+          - Disk formatting or overwriting
+        """
+        destructive_patterns = [
+            # Bulk deletions
+            (r"rm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rf][a-zA-Z]*\s+\S+\*", "bulk_delete_wildcard"),
+            (r"rm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rf][a-zA-Z]*\s+\S+/\s*$", "recursive_dir_delete"),
+            # Git destructive
+            (r"git\s+reset\s+--hard", "git_reset_hard"),
+            (r"git\s+clean\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[fd][a-zA-Z]*", "git_clean_force"),
+            (r"git\s+push\s+.*--force", "git_force_push"),
+            (r"git\s+checkout\s+--\s+\.", "git_discard_all"),
+            # Disk operations
+            (r"dd\s+.*\bof=", "raw_disk_write"),
+            (r"mkfs\.\w+", "filesystem_format"),
+            # Truncate/overwrite critical
+            (r">\s*\S+\.(py|md|json|yaml|yml|toml)\s*$", "file_truncate"),
+        ]
+        
+        for pattern, label in destructive_patterns:
+            if re.search(pattern, cmd):
+                # These require explicit consent, not outright denial
+                return Decision.ASK
+        
+        return None  # Pass to next step
 
     # ── Step 6: Permission Level ─────────────────────────────
     def _step_06_permission_level(self, cmd: str, ctx: Dict) -> Optional[Decision]:
