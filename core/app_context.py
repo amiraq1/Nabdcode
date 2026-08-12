@@ -114,9 +114,15 @@ class AppContext:
         # convergence gate. Register it only when the graph actually exists —
         # self-heals once graphify is fixed and the graph is built.
         from pathlib import Path as _Path
+        # NBD-02 (wave A containment): python_repl is NOT sandboxed and is
+        # therefore not registered by default. The agent cannot call a tool
+        # that is absent from the registry. Opt back in explicitly via
+        # NABD_ENABLE_PYTHON_REPL=1 once a real OS-level runtime boundary exists.
         _tool_classes = [ShellTool, FileSystemTool, WebSearchTool,
                          SearchMemoryTool, TodoWriteTool, TermuxMonitorTool,
-                         RagSearchTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool]
+                         RagSearchTool, CodeIntelligenceTool, TasteManagerTool]
+        if os.getenv("NABD_ENABLE_PYTHON_REPL", "0").lower() in ("1", "true", "yes"):
+            _tool_classes.append(PythonREPLTool)
         if _Path(config.root_dir, "graphify-out", "graph.json").exists():
             _tool_classes.append(GraphifyTool)
         for tool_cls in _tool_classes:
@@ -143,15 +149,30 @@ class AppContext:
         # PRIORITY 5 (optional, safe): auto-discover any NEW BaseTool subclasses
         # in tools/ not covered by the manual block above. Manual registration
         # remains the authoritative fallback; discovery only ADDS, never removes.
+        #
+        # CFD-appctx-1: discovery receives a REAL dependency context (config,
+        # managers, security engine, workspace) — never the class object — so
+        # auto-discovered tools actually get their constructor dependencies.
+        from types import SimpleNamespace as _SN
+        _discovery_ctx = _SN(
+            config=config,
+            memory_manager=memory_mgr,
+            todo_manager=todo_manager,
+            _security_engine=_security_engine,
+            workspace=config.workspace_root,
+            workspace_root=config.workspace_root,
+            workspace_dir=config.workspace_root,
+            memory=memory_mgr,
+        )
         try:
             from core.tool_factory import discover_tools
 
-            for _name, _tool in discover_tools(cls).items():
+            for _name, _tool in discover_tools(_discovery_ctx).items():
                 if _name not in registry:
                     try:
                         registry.register(_tool)
-                    except ValueError:
-                        pass
+                    except ValueError as _reg_exc:
+                        print(f"⚠️ [Auto-Discovery] register skipped {_name}: {_reg_exc}")
         except Exception as _disc_exc:  # fail-open: never break boot on discovery
             print(f"⚠️ [Auto-Discovery] skipped: {_disc_exc}")
 

@@ -10,13 +10,25 @@ class ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, ToolCallable] = {}
 
+    _PLACEHOLDER_NAMES: frozenset = frozenset({None, "", "unnamed_tool"})
+
     def register(self, name_or_tool: Any, tool: Optional[Any] = None, **kwargs):
-        """Register a new tool in the system."""
+        """Register a new tool in the system.
+
+        CFD-registry-1: a tool whose ``name`` is the BaseTool placeholder
+        (``"unnamed_tool"``) is NOT registerable — a nameless tool must never
+        reach the model's callable surface.
+        """
         if tool is None:
             tool_obj = name_or_tool
         else:
             tool_obj = tool
         name = getattr(tool_obj, "name", None) or (name_or_tool if isinstance(name_or_tool, str) else str(tool_obj))
+        if name in self._PLACEHOLDER_NAMES:
+            raise ValueError(
+                f"Tool '{getattr(tool_obj, '__class__', type(tool_obj)).__name__}' has no name "
+                "(placeholder 'unnamed_tool'); every tool must declare a real name."
+            )
         if name in self._tools and kwargs.get("overwrite", False) is False:
             raise ValueError(f"Tool '{name}' is already registered.")
         self._tools[name] = tool_obj
