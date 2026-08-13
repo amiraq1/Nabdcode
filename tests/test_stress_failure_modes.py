@@ -25,6 +25,8 @@ import time
 import unittest
 from unittest import mock
 
+import pytest
+
 import engine.dispatcher as dispatcher_mod
 from core.kernel.events import EventBus
 from engine.dispatcher import Dispatcher, _MAX_WORKERS, _POOL_SEMAPHORE, _SHARED_POOL
@@ -91,6 +93,11 @@ class TestZombieWorkers(unittest.TestCase):
         return _POOL_SEMAPHORE._value
 
     # ── Labeled reproduction (EXPECTED FAIL pre-fix, PASS after P1-01) ──
+    @pytest.mark.xfail(
+        reason="Reproduces P1-01 dispatcher semaphore leak; remove xfail when fixed",
+        strict=True,
+        raises=AssertionError,
+    )
     def test_zombie_worker_reproduces_known_bug(self):
         """REPRODUCTION of the P1-01 bug.
 
