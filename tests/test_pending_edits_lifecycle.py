@@ -97,8 +97,8 @@ class TestAcceptDrainsPending(unittest.TestCase):
         def digest_that_fails_verify(path):
             call_count[0] += 1
             result = real_digest(path)
-            # phase: check1(1) → check2(2) → verify_after_write(3)
-            if call_count[0] == 3:
+            # phase: check1(1) → check2(2) → CAS pre-replace(3) → verify(4)
+            if call_count[0] == 4:
                 return "bad_verify_digest"
             return result
 
@@ -239,7 +239,7 @@ class TestFailurePaths(unittest.TestCase):
         # instead of relying on a filesystem path that may exist on F2FS.
         _state._accept_edits_pending.append(edit)
         set_mode(True)
-        with patch.object(_state, "_atomic_write", side_effect=OSError("persistent IO error")) as mock_atomic:
+        with patch.object(_state, "_atomic_write_if_unchanged", side_effect=OSError("persistent IO error")) as mock_atomic:
             result = accept_edit(edit.edit_id)
         # Atomic write + rollback both fail → ambiguous state
         self.assertEqual(result.outcome, TransactionOutcome.RECONCILIATION_REQUIRED)
@@ -255,8 +255,8 @@ class TestFailurePaths(unittest.TestCase):
         from unittest.mock import call
         from pathlib import Path as _Path
         mock_atomic.assert_has_calls([
-            call(_Path(edit.resolved_path), b"new"),
-            call(_Path(edit.resolved_path), b"old"),
+            call(_Path(edit.resolved_path), b"new", _state._compute_digest("old")),
+            call(_Path(edit.resolved_path), b"old", None),
         ])
         # Edit should remain in queue with RECONCILIATION_REQUIRED status
         remaining = peek_pending()
@@ -271,19 +271,19 @@ class TestFailurePaths(unittest.TestCase):
         set_mode(True)
 
         # Make the write produce wrong content so verify catches it naturally
-        real_write = _state._atomic_write
+        real_write = _state._atomic_write_if_unchanged
         call_count = [0]
 
-        def broken_write(file_path, new_content):
+        def broken_write(file_path, new_content, expected=None):
             call_count[0] += 1
             if call_count[0] == 1:
                 # First write (apply) → write wrong content
-                return real_write(file_path, b"wrong_content")
+                return real_write(file_path, b"wrong_content", expected)
             else:
                 # Second write (rollback) → restore correctly
-                return real_write(file_path, new_content)
+                return real_write(file_path, new_content, expected)
 
-        with patch.object(_state, "_atomic_write", side_effect=broken_write):
+        with patch.object(_state, "_atomic_write_if_unchanged", side_effect=broken_write):
             result = accept_edit(edit.edit_id)
         self.assertEqual(result.outcome, TransactionOutcome.FAILED)
         self.assertEqual(len(result.failed_items), 1)
@@ -296,8 +296,8 @@ class TestFailurePaths(unittest.TestCase):
         edit = _make_pending_edit("partial.py", "old", "partial_new")
         _state._accept_edits_pending.append(edit)
         set_mode(True)
-        # Patch _atomic_write globally — write AND rollback both use it
-        with patch.object(_state, "_atomic_write", side_effect=OSError("Disk full")):
+        # Patch the write seam globally — write AND rollback both use it
+        with patch.object(_state, "_atomic_write_if_unchanged", side_effect=OSError("Disk full")):
             result = accept_edit(edit.edit_id)
         # Both fail → ambiguous state
         self.assertEqual(result.outcome, TransactionOutcome.RECONCILIATION_REQUIRED)
@@ -388,18 +388,18 @@ class TestConcurrency(unittest.TestCase):
         io_barrier = threading.Event()
         io_done = threading.Event()
 
-        original_atomic_write = _state._atomic_write
+        original_atomic_write = _state._atomic_write_if_unchanged
 
-        def paused_write(file_path, new_content):
+        def paused_write(file_path, new_content, expected=None):
             io_barrier.set()  # signal that I/O started
             io_done.wait(timeout=5)  # wait for main thread
-            return original_atomic_write(file_path, new_content)
+            return original_atomic_write(file_path, new_content, expected)
 
         def concurrent_append():
             io_barrier.wait(timeout=5)
             _state._accept_edits_pending.append(edit_e)
 
-        with patch.object(_state, "_atomic_write", side_effect=paused_write):
+        with patch.object(_state, "_atomic_write_if_unchanged", side_effect=paused_write):
             t = threading.Thread(target=concurrent_append)
             t.start()
             # Wait for I/O to start
@@ -444,7 +444,7 @@ class TestConcurrency(unittest.TestCase):
         io_barrier.set()  # let concurrent append happen
         t.join(timeout=5)
 
-        with patch.object(_state, "_atomic_write", side_effect=OSError("persistent IO error")) as mock_atomic:
+        with patch.object(_state, "_atomic_write_if_unchanged", side_effect=OSError("persistent IO error")) as mock_atomic:
             result_b = accept_edit(edit_b.edit_id)
         self.assertEqual(result_b.outcome, TransactionOutcome.RECONCILIATION_REQUIRED)
         self.assertGreater(len(result_b.failed_items), 0)
@@ -457,8 +457,8 @@ class TestConcurrency(unittest.TestCase):
         from unittest.mock import call
         from pathlib import Path as _Path
         mock_atomic.assert_has_calls([
-            call(_Path(edit_b.resolved_path), b"new B"),
-            call(_Path(edit_b.resolved_path), b"old"),
+            call(_Path(edit_b.resolved_path), b"new B", _state._compute_digest("old")),
+            call(_Path(edit_b.resolved_path), b"old", None),
         ])
 
         remaining = peek_pending()
@@ -501,17 +501,17 @@ class TestConcurrency(unittest.TestCase):
 
         io_barrier = threading.Event()
         io_done = threading.Event()
-        original_atomic_write = _state._atomic_write
+        original_atomic_write = _state._atomic_write_if_unchanged
 
-        def paused_write(file_path, new_content):
+        def paused_write(file_path, new_content, expected=None):
             io_barrier.set()
             io_done.wait(timeout=5)
-            return original_atomic_write(file_path, new_content)
+            return original_atomic_write(file_path, new_content, expected)
 
         results = {}
 
         def do_accept():
-            with patch.object(_state, "_atomic_write", side_effect=paused_write):
+            with patch.object(_state, "_atomic_write_if_unchanged", side_effect=paused_write):
                 results["accept"] = accept_edit(edit.edit_id)
 
         def do_reject():
@@ -821,15 +821,15 @@ class TestAtomicWrite(unittest.TestCase):
         _state._accept_edits_pending.append(edit)
         set_mode(True)
 
-        snake = _state._atomic_write
+        snake = _state._atomic_write_if_unchanged
         calls = [0]
-        def fail_then_succeed(file_path, new_content):
+        def fail_then_succeed(file_path, new_content, expected=None):
             if calls[0] == 0:
                 calls[0] += 1
                 raise OSError("First write fails")
-            return snake(file_path, new_content)  # rollback succeeds
+            return snake(file_path, new_content, expected)  # rollback succeeds
 
-        with patch.object(_state, "_atomic_write", side_effect=fail_then_succeed):
+        with patch.object(_state, "_atomic_write_if_unchanged", side_effect=fail_then_succeed):
             result = accept_edit(edit.edit_id)
         self.assertEqual(result.outcome, TransactionOutcome.FAILED)
         # Snapshot restored original content
@@ -881,7 +881,7 @@ class TestSnapshotRollback(unittest.TestCase):
         _state._accept_edits_pending.append(edit)
         set_mode(True)
 
-        with patch.object(_state, "_atomic_write", side_effect=OSError("persistent fail")):
+        with patch.object(_state, "_atomic_write_if_unchanged", side_effect=OSError("persistent fail")):
             result = accept_edit(edit.edit_id)
         self.assertEqual(result.outcome, TransactionOutcome.RECONCILIATION_REQUIRED)
         remaining = peek_pending()

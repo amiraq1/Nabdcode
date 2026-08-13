@@ -154,6 +154,7 @@ class WriteStage(str, Enum):
     REPLACE = "replace"
     PARENT_FSYNC = "parent_fsync"
     TEMP_CLEANUP = "temp_cleanup"
+    PRE_REPLACE_CHECK = "pre_replace_check"
 
 
 @dataclass(frozen=True)
@@ -1372,6 +1373,146 @@ def _atomic_write(target: _Path, data: bytes) -> AtomicWriteResult:
     )
 
 
+def _atomic_write_if_unchanged(
+    target: _Path,
+    data: bytes,
+    expected_digest: str | None,
+) -> AtomicWriteResult:
+    """Atomically write *data* to *target* ONLY if *target* still matches
+    ``expected_digest`` at the instant before ``os.replace``.
+
+    This is the content-hash CAS (compare-and-swap) seam for the
+    check-to-replace window: the digest is re-verified after the temp file
+    is written/fsynced and immediately before the atomic replace, so a
+    non-lock-sharing external writer that modified the target after the
+    caller's earlier precondition checks cannot be silently clobbered.
+
+    Semantics:
+      * ``expected_digest is None`` → no precondition; behaves like
+        ``_atomic_write`` (unconditional replace).
+      * Digest matches → replace proceeds; result identical to
+        ``_atomic_write`` success.
+      * Digest mismatch → **no replace**; returns a result with
+        ``applied=False`` and ``failure_stage=PRE_REPLACE_CHECK`` so the
+        caller can surface a CONFLICT / reconciliation instead of losing
+        the external write.
+
+    Never raises.  Returns an ``AtomicWriteResult``.
+    """
+    # Empty digest means "no precondition" (new-file / skip) — same as None.
+    if not expected_digest:
+        return _atomic_write(target, data)
+
+    tmp_path: _Path | None = None
+    fd: int | None = None
+    replaced = False
+    failure_stage: WriteStage | None = None
+    primary_error: OSError | None = None
+    cleanup_error: OSError | None = None
+    durability_confirmed = False
+    cleanup_succeeded = True
+
+    try:
+        failure_stage = WriteStage.TEMP_CREATE
+        tmp_path, fd = _create_exclusive_temp(target)
+
+        orig_mode = None
+        try:
+            orig_stat = target.stat(follow_symlinks=False)
+            orig_mode = _stat.S_IMODE(orig_stat.st_mode)
+        except OSError:
+            orig_mode = None
+
+        failure_stage = WriteStage.TEMP_WRITE
+        _write_all(fd, data)
+
+        failure_stage = WriteStage.TEMP_FSYNC
+        os.fsync(fd)
+
+        if orig_mode is not None:
+            os.chmod(str(tmp_path), orig_mode)
+
+        os.close(fd)
+        fd = None
+
+        # ── CAS check: re-verify the target right before replace ──
+        failure_stage = WriteStage.PRE_REPLACE_CHECK
+        if _file_digest(str(target)) != expected_digest:
+            # Do NOT replace — the external writer's content is preserved.
+            return AtomicWriteResult(
+                applied=False,
+                durability_confirmed=False,
+                cleanup_succeeded=True,
+                failure_stage=WriteStage.PRE_REPLACE_CHECK,
+                error_type="DigestMismatch",
+                safe_message=(
+                    "Target changed concurrently; write aborted to preserve "
+                    "the external modification."
+                ),
+            )
+
+        failure_stage = WriteStage.REPLACE
+        os.replace(str(tmp_path), str(target))
+        replaced = True
+
+        failure_stage = WriteStage.PARENT_FSYNC
+        durability_confirmed = _fsync_parent(target.parent)
+
+    except OSError as exc:
+        primary_error = exc
+    except Exception as exc:
+        primary_error = OSError(f"{type(exc).__name__}: {exc}")
+
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if not replaced and tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError as exc:
+                cleanup_error = exc
+                cleanup_succeeded = False
+            except Exception:
+                cleanup_succeeded = False
+
+    if primary_error is not None:
+        cleanup_failed = cleanup_error is not None
+        return AtomicWriteResult(
+            applied=replaced,
+            durability_confirmed=False,
+            cleanup_succeeded=not cleanup_failed,
+            failure_stage=WriteStage.TEMP_CLEANUP if cleanup_failed else failure_stage,
+            error_type=type(primary_error).__name__,
+            safe_message=(
+                "Temporary-file cleanup failed; manual reconciliation is required."
+                if cleanup_failed
+                else "Atomic write failed before completion."
+            ),
+            temp_artifact_remaining=cleanup_failed,
+        )
+
+    if not durability_confirmed:
+        return AtomicWriteResult(
+            applied=True,
+            durability_confirmed=False,
+            cleanup_succeeded=True,
+            failure_stage=WriteStage.PARENT_FSYNC,
+            safe_message=(
+                "The file was replaced, but directory durability "
+                "could not be confirmed."
+            ),
+        )
+
+    return AtomicWriteResult(
+        applied=True,
+        durability_confirmed=True,
+        cleanup_succeeded=True,
+    )
+
+
 def _fsync_parent(parent: _Path) -> bool:
     """Best-effort parent-directory fsync.  Returns True if fsync succeeded,
     False if it was skipped (unavailable on platform).  Never raises.
@@ -1444,7 +1585,14 @@ def _create_snapshot_from_disk(resolved_path: str, old_content: str) -> Snapshot
 def _rollback_snapshot(snapshot: Snapshot) -> bool:
     """Restore file from snapshot. Returns True on success."""
     try:
-        result = _atomic_write(_Path(snapshot.resolved_path), snapshot.old_content.encode("utf-8"))
+        # Route rollback through the same write seam as apply (expected_digest
+        # None → unconditional, i.e. delegates to _atomic_write). This keeps
+        # apply + rollback on one interposable write function.
+        result = _atomic_write_if_unchanged(
+            _Path(snapshot.resolved_path),
+            snapshot.old_content.encode("utf-8"),
+            None,
+        )
         if not result.applied:
             return False
         verify = _file_digest(snapshot.resolved_path)
@@ -1665,7 +1813,6 @@ def _record_prepared_wal(edit_data: PendingEdit, operation_id: str, snapshot: An
             _get_remaining_ids_unlocked(), 0,
         )
 
-
 def _execute_atomic_apply_and_wal(
     edit_data: PendingEdit,
     operation_id: str,
@@ -1682,7 +1829,14 @@ def _execute_atomic_apply_and_wal(
         return precond_err2, None, False, False, False
 
     try:
-        write_result = _atomic_write(_Path(resolved_path), new_content.encode("utf-8"))
+        # CAS write: re-verify the on-disk digest immediately before
+        # os.replace so a non-lock-sharing external writer that changed
+        # the target after check #2 (above) is never silently clobbered.
+        write_result = _atomic_write_if_unchanged(
+            _Path(resolved_path),
+            new_content.encode("utf-8"),
+            edit_data.expected_original_digest,
+        )
     except Exception as exc:
         _logger.error("_atomic_write raised unexpectedly", exc_info=True)
         write_result = AtomicWriteResult(
@@ -1705,6 +1859,50 @@ def _execute_atomic_apply_and_wal(
             safe_message="Atomic write returned no result.",
             temp_artifact_remaining=False,
         )
+
+    if (
+        not write_result.applied
+        and write_result.failure_stage == WriteStage.PRE_REPLACE_CHECK
+    ):
+        # CAS abort: the target changed after our precondition checks but
+        # before os.replace. We did NOT write anything, so the external
+        # modification is preserved. This is a clean CONFLICT — do NOT
+        # rollback (our snapshot is stale) and do NOT write a
+        # reconciliation record (nothing was applied).
+        _logger.error(
+            "Atomic write aborted: target changed concurrently",
+            extra={
+                "operation_id": operation_id,
+                "edit_id": edit_id,
+                "failure_stage": str(write_result.failure_stage),
+            },
+        )
+        with _state_lock:
+            current = _find_edit(edit_id)
+            if (
+                current is not None
+                and current.claim_token == operation_id
+                and current.status == "PROCESSING_ACCEPT"
+            ):
+                current.status = "CONFLICT"
+                current.version += 1
+        return TransactionResult(
+            outcome=TransactionOutcome.CONFLICT,
+            operation_id=operation_id,
+            succeeded_ids=[],
+            failed_items=[
+                TransactionFailure(
+                    edit_id=edit_id,
+                    stage=str(write_result.failure_stage),
+                    error_type=write_result.error_type or "DigestMismatch",
+                    safe_message=write_result.safe_message
+                    or "Target changed concurrently; edit not applied.",
+                    retryable=True,
+                )
+            ],
+            remaining_ids=_get_remaining_ids_unlocked(),
+            processed_count=0,
+        ), None, False, False, False
 
     failure = None
     reconciliation_required = False
