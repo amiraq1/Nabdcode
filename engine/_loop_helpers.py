@@ -186,9 +186,9 @@ def _is_thought_only(response_text: str) -> bool:
     Used by the blind-loop guard to abort on the first occurrence, before the
     model can spin an infinite no-progress loop.
     """
-    normalized = _normalize_response(response_text)
-    if len(normalized) < 10:
-        return True
+    # NOTE: no length heuristic here — a short legitimate answer (e.g. "2")
+    # must NOT be classified as thought-only. Only the explicit thought
+    # patterns below (and the repetition check in the caller) are used.
     return any(p.search(response_text.strip()) for p in FORBIDDEN_THOUGHT_PATTERNS)
 
 
