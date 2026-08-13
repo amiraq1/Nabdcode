@@ -224,19 +224,15 @@ class CodeIntelligenceTool(BaseTool):
         otherwise falls back to a regex-based scanner that detects
         ``class``, ``struct``, and function definitions.
         """
-        try:
-            from tree_sitter import Parser
-            lang_obj = _get_tree_sitter_language("cpp")
-            if lang_obj is not None:
+        lang_obj = _get_tree_sitter_language("cpp")
+        if lang_obj is not None:
+            try:
+                from tree_sitter import Parser
                 parser = Parser(lang_obj)
                 tree = parser.parse(bytes(content, "utf-8"))
                 return self._tree_sitter_cpp_symbols(tree, content)
-        except (ImportError, ModuleNotFoundError):
-            # Minimal platforms, including Termux, use the regex fallback.
-            pass
-        except Exception:
-            # A mismatched optional grammar must never disable exploration.
-            pass
+            except Exception:
+                pass
         # Regex fallback
         return self._regex_cpp_symbols(content)
 
@@ -247,19 +243,15 @@ class CodeIntelligenceTool(BaseTool):
         otherwise falls back to a regex-based scanner that detects
         ``struct``, ``enum``, ``fn``, ``impl``, and ``trait`` definitions.
         """
-        try:
-            from tree_sitter import Parser
-            lang_obj = _get_tree_sitter_language("rust")
-            if lang_obj is not None:
+        lang_obj = _get_tree_sitter_language("rust")
+        if lang_obj is not None:
+            try:
+                from tree_sitter import Parser
                 parser = Parser(lang_obj)
                 tree = parser.parse(bytes(content, "utf-8"))
                 return self._tree_sitter_rust_symbols(tree, content)
-        except (ImportError, ModuleNotFoundError):
-            # Minimal platforms, including Termux, use the regex fallback.
-            pass
-        except Exception:
-            # A mismatched optional grammar must never disable exploration.
-            pass
+            except Exception:
+                pass
         # Regex fallback
         return self._regex_rust_symbols(content)
 
