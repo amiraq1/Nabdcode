@@ -413,6 +413,7 @@ def test_nbd01_wheel_clean_install_imports_runtime_packages(tmp_path):
             "building wheel for cryptography",
             "building wheel for pydantic-core",
             "building wheel for numpy",
+            "╰─> numpy",
             "[errno 2] no such file or directory: 'gcc'",
             "error: command 'gcc' failed",
             "network is unreachable",
