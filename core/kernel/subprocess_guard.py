@@ -51,6 +51,7 @@ import enum
 import os
 import re
 import shlex
+import signal
 import subprocess
 import threading
 from pathlib import Path
@@ -194,6 +195,11 @@ class SubprocessGuard:
 
     def __init__(self, consent_callback: Optional[ConsentCallback] = None) -> None:
         self._consent = consent_callback
+        # NBD-06: managed registry of background processes (PID -> Popen handle).
+        # Holding the handle keeps the process referenced (no ResourceWarning
+        # from an unreaped Popen) and gives the operator stop/reap control.
+        self._bg: dict[int, subprocess.Popen] = {}
+        self._bg_lock = threading.Lock()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -398,6 +404,8 @@ class SubprocessGuard:
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
             )
+            with self._bg_lock:
+                self._bg[proc.pid] = proc
             bus.emit("subprocess_spawned", {
                 "policy": Policy.AGENT_SHELL.value,
                 "command": bg_cmd,
@@ -406,6 +414,49 @@ class SubprocessGuard:
             return 0, f"Background server process started successfully (PID: {proc.pid}).", ""
         except Exception as exc:  # noqa: BLE001
             return -1, "", f"Failed to start background process: {exc}"
+
+    def stop_background(self, pid: int, timeout: float = 5.0) -> ExecResult:
+        """Terminate and reap a managed background process (NBD-06).
+
+        Kills the whole process group (``start_new_session=True`` isolates the
+        child in its own session), waits up to *timeout* seconds, then SIGKILLs
+        if needed so no orphan/descendant survives. Returns ``(0, msg, "")`` on
+        success or ``(-1, "", reason)``.
+        """
+        with self._bg_lock:
+            proc = self._bg.pop(pid, None)
+        if proc is None:
+            return -1, "", f"No managed background process with PID {pid}."
+        try:
+            if proc.poll() is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                try:
+                    proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    proc.wait()
+            return 0, f"Background process {pid} stopped and reaped.", ""
+        except Exception as exc:  # noqa: BLE001 - containment boundary
+            return -1, "", f"Failed to stop background process {pid}: {exc}"
+
+    def background_pids(self) -> List[int]:
+        """Return PIDs of currently managed background processes.
+
+        Exited processes are reaped (dropped) on access so the registry
+        never reports stale PIDs (NBD-06).
+        """
+        with self._bg_lock:
+            for pid in list(self._bg.keys()):
+                proc = self._bg[pid]
+                if proc.poll() is not None:
+                    del self._bg[pid]
+            return sorted(self._bg.keys())
 
     def run_git(
         self,

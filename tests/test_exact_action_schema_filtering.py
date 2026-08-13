@@ -49,9 +49,12 @@ def test_normal_mode_fc_schema_filtering():
         loop = ExecutionLoop(state, llm_provider=mock_provider, no_stream=True)
         loop._invoke_llm_and_normalize()
     
-    assert len(captured_tools) == 25, f"Expected 25 tools, got {len(captured_tools)}"
+    # NBD-02 (wave A): python_repl is NOT registered by default, so the
+    # normal-mode FC schema no longer exposes it.
+    assert len(captured_tools) == 24, f"Expected 24 tools, got {len(captured_tools)}"
     assert "execute_shell" not in captured_tools
     assert "final_answer" in captured_tools
+    assert "python_repl" not in captured_tools
 
 def test_fallback_mode_fc_schema_filtering():
     """Fallback mode exposes final_answer, search_memory, todo_write,

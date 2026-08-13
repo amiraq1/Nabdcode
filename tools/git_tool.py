@@ -232,6 +232,10 @@ class GitTool(BaseTool):
     ``status="consent_required"``. Destructive commands (push, reset, clean,
     revert) are forbidden outright.
     """
+    # PR10-01: explicit name so auto-discovery registers it as "git" instead
+    # of the BaseTool placeholder ("unnamed_tool"), which the registry now
+    # rejects — otherwise the constrained git capability vanishes entirely.
+    name: str = "git"
     args_schema = GitToolArgs
 
     ALLOWED = {"log", "diff", "status", "show", "branch", "tag"}

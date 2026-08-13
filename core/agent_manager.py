@@ -259,7 +259,7 @@ def initialize_secure_agent(workspace_path: str = ".") -> CodeAgent:
         description=(
             "A surgical operator that interacts with the file system, searches the web, runs bash commands, runs Python scripts, manages taste rules, queries graph structure, and inspects code. "
             f"Can read files from these roots: {allowed_roots}. "
-            "Use secure_file_system to read/write/edit files, secure_shell to run validated commands, secure_python_repl to execute Python code/math, secure_code_intelligence for AST symbol discovery, secure_taste_manager to remember coding rules/preferences, and secure_graphify_tool to query codebase relationships and knowledge graphs. "
+            "Use secure_file_system to read/write/edit files, secure_shell to run validated commands, secure_python_repl (DISABLED by default: returns capability_unavailable unless NABD_ENABLE_PYTHON_REPL=1; not an OS-level sandbox) to execute Python code/math, secure_code_intelligence for AST symbol discovery, secure_taste_manager to remember coding rules/preferences, and secure_graphify_tool to query codebase relationships and knowledge graphs. "
             "IMPORTANT: secure_shell runs WITHOUT a shell, so redirection (>, >>) and chaining (&&, |) do NOT work. "
             "To CREATE OR WRITE a file, use secure_file_system with action='write' (or 'append'/'replace') and pass 'content' — never 'echo ... > file'. "
             "secure_shell is only for commands that print to stdout (e.g. 'pytest', 'grep', 'ls'). For Python snippets or calculations, use secure_python_repl — never secure_shell('python -c ...')."

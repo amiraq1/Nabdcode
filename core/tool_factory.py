@@ -9,11 +9,37 @@ live, read-only context registry from the system memory/state and binds it to
 each skill before invocation, so skills can self-adapt without importing core.
 """
 
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import inspect
 
 from smolagents import Tool
+
+
+@dataclass
+class ToolDependencyContext:
+    """PR10-05: explicit dependency bag for auto-discovery injection.
+
+    Replaces the ad-hoc ``SimpleNamespace`` so the injection contract is
+    pinned: every field ``_build_tool_with_deps`` may read is declared here,
+    and callers (``AppContext.build``, tests) construct one instead of a bare
+    namespace. Fields mirror the AppContext surface that tool constructors
+    consume (workspace, workspace_root, workspace_dir, managers, security
+    engine).
+    """
+
+    config: Any = None
+    workspace: Any = None
+    workspace_root: Any = None
+    workspace_dir: Any = None
+    memory_manager: Any = None
+    todo_manager: Any = None
+    _security_engine: Any = None
+    memory: Any = None
+
+    # Extra fields a future tool might need; never silently required.
+    extra: Dict[str, Any] = field(default_factory=dict)
 
 from skills import load_skills
 from skills.base_skill import BaseSkill
@@ -137,6 +163,13 @@ def discover_tools(app_context: "Any") -> dict[str, Any]:
 
     import tools as _tools_pkg
     from tools.base import BaseTool
+    from tools.secure_tools import SecureTool
+
+    # CFD-registry-1: base/intermediate classes that must never register as
+    # callable tools are excluded BY CLASS IDENTITY (not by name), so a real
+    # tool subclass that merely forgot to set ``name`` is surfaced loudly
+    # instead of being silently dropped.
+    _BASE_CLASSES = {BaseTool, SecureTool}
 
     discovered: dict[str, Any] = {}
     for _, module_name, _ in pkgutil.iter_modules(_tools_pkg.__path__):
@@ -152,6 +185,16 @@ def discover_tools(app_context: "Any") -> dict[str, Any]:
             if not (issubclass(obj, BaseTool) and obj is not BaseTool):
                 continue
             if obj.__name__ in _MANUAL_TOOL_CLASSES:
+                continue
+            if obj in _BASE_CLASSES:
+                continue
+            # CFD-registry-1: a non-base class carrying the placeholder name is
+            # a real tool that forgot to override ``name`` — visible skip, not
+            # silent. ``register()`` would also reject it (ValueError).
+            tool_name = getattr(obj, "name", None)
+            if tool_name in (None, "", "unnamed_tool"):
+                print(f"[Auto-Discovery] skip {obj.__name__}: missing 'name' "
+                      f"(found placeholder {tool_name!r})")
                 continue
             tool = _build_tool_with_deps(obj, app_context)
             if tool is not None:
@@ -171,6 +214,8 @@ def _build_tool_with_deps(tool_cls: "Any", app_context: "Any") -> "Any | None":
     ctx_fields = {
         "workspace": getattr(app_context, "config", None) and getattr(app_context.config, "workspace_root", "."),
         "workspace_root": getattr(app_context, "config", None) and getattr(app_context.config, "workspace_root", "."),
+        # CFD-appctx-1: BrowserTool requires workspace_dir (required kwarg).
+        "workspace_dir": getattr(app_context, "config", None) and getattr(app_context.config, "workspace_root", "."),
         "memory_manager": getattr(app_context, "memory_manager", None),
         "todo_manager": getattr(app_context, "todo_manager", None),
         "security_engine": getattr(app_context, "_security_engine", None),
@@ -183,7 +228,10 @@ def _build_tool_with_deps(tool_cls: "Any", app_context: "Any") -> "Any | None":
         if pname in ctx_fields and ctx_fields[pname] is not None:
             kwargs[pname] = ctx_fields[pname]
         elif param.default is inspect.Parameter.empty:
-            # Required kwarg with no injectable source → cannot build safely.
+            # CFD-appctx-1: a required kwarg with no injectable source is a
+            # VISIBLE skip (reasoned + actionable), never a silent drop.
+            print(f"[Auto-Discovery] skip {tool_cls.__name__}: required kwarg "
+                  f"'{pname}' has no injectable source")
             return None
     try:
         return tool_cls(**kwargs)

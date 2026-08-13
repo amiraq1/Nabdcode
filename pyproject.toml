@@ -12,6 +12,11 @@ dependencies = [
     "prompt_toolkit>=3.0.0",
     "rich>=13.0.0",
     "pydantic>=2.0",
+    "textual>=0.40.0",
+    "numpy>=1.24.0",
+    # CFD-pyproject-1: core/config.py uses AES-GCM (cryptography) to encrypt
+    # BYOK API keys at rest — a clean install without it fails on first save.
+    "cryptography>=42.0",
 ]
 
 [project.scripts]
@@ -19,7 +24,19 @@ nabdcode = "main:main"
 
 [tool.setuptools]
 py-modules = ["main", "llm_router", "nabd_logo"]
-packages = ["core", "engine", "tools", "ui"]
+# NBD-01: ship runtime data (skills markdown docs) in the wheel.
+include-package-data = true
+
+# NBD-01 (release blocker fix): the boot path imports nested + sibling
+# packages (core.kernel, core.security, core.dag, ui.design, skills,
+# smolagents, adapters...). A manual top-level list silently omitted them,
+# so a clean install crashed with ModuleNotFoundError. Use controlled
+# discovery instead of maintaining a hand-written list.
+[tool.setuptools.packages.find]
+include = ["adapters*", "core*", "engine*", "skills*", "smolagents*", "tools*", "ui*"]
+
+[tool.setuptools.package-data]
+skills = ["*.md"]
 
 [tool.black]
 line-length = 88

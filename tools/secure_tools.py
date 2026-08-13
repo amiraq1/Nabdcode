@@ -832,9 +832,12 @@ class SecurePythonREPLTool(SecureTool):
 
     name = "secure_python_repl"
     description = (
-        "A Python execution shell inside a secure sandbox directory (.nabd/sandbox). "
-        "Includes AST safety verification and a 15-second circuit breaker for infinite loops. "
-        "Required arg: 'code' (str). Use print() to output results."
+        "Python execution, DISABLED by default (PR10-03): returns "
+        "capability_unavailable unless NABD_ENABLE_PYTHON_REPL=1 is set. "
+        "Even when enabled this is NOT an OS-level sandbox — AST checks and a "
+        "15s circuit breaker limit common accidents but do not isolate "
+        "filesystem/network/processes. Required arg: 'code' (str). "
+        "Use print() to output results."
     )
     inputs = {
         "code": {

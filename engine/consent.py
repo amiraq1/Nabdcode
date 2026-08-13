@@ -105,7 +105,10 @@ class ConsentManager:
 
     @staticmethod
     def _default_prompt(display_text: str) -> str:
-        if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("NABD_AUTO_APPROVE") == "1":
+        # NBD-07: product logic must NOT depend on a pytest-specific env flag.
+        # NABD_AUTO_APPROVE is the single explicit operator opt-in for
+        # non-interactive approval; tests inject a prompt function instead.
+        if os.environ.get("NABD_AUTO_APPROVE") == "1":
             return "y"
         try:
             return input(display_text)
@@ -186,12 +189,16 @@ class ConsentManager:
             evidence_log=evidence_log, step=step, reason=reason,
         )
 
+        # NBD-05: a user denial is a DISTINCT outcome — never a success.
+        # A denied operation must not surface as "executed" in feedback,
+        # telemetry, or evidence.
         return ToolResult(
-            success=True,
+            success=False,
             stdout="Execution blocked by user.",
             stderr="",
-            returncode=0,
-            status="success",
+            returncode=-1,
+            status="consent_denied",
+            metadata={"blocked_by": "user"},
         )
 
 

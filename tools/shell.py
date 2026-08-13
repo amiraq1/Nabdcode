@@ -139,7 +139,11 @@ class ShellTool(BaseTool):
             )
 
         # ── Decision Ladder Gate ──
-        _ladder = DecisionLadder(workspace_root=os.getcwd())
+        # CFD-fs-2: evaluate against the PINNED workspace root, not the process
+        # cwd (which may drift when the loop runs from another directory).
+        from core.kernel.security import get_workspace_root
+
+        _ladder = DecisionLadder(workspace_root=str(get_workspace_root()))
         _decision = _ladder.evaluate(command)
         if _decision.is_denied:
             return ToolResult(

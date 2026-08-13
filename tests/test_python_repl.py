@@ -1,21 +1,42 @@
 # tests/test_python_repl.py
-"""Unit tests for AST-hardened, zero-dependency PythonREPLTool."""
+"""Unit tests for PythonREPLTool (NBD-02: disabled-by-default containment).
 
+The tool is gated behind NABD_ENABLE_PYTHON_REPL=1. These behavioural tests
+opt in explicitly so they exercise the AST filter + timeout paths that still
+exist when an operator enables the capability.
+"""
+
+import os
 from pathlib import Path
 import tempfile
 import unittest
 
-from tools.python_repl import PythonREPLTool
+from tools.python_repl import PythonREPLTool, _repl_enabled
 
 
 class TestPythonREPLTool(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.workspace = Path(self.tmp_dir.name)
+        # Opt in explicitly: behavioural tests exercise the enabled paths.
+        self._prev = os.environ.get("NABD_ENABLE_PYTHON_REPL")
+        os.environ["NABD_ENABLE_PYTHON_REPL"] = "1"
         self.tool = PythonREPLTool(workspace=self.workspace)
 
     def tearDown(self) -> None:
+        if self._prev is None:
+            os.environ.pop("NABD_ENABLE_PYTHON_REPL", None)
+        else:
+            os.environ["NABD_ENABLE_PYTHON_REPL"] = self._prev
         self.tmp_dir.cleanup()
+
+    def test_disabled_by_default_returns_capability_unavailable(self) -> None:
+        os.environ.pop("NABD_ENABLE_PYTHON_REPL", None)
+        self.assertFalse(_repl_enabled())
+        res = self.tool.execute(code="print(1)")
+        self.assertFalse(res.success)
+        self.assertEqual(res.status, "capability_unavailable")
+        self.assertIn("NABD_ENABLE_PYTHON_REPL=1", res.stderr)
 
     def test_normal_execution_with_print(self) -> None:
         code = 'x = 10\ny = 25\nprint(f"Result: {x + y}")'

@@ -595,10 +595,11 @@ class NativeDeepAgent:
 
                 # ── Consent Loop (Phase 2 Public Release Protocol) ────────────
                 # Intercept BEFORE dispatch. The consent policy is centralized in
-                # ConsentManager. A declined call returns a normal successful
-                # ToolResult (success=True, stdout="Execution blocked by user.")
-                # — a valid outcome, not an engine error. No exception, no abort,
-                # no loop_error; the LLM adapts its plan from the observation.
+                # ConsentManager. A declined call returns a ToolResult with
+                # status="consent_denied" (success=False, returncode=-1,
+                # metadata blocked_by="user") — a valid outcome, not an engine
+                # error. No exception, no abort, no loop_error; the LLM adapts
+                # its plan from the observation (NBD-05 semantics).
                 result = None
                 if ConsentManager().requires_confirmation(tool_call.tool, tool_call.args):
                     blocked = ConsentManager().confirm(tool_call.tool, tool_call.args)
