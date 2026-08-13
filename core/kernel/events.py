@@ -89,5 +89,37 @@ class EventBus:
             pass
 
 
+def emit_with_session(
+    bus: "EventBus",
+    event_name: str,
+    payload: Any = None,
+    session_id: str | None = None,
+) -> None:
+    """Emit an event, stamping ``session_id`` into the payload.
+
+    Adds ``session_id`` to the payload dict only when it is not already
+    present (``setdefault`` semantics — an emitter that already includes
+    its session id is preserved untouched). Non-dict payloads are passed
+    through unchanged. This is the single helper for session-tagged
+    events; emitters that hold a ``RuntimeState`` (``self.state`` /
+    ``self.runtime_state``) pass ``state.session_id`` here. Emitters with
+    no state in scope pass nothing — the process-level ``run_id`` is used
+    as the fallback session/run id.
+    """
+    if session_id is None:
+        session_id = run_id
+    if session_id is not None and isinstance(payload, dict):
+        payload.setdefault("session_id", session_id)
+    bus.emit(event_name, payload)
+
+
+# Process-level run id — used as the fallback session/run id for events
+# emitted from modules that have no RuntimeState in scope (e.g. the
+# subprocess guard, circuit breaker). Kept stable for the process lifetime.
+import uuid as _uuid
+
+run_id: str = _uuid.uuid4().hex
+
+
 # Singleton instance used by the entire system
 bus = EventBus()

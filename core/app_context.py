@@ -24,8 +24,8 @@ from core.parser import pin_workspace_root
 from core.todo import TodoManager
 from core.snapshot import SnapshotEngine
 from engine.renderer import Renderer
-from engine.tool_registry import registry
-from core.kernel.events import bus
+from engine.tool_registry import registry, ToolRegistry
+from core.kernel.events import bus, EventBus
 from tools import ShellTool, FileSystemTool, WebSearchTool, SearchMemoryTool, RagSearchTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool, GraphifyTool, GraphIntelTool, GitTool
 from tools.todo import TodoWriteTool
 from tools.termux_monitor import TermuxMonitorTool
@@ -46,8 +46,15 @@ class AppContext:
     snapshot_engine: SnapshotEngine
     artifact_manager: ArtifactManager
     storage: Optional[UnifiedStorage] = None
+    # Aliases to the global singletons (consumed by main.py's boot check).
     tool_registry: Any = None
     event_bus: Any = None
+    # AppContext-scoped (instance-level) registry/bus, alongside the global
+    # singletons. Populated in build() identically to the global; existing
+    # call sites keep using the global. Future multi-session work adopts
+    # these. The global is NOT removed in this task.
+    registry: Optional[ToolRegistry] = None
+    bus: Optional[EventBus] = None
 
     @classmethod
     def build(cls, auto_discover: bool = True) -> AppContext:
@@ -111,6 +118,11 @@ class AppContext:
 
         # Register all tools
         _security_engine = _KernelSecurityEngine()
+        # AppContext-scoped registry/bus — populated identically to the global
+        # so a future multi-session consumer sees the same tool set. The
+        # global remains the one used by today's call sites (not removed).
+        scoped_registry = ToolRegistry()
+        scoped_bus = EventBus()
         # Phase 1.1: GraphifyTool needs the graphify CLI + a built graph
         # (graphify-out/graph.json). When absent, registering it lets the model
         # waste exploration steps on "command not found", starving the >=3-read
@@ -148,6 +160,11 @@ class AppContext:
                 registry.register(tool)
             except ValueError:
                 pass
+            # Mirror into the scoped registry (best-effort, same failure mode).
+            try:
+                scoped_registry.register(tool)
+            except ValueError:
+                pass
 
         # PRIORITY 5 (optional, safe): auto-discover any NEW BaseTool subclasses
         # in tools/ not covered by the manual block above. Manual registration
@@ -177,6 +194,12 @@ class AppContext:
                         registry.register(_tool)
                     except ValueError as _reg_exc:
                         print(f"⚠️ [Auto-Discovery] register skipped {_name}: {_reg_exc}")
+                # Mirror into the scoped registry (best-effort).
+                if _name not in scoped_registry:
+                    try:
+                        scoped_registry.register(_tool)
+                    except ValueError:
+                        pass
         except Exception as _disc_exc:  # fail-open: never break boot on discovery
             print(f"⚠️ [Auto-Discovery] skipped: {_disc_exc}")
 
@@ -194,6 +217,8 @@ class AppContext:
             storage=storage,
             tool_registry=registry,
             event_bus=bus,
+            registry=scoped_registry,
+            bus=scoped_bus,
         )
 
         atexit.register(renderer.shutdown)
@@ -210,6 +235,8 @@ class AppContext:
 
             if "task" not in registry:
                 registry.register("task", TaskTool(app_context=ctx))
+            if "task" not in scoped_registry:
+                scoped_registry.register("task", TaskTool(app_context=ctx))
         except Exception as _task_exc:  # fail-open
             print(f"⚠️ [task tool] registration skipped: {_task_exc}")
 

@@ -18,7 +18,7 @@ SNAPSHOT_PATH = Path(__file__).resolve().parent / "snapshots" / "event_snapshot.
 
 
 def _discover_all_events() -> set[str]:
-    """Scan engine/, core/, tools/ for bus.emit() calls."""
+    """Scan engine/, core/, tools/ for bus.emit() / emit_with_session() calls."""
     events = set()
     root = Path(__file__).resolve().parent.parent  # project root
     for base in ["engine", "core", "tools"]:
@@ -32,7 +32,8 @@ def _discover_all_events() -> set[str]:
                 text = pyfile.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
-            for m in re.finditer(r'bus\.emit\(["\']([^"\']+)["\']', text):
+            # bus.emit("name", ...) or emit_with_session(bus, "name", ...)
+            for m in re.finditer(r'(?:bus\.emit|emit_with_session\(\s*bus\s*,\s*)\(?["\']([^"\']+)["\']', text):
                 events.add(m.group(1))
     return events
 

@@ -11,7 +11,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from core.kernel.events import bus
+from core.kernel.events import bus, emit_with_session
 from core.utils import safe_strip
 from core.evidence import VerifierError
 
@@ -218,7 +218,7 @@ class _ConvergenceMixin:
 
         ctx = self._ctx
         assert ctx is not None
-        bus.emit("ui_no_tool_call", {"step": self.state.step_count})
+        bus.emit("ui_no_tool_call", {"step": self.state.step_count, "session_id": getattr(self.state, "session_id", "unknown")})
 
         # ── step6: independent LLM checker (semantic gate, layered ON TOP) ──
         # Runs ONLY at the termination decision, over an ISOLATED context
@@ -240,6 +240,7 @@ class _ConvergenceMixin:
                 "max_attempts": MAX_VERIFIER_CALLS,
                 "critique": critique,
                 "goal_blocked": True,
+                "session_id": getattr(self.state, "session_id", "unknown"),
             })
             self.state.increment_step()
             return _LoopSignal.CONTINUE
@@ -280,6 +281,7 @@ class _ConvergenceMixin:
                                 "max_attempts": MAX_GOAL_RETRIES,
                                 "critique": critique,
                                 "goal_blocked": True,
+                                "session_id": getattr(self.state, "session_id", "unknown"),
                             },
                         )
                         self.state.increment_step()
@@ -293,7 +295,8 @@ class _ConvergenceMixin:
                         ctx.user_prompt,
                         "[GOAL NOT MET] " + " ".join(goal_result.findings if not goal_result.ok else ["Criteria not verified against live evidence."]),
                     )
-                    bus.emit("loop_completed", {"reason": "goal_not_met", "output": safe_msg})
+                    bus.emit("loop_completed", {"reason": "goal_not_met", "output": safe_msg,
+                                                "session_id": getattr(self.state, "session_id", "unknown")})
                     return _LoopSignal.TERMINATE
 
             bus.emit("goal_verify", {
@@ -443,6 +446,7 @@ class _ConvergenceMixin:
                 "blocking_todos": blocking_ids,
                 "reason": decision.blocked_reason,
                 "step": self.state.step_count,
+                "session_id": getattr(self.state, "session_id", "unknown"),
             })
             return False
 

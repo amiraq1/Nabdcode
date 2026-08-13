@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Final, Optional
 
-from core.kernel.events import bus
+from core.kernel.events import bus, emit_with_session
 from core.parser import ToolCall
 from core.utils import truncate, safe_strip
 from core.storage import load_memory, write_lesson
@@ -450,15 +450,17 @@ class _ContextMixin:
             tool="search_knowledge_base",
             args={"action": "search", "query": query, "k": 3},
         )
-        bus.emit("tool_started", {"tool": "search_knowledge_base", "args": tool_call.args, "step": self.state.step_count})
+        emit_with_session(bus, "tool_started",
+                          {"tool": "search_knowledge_base", "args": tool_call.args, "step": self.state.step_count},
+                          getattr(self.state, "session_id", "unknown"))
         result = self.dispatcher.dispatch("search_knowledge_base", tool_call.args)
-        bus.emit("tool_completed", {
+        emit_with_session(bus, "tool_completed", {
             "tool": "search_knowledge_base",
             "result": result,
             "success": result.success,
             "returncode": result.returncode,
             "step": self.state.step_count,
-        })
+        }, getattr(self.state, "session_id", "unknown"))
         output = truncate(getattr(result, "output", "") or "", self.max_output_len)
         feedback = self._build_tool_feedback(result, "search_knowledge_base", tool_call.args, output)
         self.evidence_log.record(

@@ -85,8 +85,8 @@ class CircuitBreaker:
         with self._lock:
             self.is_open = True
             try:
-                from core.kernel.events import bus
-                bus.emit("circuit_opened", {
+                from core.kernel.events import bus, emit_with_session
+                emit_with_session(bus, "circuit_opened", {
                     "reason": reason,
                     "depth": self.current_depth,
                     "max_depth": self.max_depth,

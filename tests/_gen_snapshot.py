@@ -20,7 +20,7 @@ for dirname in ('engine', 'core', 'tools'):
                 text = open(path).read()
             except Exception:
                 continue
-            for m in re.finditer(r'bus\.emit\(["\']([^"\']+)["\']', text):
+            for m in re.finditer(r'(?:bus\.emit|emit_with_session\(\s*bus\s*,\s*)\(?["\']([^"\']+)["\']', text):
                 events.add(m.group(1))
 
 with open(os.path.join(out, 'event_snapshot.json'), 'w') as f:
