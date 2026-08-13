@@ -380,7 +380,7 @@ def test_nbd01_wheel_clean_install_imports_runtime_packages(tmp_path):
             name = re.split(r"[<>=!~;\s]+", spec, maxsplit=1)[0].strip()
             # Normalise: PEP 503 canonicalises '_' and '-' identically.
             declared.add(name.lower().replace("_", "-"))
-    for dep in ("cryptography", "prompt-toolkit", "pydantic", "rich", "textual"):
+    for dep in ("cryptography", "prompt-toolkit", "pydantic", "rich", "textual", "numpy"):
         assert dep in declared, f"wheel METADATA missing Requires-Dist: {dep}"
 
     # 3) TRULY clean venv: NO --system-site-packages (host packages must not
@@ -412,6 +412,7 @@ def test_nbd01_wheel_clean_install_imports_runtime_packages(tmp_path):
             "cargo",
             "building wheel for cryptography",
             "building wheel for pydantic-core",
+            "building wheel for numpy",
             "[errno 2] no such file or directory: 'gcc'",
             "error: command 'gcc' failed",
             "network is unreachable",
