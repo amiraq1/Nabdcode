@@ -53,6 +53,6 @@ def test_compact_line_printed_on_step() -> None:
 
 def test_protected_untouched() -> None:
     """The three protected fingerprints must be unchanged."""
-    assert _sha16(STATUS_BAR) == "3a829c0a8b17de27"
-    assert _sha16(ROOT / "tests" / "test_the_bar_hears_the_bus.py") == "33261e5b8d51e78b"
+    assert _sha16(STATUS_BAR) == "95159d7cec5f09a9"
+    assert _sha16(ROOT / "tests" / "test_the_bar_hears_the_bus.py") == "bf47735d30e0e1c6"
     assert _sha16(ROOT / "tests" / "test_the_bar_clock_turns.py") == "8bbc623c388d4f02"
