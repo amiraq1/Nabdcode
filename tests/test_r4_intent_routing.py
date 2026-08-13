@@ -12,10 +12,11 @@ import os
 import sys
 import unittest
 import tempfile
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 # --- Ensure project root is on the path ---
-PROJECT_ROOT = "/data/data/com.termux/files/home/smart-agent"
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
