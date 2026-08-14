@@ -11,7 +11,7 @@ import atexit
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from core.config import AgentConfig
 from core.evidence import EvidenceLog
