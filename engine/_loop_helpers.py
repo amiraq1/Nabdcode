@@ -287,7 +287,7 @@ def _resolve_default_verifier() -> Callable[[str, str, str, Any], str]:
     return run_verifier_check
 
 
-def _build_dispatcher(state: RuntimeState) -> "DispatcherProtocol":
+def _build_dispatcher(state: RuntimeState, tool_registry: Any = None, event_bus: Any = None) -> "DispatcherProtocol":
     """Lazily construct the concrete Dispatcher.
 
     Kept out of the module-level import chain so importing ``engine.loop`` never
@@ -296,7 +296,7 @@ def _build_dispatcher(state: RuntimeState) -> "DispatcherProtocol":
     loop<->dispatcher<->registry<->parser import cycle at its root.
     """
     from engine.dispatcher import Dispatcher
-    return Dispatcher(state)
+    return Dispatcher(state, tool_registry=tool_registry, event_bus=event_bus)
 
 
 def _derive_read_hint(user_prompt: str) -> str:

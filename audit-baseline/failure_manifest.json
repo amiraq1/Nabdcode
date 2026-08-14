@@ -1,0 +1,27 @@
+{
+  "commit": "e2eeff4f230206c643ff768c5fc315edfd37e75c",
+  "policy": "Fail-closed — No silent skips permitted on core invariants",
+  "documented_platform_constraints": [
+    {
+      "constraint_id": "PLAT-01-FCNTL",
+      "severity": "PORTABILITY_LIMITATION",
+      "component": "core/accept_edits_state.py",
+      "description": "Direct dependency on POSIX 'fcntl.flock' for WAL journal cross-process concurrency. Dynamic import / collection on Windows raises ModuleNotFoundError.",
+      "remediation_status": "Planned for PR-G (Cross-platform PlatformFileLock abstraction)"
+    },
+    {
+      "constraint_id": "SEC-01-TOCTOU",
+      "severity": "DOCUMENTED_LOW",
+      "component": "core/project_root_guard.py",
+      "description": "TOCTOU race window during file access checks; documented in docs/known_limitations.md.",
+      "remediation_status": "Documented limitation; openat(O_NOFOLLOW) roadmap item"
+    },
+    {
+      "constraint_id": "RT-01-REGEX-CLAIM",
+      "severity": "DOCUMENTED_LOW_MEDIUM",
+      "component": "core/verifier.py",
+      "description": "Numeric test claim regex can be bypassed by non-matching NLP phrasing without L2 SemanticVerifier.",
+      "remediation_status": "Documented in docs/threat_model.md §5"
+    }
+  ]
+}

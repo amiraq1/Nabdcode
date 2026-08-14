@@ -13,6 +13,33 @@ import os
 from typing import Any, Optional
 
 
+# Arabic scan intent keywords (EXE-04: defined in core, zero UI dependencies)
+_ARABIC_SCAN_KEYWORDS: list[str] = [
+    "فحر",      # colloquial Egyptian "scan"
+    "افحص",     # standard Arabic "scan/inspect"
+    "فحص",      # "inspection"
+    "مسح",      # "scan"
+    "استكشاف",  # "explore"
+    "كشف",      # "discover"
+    "دقق",      # "scrutinize"
+    "دقّق",     # "scrutinize" (with shadda)
+    "طالع",     # "review"
+]
+
+
+def _detect_arabic_scan_intent(text: str) -> bool:
+    """Return True if *text* contains an Arabic repository scan verb.
+
+    Detects scan/inspect keywords like "فحر", "افحص", "استكشاف" etc.
+    A target hint (repository, code, project) is NOT required — the
+    scan keyword alone suffices for terse commands like "افحص".
+    """
+    if not text:
+        return False
+    normalized = " ".join(text.split())  # normalize whitespace
+    return any(kw in normalized for kw in _ARABIC_SCAN_KEYWORDS)
+
+
 def maybe_auto_scan(text: str, agent: Any) -> dict:
     """If *text* contains Arabic scan intent, auto-trigger workspace listing.
 
@@ -31,9 +58,9 @@ def maybe_auto_scan(text: str, agent: Any) -> dict:
         - entry_count (int): number of directory entries found
         - error (str | None): error message if scan failed
     """
-    from ui.repl_termux import _detect_arabic_scan_intent  # lightweight, no UI
     if not _detect_arabic_scan_intent(text):
         return {"triggered": False, "success": False, "entry_count": 0, "error": None}
+
 
     try:
         entries = sorted(os.listdir("."))

@@ -1,0 +1,69 @@
+{
+  "commit": "e2eeff4f230206c643ff768c5fc315edfd37e75c",
+  "test_suite": {
+    "total_test_files": 241,
+    "total_sync_test_functions": 2054,
+    "total_async_test_functions": 2,
+    "total_test_functions": 2056,
+    "total_test_classes": 330,
+    "async_test_details": [
+      {
+        "file": "tests/test_ui_concurrency_slash.py",
+        "name": "test_handle_status_command",
+        "lineno": 37
+      },
+      {
+        "file": "tests/test_ui_concurrency_slash.py",
+        "name": "test_handle_clear_command",
+        "lineno": 41
+      }
+    ]
+  },
+  "tool_registry_mapping": {
+    "total_symbols": 37,
+    "concrete_tools_count": 16,
+    "secure_wrappers_count": 13,
+    "protocols_count": 4,
+    "base_and_models_count": 3,
+    "pure_functions_count": 1,
+    "symbols": {
+      "BaseTool": ".base",
+      "ToolResult": ".models",
+      "FileAction": ".file_system",
+      "SecurityEngineProtocol": ".protocols",
+      "SanitizerProtocol": ".protocols",
+      "CommandExecutorProtocol": ".protocols",
+      "PermissionEngineProtocol": ".protocols",
+      "ShellTool": ".shell",
+      "FileSystemTool": ".file_system",
+      "WebSearchTool": ".web_search",
+      "SearchMemoryTool": ".search_memory",
+      "TodoWriteTool": ".todo",
+      "RagSearchTool": ".rag_search",
+      "TermuxMonitorTool": ".termux_monitor",
+      "TaskTool": ".task_tool",
+      "BrowserTool": ".browser_tool",
+      "GitTool": ".git_tool",
+      "GitPushTool": ".git_tool",
+      "CodeIntelligenceTool": ".code_intelligence",
+      "PythonREPLTool": ".python_repl",
+      "TasteManagerTool": ".taste_manager",
+      "GraphifyTool": ".graphify_tool",
+      "GraphIntelTool": ".graph_intel",
+      "SecureTool": ".secure_tools",
+      "SecureShellTool": ".secure_tools",
+      "SecureFileSystemTool": ".secure_tools",
+      "SecureWebSearchTool": ".secure_tools",
+      "SecureBrowserTool": ".secure_tools",
+      "SecureWorkspaceReader": ".secure_tools",
+      "SecureGitInspector": ".secure_tools",
+      "SecureTestRunner": ".secure_tools",
+      "SecureSemanticMemoryTool": ".secure_tools",
+      "SecureCodeIntelligenceTool": ".secure_tools",
+      "SecurePythonREPLTool": ".secure_tools",
+      "SecureTasteManagerTool": ".secure_tools",
+      "SecureGraphifyTool": ".secure_tools",
+      "execute_search_memory": ".memory"
+    }
+  }
+}

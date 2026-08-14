@@ -45,6 +45,8 @@ class AppContext:
     snapshot_engine: SnapshotEngine
     artifact_manager: ArtifactManager
     storage: Optional[UnifiedStorage] = None
+    tool_registry: Any = None
+    event_bus: Any = None
 
     @classmethod
     def build(cls, auto_discover: bool = True) -> AppContext:
@@ -189,6 +191,8 @@ class AppContext:
             snapshot_engine=snapshot_engine,
             artifact_manager=artifact_mgr,
             storage=storage,
+            tool_registry=registry,
+            event_bus=bus,
         )
 
         atexit.register(renderer.shutdown)

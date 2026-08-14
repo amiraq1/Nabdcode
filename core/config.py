@@ -152,53 +152,97 @@ class ConfigManager:
         self.config_dir = config_dir or (Path.home() / ".config" / "nabdcode")
         self.config_path = self.config_dir / "config.json"
 
-    def _load(self) -> dict:
+    def _load(self, locked: bool = False) -> dict:
         """Return the parsed config dict, or {} when missing/corrupt.
 
         API keys are transparently decrypted in-memory so callers always
         see plaintext; encryption happens only at the persistence boundary
         in :meth:`_save`.
         """
-        if self.config_path.exists():
-            try:
+        if not self.config_path.exists():
+            return {}
+
+        def _do_read():
+            if self.config_path.exists():
                 with open(self.config_path, "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                if isinstance(data, dict):
-                    # Decrypt API keys after reading from disk
-                    keys = data.get("api_keys")
-                    if isinstance(keys, dict):
-                        for provider, key in keys.items():
-                            if key and isinstance(key, str) and key.startswith("enc:"):
-                                try:
-                                    data["api_keys"][provider] = decrypt_api_key(key)
-                                except Exception:
-                                    pass
-                    return data
+                    return json.load(fh)
+            return {}
+
+        data: Any = None
+        if locked:
+            try:
+                data = _do_read()
             except Exception:
-                # Fail-open: never let a malformed file crash startup.
-                pass
+                return {}
+        else:
+            from core.kernel.platform_lock import PlatformFileLock
+            lock_path = self.config_dir / ".config.lock"
+            try:
+                with PlatformFileLock(lock_path, timeout=3.0):
+                    data = _do_read()
+            except Exception:
+                try:
+                    data = _do_read()
+                except Exception:
+                    return {}
+
+        if isinstance(data, dict):
+            # Decrypt API keys after reading from disk
+            keys = data.get("api_keys")
+            if isinstance(keys, dict):
+                for provider, key in keys.items():
+                    if key and isinstance(key, str) and key.startswith("enc:"):
+                        try:
+                            data["api_keys"][provider] = decrypt_api_key(key)
+                        except Exception:
+                            pass
+            return data
         return {}
 
-    def _save(self, data: dict) -> None:
-        """Atomically-ish persist config, creating the directory if needed.
+    def _save(self, data: dict, locked: bool = False) -> None:
+        """Atomically persist config under platform file lock.
 
-        API keys are encrypted before writing to disk so the on-disk
-        representation is always ciphertext.
+        Creates the temp file directly with 0o600 permissions to eliminate
+        permission TOCTOU windows, then atomically replaces config.json.
         """
         self.config_dir.mkdir(parents=True, exist_ok=True)
+
         # Encrypt API keys before writing to disk
-        keys = data.get("api_keys")
+        to_write = dict(data)
+        keys = to_write.get("api_keys")
         if isinstance(keys, dict):
-            for provider, key in keys.items():
+            enc_keys = dict(keys)
+            for provider, key in enc_keys.items():
                 if key and isinstance(key, str) and not key.startswith("enc:"):
-                    data["api_keys"][provider] = encrypt_api_key(key)
-        with open(self.config_path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
-        # A user-owned API key file should not be world-readable.
-        try:
-            os.chmod(self.config_path, 0o600)
-        except OSError:
-            pass
+                    enc_keys[provider] = encrypt_api_key(key)
+            to_write["api_keys"] = enc_keys
+
+        content = json.dumps(to_write, indent=2).encode("utf-8")
+
+        def _do_write():
+            import time
+            tmp_path = self.config_dir / f"config.tmp.{os.getpid()}.{time.time_ns()}"
+            fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, content)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+            try:
+                os.chmod(str(tmp_path), 0o600)
+            except OSError:
+                pass
+
+            os.replace(str(tmp_path), str(self.config_path))
+
+        if locked:
+            _do_write()
+        else:
+            from core.kernel.platform_lock import PlatformFileLock
+            lock_path = self.config_dir / ".config.lock"
+            with PlatformFileLock(lock_path, timeout=5.0):
+                _do_write()
 
     def get_api_key(self, provider: str = "openrouter") -> str | None:
         """Return a stored key for ``provider`` without prompting, or None."""
@@ -218,10 +262,15 @@ class ConfigManager:
         return None
 
     def set_api_key(self, provider: str, key: str) -> None:
-        """Persist *key* for *provider*, encrypted at rest."""
-        data = self._load()
-        data.setdefault("api_keys", {})[provider] = key
-        self._save(data)
+        """Persist *key* for *provider*, encrypted at rest under platform lock."""
+        from core.kernel.platform_lock import PlatformFileLock
+        lock_path = self.config_dir / ".config.lock"
+        with PlatformFileLock(lock_path, timeout=15.0):
+            data = self._load(locked=True)
+            data.setdefault("api_keys", {})[provider] = key
+            self._save(data, locked=True)
+
+
 
     def get_all_api_keys(self) -> dict[str, str]:
         """Return all stored API keys (decrypted in-memory)."""

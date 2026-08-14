@@ -170,38 +170,9 @@ def hint_for_mode(mode: str) -> tuple[str, str]:
     return "? for shortcuts [shift+tab]", "dim"
 
 
-class CollapseStore:
-    """Store collapsed output blocks by id so they can be expanded later.
+# CollapseStore pure storage extracted to core/kernel/collapse.py (EXE-04)
+from core.kernel.collapse import CollapseStore, collapse_store
 
-    ``store()`` returns an integer id; ``expand(id)`` returns the original
-    lines (a fresh list copy) or ``None`` for an unknown/expired id.
-    """
-
-    def __init__(self) -> None:
-        self._blocks: dict[int, list[str]] = {}
-        self._next_id: int = 1
-
-    def store(self, lines: Sequence[str]) -> int:
-        """Store *lines* and return its id."""
-        cid = self._next_id
-        self._next_id += 1
-        self._blocks[cid] = list(lines)
-        return cid
-
-    def expand(self, cid: int) -> list[str] | None:
-        """Return a copy of the stored block, or None if unknown."""
-        block = self._blocks.get(cid)
-        if block is None:
-            return None
-        return list(block)
-
-    def ids(self) -> list[int]:
-        """Return all stored ids (ascending)."""
-        return sorted(self._blocks)
-
-
-# Process-wide collapse store (UI-CC-3): /expand and future ctrl+o share it.
-collapse_store = CollapseStore()
 
 
 # ── UI-CC-5: compact CC-style lines (no heavy panels) ───────────────────────

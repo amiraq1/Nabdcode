@@ -317,33 +317,9 @@ _mode_state: int = 0
 _plan_mode: bool = False
 
 # ── Arabic scan keywords — auto-trigger EXPLORE tool ────────────────────
-# When the user types "فحر مستودع" (or similar), the agent may not
-# produce tool calls naturally. We detect the intent and seed the
-# agent's context with a live directory listing + evidence record.
-_ARABIC_SCAN_KEYWORDS: list[str] = [
-    "فحر",      # colloquial Egyptian "scan"
-    "افحص",     # standard Arabic "scan/inspect"
-    "فحص",      # "inspection"
-    "مسح",      # "scan"
-    "استكشاف",  # "explore"
-    "كشف",      # "discover"
-    "دقق",      # "scrutinize"
-    "دقّق",     # "scrutinize" (with shadda)
-    "طالع",     # "review"
-]
+# Pure Arabic scan intent keywords and detection imported from core (EXE-04)
+from core.commands.auto_scan import _ARABIC_SCAN_KEYWORDS, _detect_arabic_scan_intent
 
-
-def _detect_arabic_scan_intent(text: str) -> bool:
-    """Return True if *text* contains an Arabic repository scan verb.
-
-    Detects scan/inspect keywords like "فحر", "افحص", "استكشاف" etc.
-    A target hint (repository, code, project) is NOT required — the
-    scan keyword alone suffices for terse commands like "افحص".
-    """
-    if not text:
-        return False
-    normalized = " ".join(text.split())  # normalize whitespace
-    return any(kw in normalized for kw in _ARABIC_SCAN_KEYWORDS)
 
 
 def _maybe_auto_scan(text: str, agent: Any) -> bool:

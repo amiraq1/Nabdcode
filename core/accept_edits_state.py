@@ -21,7 +21,10 @@ from __future__ import annotations
 import dataclasses
 import difflib
 import errno
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore
 import hashlib
 import json
 import logging
@@ -343,7 +346,7 @@ def reset_session() -> None:
     nuclear option — call only on ``/clear`` or session landing, NOT on
     mode cycling (use ``set_mode()`` for that).
     """
-    global _accept_edits_enabled, _JOURNAL_PATH, _JOURNAL_LOCK_PATH
+    global _accept_edits_enabled, _JOURNAL_PATH, _JOURNAL_LOCK_PATH, _pre_replace_test_hook
     with _state_lock:
         _accept_edits_pending.clear()
         _accept_edits_enabled = False
@@ -352,6 +355,7 @@ def reset_session() -> None:
     _wal_journal_cache.clear()
     _JOURNAL_PATH = ""
     _JOURNAL_LOCK_PATH = ""
+    _pre_replace_test_hook = None
 
 
 def set_mode(accept_edits: bool) -> None:
@@ -707,6 +711,9 @@ def _serialize_wal_record(rec: WalRecord) -> bytes:
         val = d.get(key)
         if val is not None and not isinstance(val, str):
             d[key] = os.fspath(val)
+        if key == "target_path_relative" and isinstance(d.get(key), str):
+            d[key] = d[key].replace("\\", "/")
+
     if not d.get("created_at"):
         d["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     d["checksum"] = _compute_record_checksum(d)
@@ -725,17 +732,19 @@ def _ensure_journal_locked() -> int:
             os.O_RDWR | os.O_CREAT,
             0o600,
         )
-    fcntl.flock(_journal_lock_fd, fcntl.LOCK_EX)
+    if fcntl is not None:
+        fcntl.flock(_journal_lock_fd, fcntl.LOCK_EX)
     return _journal_lock_fd
 
 
 def _release_lock() -> None:
     """Release exclusive flock on journal.lock."""
     if _journal_lock_fd is not None:
-        try:
-            fcntl.flock(_journal_lock_fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
+        if fcntl is not None:
+            try:
+                fcntl.flock(_journal_lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
 
 
 def _write_journal_record(rec: WalRecord) -> bool:
@@ -773,10 +782,11 @@ def _close_journal() -> None:
     """Release journal resources.  Called from reset_session()."""
     global _journal_lock_fd
     if _journal_lock_fd is not None:
-        try:
-            fcntl.flock(_journal_lock_fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
+        if fcntl is not None:
+            try:
+                fcntl.flock(_journal_lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
         try:
             os.close(_journal_lock_fd)
         except OSError:
@@ -1241,8 +1251,13 @@ def _create_exclusive_temp(target: _Path) -> tuple[_Path, int]:
     # right file-position behaviour for _write_all + fsync.
     # Preserve the same inode by doing this carefully.
     os.close(fd)
-    fd = os.open(tmp_name, os.O_WRONLY)
+    flags = os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    fd = os.open(tmp_name, flags)
     return _Path(tmp_name), fd
+
+
+
+_pre_replace_test_hook: Optional[Any] = None
 
 
 def _atomic_write(target: _Path, data: bytes) -> AtomicWriteResult:
@@ -1283,6 +1298,13 @@ def _atomic_write(target: _Path, data: bytes) -> AtomicWriteResult:
 
         os.close(fd)
         fd = None
+
+        # EXE-01: Test seam hook for external writer injection immediately before os.replace
+        if _pre_replace_test_hook is not None:
+            try:
+                _pre_replace_test_hook(target)
+            except Exception as hook_exc:
+                _logger.warning("pre_replace_test_hook error: %s", hook_exc)
 
         failure_stage = WriteStage.REPLACE
         os.replace(str(tmp_path), str(target))
@@ -1352,8 +1374,9 @@ def _atomic_write(target: _Path, data: bytes) -> AtomicWriteResult:
 def _fsync_parent(parent: _Path) -> bool:
     """Best-effort parent-directory fsync.  Returns True if fsync succeeded,
     False if it was skipped (unavailable on platform).  Never raises.
-    Silently ignored on platforms that do not support directory fsync
-    (e.g. Android Termux)."""
+    On Windows (NTFS), directory fsync is handled atomically by filesystem rename."""
+    if os.name == "nt":
+        return True
     try:
         pfd = os.open(str(parent), os.O_RDONLY)
         try:
@@ -1528,6 +1551,8 @@ def _make_wal_record(
             f"target_path_relative must be a relative path, "
             f"got absolute: {target_path_relative}"
         )
+    target_path_relative = target_path_relative.replace("\\", "/")
+
     ws = _workspace_identity
     workspace_id = ws.workspace_id if ws else ""
     root_fp = ws.root_fingerprint if ws else ""
@@ -1557,227 +1582,209 @@ def _make_wal_record(
     return rec
 
 
-def accept_edit(edit_id: str, expected_version: int | None = None) -> TransactionResult:
-    """Accept a single edit by ID using a safe claim-apply-commit cycle.
+def _claim_edit_for_accept(
 
-    Two-phase optimistic content precondition validation + atomic replacement:
-
-      STATE-LOCK: CLAIM → capture immutable edit_data
-      PATH-LOCK:  precondition → snapshot → check → temp write → check → replace → verify
-      STATE-LOCK: COMMIT
-
-    External processes that do not participate in the path-lock protocol may
-    still modify the target in the final check-to-replace window.
-    This is NOT a full atomic compare-and-swap against all external writers.
-    """
-    operation_id = str(uuid.uuid4())
-
-    # ── 1. CLAIM (under state lock, no I/O) ──────────────────────────────
+    edit_id: str,
+    expected_version: int | None,
+    operation_id: str,
+) -> tuple[TransactionResult | None, PendingEdit | None]:
+    """Claim a pending edit for accept under state lock (no I/O)."""
     with _state_lock:
         edit = _find_edit(edit_id)
         if not edit:
-            return TransactionResult(TransactionOutcome.NOT_FOUND, operation_id, [], [], _get_remaining_ids_unlocked(), 0)
+            return TransactionResult(
+                TransactionOutcome.NOT_FOUND, operation_id, [], [], _get_remaining_ids_unlocked(), 0
+            ), None
 
         if edit.status != "PENDING":
-            return TransactionResult(TransactionOutcome.CONFLICT, operation_id, [], [], _get_remaining_ids_unlocked(), 0)
+            return TransactionResult(
+                TransactionOutcome.CONFLICT, operation_id, [], [], _get_remaining_ids_unlocked(), 0
+            ), None
 
         if expected_version is not None and edit.version != expected_version:
-            return TransactionResult(TransactionOutcome.CONFLICT, operation_id, [], [], _get_remaining_ids_unlocked(), 0)
+            return TransactionResult(
+                TransactionOutcome.CONFLICT, operation_id, [], [], _get_remaining_ids_unlocked(), 0
+            ), None
 
         edit.status = "PROCESSING_ACCEPT"
         edit.claim_token = operation_id
         edit.version += 1
         edit_data = dataclasses.replace(edit)
-        expected_digest = edit_data.expected_original_digest
-        resolved_path = edit_data.resolved_path
-        new_content = edit_data.new_content
+        return None, edit_data
 
-    # ── 2. PATH-LOCKED critical section (I/O, no state lock) ─────────────
-    # Uses centralized _acquire_path_lock() — never call _get_path_lock()
-    with _acquire_path_lock(_Path(resolved_path)):
-        # 2a. Path security validation
-        path_err = _validate_path_safe(resolved_path)
-        if path_err is not None:
-            return TransactionResult(
-                TransactionOutcome.DENIED, operation_id, [],
-                [TransactionFailure(edit_id, "PATH_AUTHORIZATION", "PathOutsideWorkspace", path_err, False)],
-                _get_remaining_ids_unlocked(), 0,
-            )
 
-        # 2b. Content precondition check (check #1)
-        if expected_digest and expected_digest != _ABSENT_SENTINEL:
-            current = _file_digest(resolved_path)
-            if current != expected_digest:
-                return TransactionResult(
-                    TransactionOutcome.CONFLICT, operation_id, [], [],
-                    _get_remaining_ids_unlocked(), 0,
-                )
-        elif expected_digest == _ABSENT_SENTINEL:
-            if _Path(resolved_path).exists():
-                return TransactionResult(
-                    TransactionOutcome.CONFLICT, operation_id, [], [],
-                    _get_remaining_ids_unlocked(), 0,
-                )
+def _check_edit_preconditions(edit_data: PendingEdit, operation_id: str) -> TransactionResult | None:
+    """Validate path safety and content digest preconditions before write."""
+    resolved_path = edit_data.resolved_path
+    expected_digest = edit_data.expected_original_digest
+    edit_id = edit_data.edit_id
 
-        # 2c. Snapshot from current on-disk content
-        snapshot = _create_snapshot_from_disk(resolved_path, "")
-
-        # 2c.1 WAL: PREPARED before side effect (Gate 2)
-        prepared_rec = _make_wal_record(
-            event_type="PREPARED", sequence=1,
-            operation_id=operation_id, edit_id=edit_data.edit_id,
-            operation_type="ACCEPT",
-            target_path_relative=edit_data.path,
-            expected_original_digest=edit_data.expected_original_digest,
-            intended_result_digest=_compute_digest(new_content),
-            snapshot_reference=str(snapshot.resolved_path) if snapshot else None,
+    path_err = _validate_path_safe(resolved_path)
+    if path_err is not None:
+        return TransactionResult(
+            TransactionOutcome.DENIED, operation_id, [],
+            [TransactionFailure(edit_id, "PATH_AUTHORIZATION", "PathOutsideWorkspace", path_err, False)],
+            _get_remaining_ids_unlocked(), 0,
         )
-        try:
-            _write_journal_record(prepared_rec)
-        except OSError:
-            # PREPARED failed — no side effect, safe to fail
+
+    if expected_digest and expected_digest != _ABSENT_SENTINEL:
+        if _file_digest(resolved_path) != expected_digest:
             return TransactionResult(
-                TransactionOutcome.FAILED, operation_id, [],
-                [TransactionFailure(edit_id, "JOURNAL_PREPARE", "JournalWriteError",
-                                    "Journal write failed before side effect.", True)],
+                TransactionOutcome.CONFLICT, operation_id, [], [],
                 _get_remaining_ids_unlocked(), 0,
             )
-
-        # 2d. Pre-check digest #2 + re-validate path immediately before write
-        path_err2 = _validate_path_safe(resolved_path)
-        if path_err2 is not None:
+    elif expected_digest == _ABSENT_SENTINEL:
+        if _Path(resolved_path).exists():
             return TransactionResult(
-                TransactionOutcome.DENIED, operation_id, [],
-                [TransactionFailure(edit_id, "PATH_AUTHORIZATION", "PathChangedOutsideWorkspace", path_err2, False)],
+                TransactionOutcome.CONFLICT, operation_id, [], [],
                 _get_remaining_ids_unlocked(), 0,
             )
+    return None
 
-        if expected_digest and expected_digest != _ABSENT_SENTINEL:
-            current2 = _file_digest(resolved_path)
-            if current2 != expected_digest:
-                return TransactionResult(
-                    TransactionOutcome.CONFLICT, operation_id, [], [],
-                    _get_remaining_ids_unlocked(), 0,
-                )
 
-        # 2d. Atomic write (temp → fsync → replace → fsync parent)
-        failure = None
-        reconciliation_required = False
-        snapshot_restored = False
+def _record_prepared_wal(edit_data: PendingEdit, operation_id: str, snapshot: Any) -> TransactionResult | None:
+    """Record PREPARED journal event before side effect."""
+    prepared_rec = _make_wal_record(
+        event_type="PREPARED", sequence=1,
+        operation_id=operation_id, edit_id=edit_data.edit_id,
+        operation_type="ACCEPT",
+        target_path_relative=edit_data.path,
+        expected_original_digest=edit_data.expected_original_digest,
+        intended_result_digest=_compute_digest(edit_data.new_content),
+        snapshot_reference=str(snapshot.resolved_path) if snapshot else None,
+    )
+    try:
+        _write_journal_record(prepared_rec)
+        return None
+    except OSError:
+        return TransactionResult(
+            TransactionOutcome.FAILED, operation_id, [],
+            [TransactionFailure(edit_data.edit_id, "JOURNAL_PREPARE", "JournalWriteError",
+                                "Journal write failed before side effect.", True)],
+            _get_remaining_ids_unlocked(), 0,
+        )
 
-        write_result: AtomicWriteResult | None = None
-        try:
-            write_result = _atomic_write(_Path(resolved_path), new_content.encode("utf-8"))
-        except Exception as exc:
-            # Defensive: _atomic_write should never raise in production (it
-            # catches all OSError internally).  This guard handles test
-            # patching and unexpected platform behaviour.
-            _logger.error("_atomic_write raised unexpectedly", exc_info=True)
-            write_result = AtomicWriteResult(
-                applied=False,
-                durability_confirmed=False,
-                cleanup_succeeded=True,
-                failure_stage=WriteStage.TEMP_WRITE,
-                error_type=type(exc).__name__,
-                safe_message="Atomic write failed before completion.",
-                temp_artifact_remaining=False,
-            )
 
-        if write_result is None:
-            write_result = AtomicWriteResult(
-                applied=False,
-                durability_confirmed=False,
-                cleanup_succeeded=True,
-                failure_stage=WriteStage.TEMP_WRITE,
-                error_type="UnknownError",
-                safe_message="Atomic write returned no result.",
-                temp_artifact_remaining=False,
-            )
+def _execute_atomic_apply_and_wal(
+    edit_data: PendingEdit,
+    operation_id: str,
+    snapshot: Any,
+) -> tuple[TransactionResult | None, TransactionFailure | None, bool, bool, bool]:
+    """Perform atomic write, verify digest, and record APPLIED or FAILED WAL event."""
+    resolved_path = edit_data.resolved_path
+    new_content = edit_data.new_content
+    edit_id = edit_data.edit_id
 
-        if not write_result.applied:
-            requires_reconciliation = (
-                write_result.temp_artifact_remaining
-                or not write_result.cleanup_succeeded
-            )
+    # Pre-check #2
+    precond_err2 = _check_edit_preconditions(edit_data, operation_id)
+    if precond_err2 is not None:
+        return precond_err2, None, False, False, False
 
-            _logger.error(
-                "Atomic write failed",
-                extra={
-                    "operation_id": operation_id,
-                    "edit_id": edit_id,
-                    "failure_stage": str(write_result.failure_stage),
-                    "requires_reconciliation": requires_reconciliation,
-                },
-            )
+    try:
+        write_result = _atomic_write(_Path(resolved_path), new_content.encode("utf-8"))
+    except Exception as exc:
+        _logger.error("_atomic_write raised unexpectedly", exc_info=True)
+        write_result = AtomicWriteResult(
+            applied=False,
+            durability_confirmed=False,
+            cleanup_succeeded=True,
+            failure_stage=WriteStage.TEMP_WRITE,
+            error_type=type(exc).__name__,
+            safe_message="Atomic write failed before completion.",
+            temp_artifact_remaining=False,
+        )
 
-            if _rollback_snapshot(snapshot):
-                snapshot_restored = True
-            elif requires_reconciliation:
-                pass  # already RECONCILIATION_REQUIRED
-            else:
-                requires_reconciliation = True
+    if write_result is None:
+        write_result = AtomicWriteResult(
+            applied=False,
+            durability_confirmed=False,
+            cleanup_succeeded=True,
+            failure_stage=WriteStage.TEMP_WRITE,
+            error_type="UnknownError",
+            safe_message="Atomic write returned no result.",
+            temp_artifact_remaining=False,
+        )
 
-            new_status = "RECONCILIATION_REQUIRED" if requires_reconciliation else "FAILED"
-            with _state_lock:
-                current = _find_edit(edit_id)
-                if (
-                    current is not None
-                    and current.claim_token == operation_id
-                    and current.status == "PROCESSING_ACCEPT"
-                ):
-                    current.status = new_status
-                    current.version += 1
+    failure = None
+    reconciliation_required = False
+    snapshot_restored = False
 
-            if requires_reconciliation:
-                _record_reconciliation(
-                    operation_id=operation_id,
-                    edit_id=edit_id,
-                    resolved_path=resolved_path,
-                    claim_token=edit_data.claim_token or "",
-                    expected_digest=_compute_digest(new_content),
-                    observed_digest=_file_digest(resolved_path),
-                    failure_stage=str(write_result.failure_stage),
-                    has_snapshot=snapshot_restored is False,
-                )
+    if not write_result.applied:
+        requires_reconciliation = (
+            write_result.temp_artifact_remaining
+            or not write_result.cleanup_succeeded
+        )
+        _logger.error(
+            "Atomic write failed",
+            extra={
+                "operation_id": operation_id,
+                "edit_id": edit_id,
+                "failure_stage": str(write_result.failure_stage),
+                "requires_reconciliation": requires_reconciliation,
+            },
+        )
+        if _rollback_snapshot(snapshot):
+            snapshot_restored = True
+        elif not requires_reconciliation:
+            requires_reconciliation = True
 
-            return TransactionResult(
-                outcome=TransactionOutcome.RECONCILIATION_REQUIRED if requires_reconciliation else TransactionOutcome.FAILED,
+        new_status = "RECONCILIATION_REQUIRED" if requires_reconciliation else "FAILED"
+        with _state_lock:
+            current = _find_edit(edit_id)
+            if (
+                current is not None
+                and current.claim_token == operation_id
+                and current.status == "PROCESSING_ACCEPT"
+            ):
+                current.status = new_status
+                current.version += 1
+
+        if requires_reconciliation:
+            _record_reconciliation(
                 operation_id=operation_id,
-                succeeded_ids=[],
-                failed_items=[
-                    TransactionFailure(
-                        edit_id=edit_id,
-                        stage=str(write_result.failure_stage),
-                        error_type=write_result.error_type or "AtomicWriteError",
-                        safe_message=(
-                            write_result.safe_message
-                            or "Atomic write failed."
-                        ),
-                        retryable=not requires_reconciliation,
-                    )
-                ],
-                remaining_ids=_get_remaining_ids_unlocked(),
-                processed_count=0,
+                edit_id=edit_id,
+                resolved_path=resolved_path,
+                claim_token=edit_data.claim_token or "",
+                expected_digest=_compute_digest(new_content),
+                observed_digest=_file_digest(resolved_path),
+                failure_stage=str(write_result.failure_stage),
+                has_snapshot=snapshot_restored is False,
             )
 
-        parent_fsynced = write_result.durability_confirmed
+        err_result = TransactionResult(
+            outcome=TransactionOutcome.RECONCILIATION_REQUIRED if requires_reconciliation else TransactionOutcome.FAILED,
+            operation_id=operation_id,
+            succeeded_ids=[],
+            failed_items=[
+                TransactionFailure(
+                    edit_id=edit_id,
+                    stage=str(write_result.failure_stage),
+                    error_type=write_result.error_type or "AtomicWriteError",
+                    safe_message=write_result.safe_message or "Atomic write failed.",
+                    retryable=not requires_reconciliation,
+                )
+            ],
+            remaining_ids=_get_remaining_ids_unlocked(),
+            processed_count=0,
+        )
+        return err_result, None, requires_reconciliation, snapshot_restored, False
 
-        if not failure and write_result.applied and not write_result.cleanup_succeeded:
-            failure = TransactionFailure(edit_id, "CLEANUP", "CleanupError", "Failed to clean up temporary artifacts.", True)
-            reconciliation_required = True
+    parent_fsynced = write_result.durability_confirmed
 
-        if not failure:
-            # 2e. Verify target digest
-            written_digest = _file_digest(resolved_path)
-            expected_new_digest = _compute_digest(new_content)
-            if written_digest != expected_new_digest:
-                failure = TransactionFailure(edit_id, "VERIFY", "DigestMismatch", "File content digest mismatch after write.", True)
-                if not _rollback_snapshot(snapshot):
-                    reconciliation_required = True
+    if not failure and write_result.applied and not write_result.cleanup_succeeded:
+        failure = TransactionFailure(edit_id, "CLEANUP", "CleanupError", "Failed to clean up temporary artifacts.", True)
+        reconciliation_required = True
 
-        # WAL: APPLIED after digest verification (Gate 2)
-        # Uses the observed digest from verification, not a separate read.
-        observed = written_digest if not failure else _file_digest(resolved_path)
+    if not failure:
+        written_digest = _file_digest(resolved_path)
+        expected_new_digest = _compute_digest(new_content)
+        if written_digest != expected_new_digest:
+            failure = TransactionFailure(edit_id, "VERIFY", "DigestMismatch", "File content digest mismatch after write.", True)
+            if not _rollback_snapshot(snapshot):
+                reconciliation_required = True
+
+    observed = written_digest if not failure else _file_digest(resolved_path)
+    if not failure and write_result.applied:
         applied_rec = _make_wal_record(
             event_type="APPLIED", sequence=2,
             operation_id=operation_id, edit_id=edit_data.edit_id,
@@ -1793,15 +1800,50 @@ def accept_edit(edit_id: str, expected_version: int | None = None) -> Transactio
         try:
             _write_journal_record(applied_rec)
         except OSError:
-            # APPLIED failed — side effect happened, must flag for review
-            return TransactionResult(
+            journal_err = TransactionResult(
                 TransactionOutcome.RECONCILIATION_REQUIRED, operation_id, [],
                 [TransactionFailure(edit_id, "JOURNAL_APPLIED", "JournalWriteError",
                                     "Side effect occurred but journal write failed.", False)],
                 _get_remaining_ids_unlocked(), 0,
             )
+            return journal_err, None, True, False, parent_fsynced
+    else:
+        event_type = "RECONCILIATION_REQUIRED" if reconciliation_required else "FAILED"
+        failed_wal_rec = _make_wal_record(
+            event_type=event_type, sequence=2,
+            operation_id=operation_id, edit_id=edit_data.edit_id,
+            operation_type="ACCEPT",
+            target_path_relative=edit_data.path,
+            expected_original_digest=edit_data.expected_original_digest,
+            intended_result_digest=_compute_digest(new_content),
+            observed_result_digest=observed,
+            side_effect_applied=write_result.applied if not snapshot_restored else False,
+            durability_confirmed=parent_fsynced,
+            snapshot_reference=str(snapshot.resolved_path) if snapshot else None,
+            failure_stage=failure.stage if failure else "UNKNOWN",
+            recovery_status="PENDING_REVIEW" if reconciliation_required else "RESOLVED",
+        )
+        try:
+            _write_journal_record(failed_wal_rec)
+        except OSError:
+            pass
 
-    # ── 3. COMMIT (under state lock, no I/O) ─────────────────────────────
+    return None, failure, reconciliation_required, snapshot_restored, parent_fsynced
+
+
+def _commit_accepted_edit(
+    edit_id: str,
+    edit_data: PendingEdit,
+    operation_id: str,
+    failure: TransactionFailure | None,
+    reconciliation_required: bool,
+    snapshot_restored: bool,
+    parent_fsynced: bool,
+) -> TransactionResult:
+    """Commit accepted edit state under state lock (no I/O)."""
+    resolved_path = edit_data.resolved_path
+    new_content = edit_data.new_content
+
     with _state_lock:
         edit = _find_edit(edit_id)
         if not edit:
@@ -1810,7 +1852,7 @@ def accept_edit(edit_id: str, expected_version: int | None = None) -> Transactio
                                    "COMMIT", has_snapshot=True)
             return TransactionResult(TransactionOutcome.RECONCILIATION_REQUIRED, operation_id, [],
                                      [TransactionFailure(edit_id, "COMMIT", "MissingEdit",
-                                                        "Edit disappeared during I/O", False)],
+                                                         "Edit disappeared during I/O", False)],
                                      _get_remaining_ids_unlocked(), 0)
 
         if edit.claim_token != operation_id or edit.status != "PROCESSING_ACCEPT" or edit.version != edit_data.version:
@@ -1819,7 +1861,7 @@ def accept_edit(edit_id: str, expected_version: int | None = None) -> Transactio
                                    "COMMIT_TOKEN_MISMATCH", has_snapshot=True)
             return TransactionResult(TransactionOutcome.RECONCILIATION_REQUIRED, operation_id, [],
                                      [TransactionFailure(edit_id, "COMMIT", "StateChanged",
-                                                        "Edit state changed concurrently during I/O", False)],
+                                                         "Edit state changed concurrently during I/O", False)],
                                      _get_remaining_ids_unlocked(), 0)
 
         if failure:
@@ -1836,7 +1878,6 @@ def accept_edit(edit_id: str, expected_version: int | None = None) -> Transactio
         else:
             _accept_edits_pending.remove(edit)
 
-            # WAL: COMMITTED after state commit (Gate 2)
             committed_rec = _make_wal_record(
                 event_type="COMMITTED", sequence=3,
                 operation_id=operation_id, edit_id=edit_data.edit_id,
@@ -1854,7 +1895,7 @@ def accept_edit(edit_id: str, expected_version: int | None = None) -> Transactio
                 _write_journal_record(committed_rec)
                 committed_journal_ok = True
             except OSError:
-                committed_journal_ok = False  # COMMITTED — state committed, journal failure non-fatal
+                committed_journal_ok = False
 
             try:
                 from engine.events import bus
@@ -1867,8 +1908,6 @@ def accept_edit(edit_id: str, expected_version: int | None = None) -> Transactio
             except ImportError:
                 pass
 
-            # WAL: RESOLVED after cleanup (Gate 2)
-            # Gate 15: Do NOT record RESOLVED if durability warning or missing prior journal step
             if parent_fsynced and committed_journal_ok:
                 resolved_rec = _make_wal_record(
                     event_type="RESOLVED", sequence=4,
@@ -1886,14 +1925,65 @@ def accept_edit(edit_id: str, expected_version: int | None = None) -> Transactio
                 try:
                     _write_journal_record(resolved_rec)
                 except OSError:
-                    pass  # RESOLVED — operation complete, journal failure non-fatal
+                    pass
 
-            # Use ACCEPTED_WITH_DURABILITY_WARNING if parent fsync failed
             outcome = TransactionOutcome.ACCEPTED if parent_fsynced else TransactionOutcome.ACCEPTED_WITH_DURABILITY_WARNING
             return TransactionResult(outcome, operation_id, [edit_id], [], _get_remaining_ids_unlocked(), 1)
 
 
+def accept_edit(edit_id: str, expected_version: int | None = None) -> TransactionResult:
+    """Accept a single edit by ID using a safe claim-apply-commit cycle.
+
+    Two-phase optimistic content precondition validation + atomic replacement:
+
+      STATE-LOCK: CLAIM → capture immutable edit_data
+      PATH-LOCK:  precondition → snapshot → check → temp write → check → replace → verify
+      STATE-LOCK: COMMIT
+    """
+    operation_id = str(uuid.uuid4())
+
+    # ── 1. CLAIM (under state lock, no I/O) ──────────────────────────────
+    claim_err, edit_data = _claim_edit_for_accept(edit_id, expected_version, operation_id)
+    if claim_err is not None:
+        return claim_err
+    assert edit_data is not None
+
+    resolved_path = edit_data.resolved_path
+
+    # ── 2. PATH-LOCKED critical section (I/O, no state lock) ─────────────
+    with _acquire_path_lock(_Path(resolved_path)):
+        # 2a/2b. Preconditions & path validation
+        precond_err = _check_edit_preconditions(edit_data, operation_id)
+        if precond_err is not None:
+            return precond_err
+
+        # 2c. Snapshot from disk & PREPARED WAL record
+        snapshot = _create_snapshot_from_disk(resolved_path, "")
+        prep_err = _record_prepared_wal(edit_data, operation_id, snapshot)
+        if prep_err is not None:
+            return prep_err
+
+        # 2d/2e. Atomic write, verify digest & APPLIED WAL
+        apply_err, failure, recon_req, snap_restored, parent_fsynced = _execute_atomic_apply_and_wal(
+            edit_data, operation_id, snapshot
+        )
+        if apply_err is not None:
+            return apply_err
+
+    # ── 3. COMMIT (under state lock, no I/O) ─────────────────────────────
+    return _commit_accepted_edit(
+        edit_id=edit_id,
+        edit_data=edit_data,
+        operation_id=operation_id,
+        failure=failure,
+        reconciliation_required=recon_req,
+        snapshot_restored=snap_restored,
+        parent_fsynced=parent_fsynced,
+    )
+
+
 def reject_edit(edit_id: str, expected_version: int | None = None) -> TransactionResult:
+
     """Reject a single edit by ID using a safe claim-cancel-commit cycle.
 
     If the edit has a snapshot (from a prior failed accept), attempt

@@ -1,0 +1,15 @@
+{
+  "baseline_version": "1.0.0",
+  "generated_at_utc": "2026-08-14T09:26:34Z",
+  "target_commit": "e2eeff4f230206c643ff768c5fc315edfd37e75c",
+  "target_branch": "main",
+  "working_tree_dirty": true,
+  "host_platform": {
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "python_version": "3.14.3",
+    "python_implementation": "CPython"
+  },
+  "target_runtime_os": "Linux / Android (Termux) POSIX"
+}

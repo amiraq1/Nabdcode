@@ -61,7 +61,7 @@ def _slim_evidence_ledger(log: "EvidenceLog") -> list[dict[str, Any]]:
     return ledgers[-MAX_CHECKPOINT_EVIDENCE:]
 
 
-def _build_dispatcher(state: RuntimeState) -> "DispatcherProtocol":
+def _build_dispatcher(state: RuntimeState, tool_registry: Any = None, event_bus: Any = None) -> "DispatcherProtocol":
     """Lazily construct the concrete Dispatcher.
 
     Mirrors the DI seam in engine.loop: importing engine.deep_agent must not
@@ -69,7 +69,8 @@ def _build_dispatcher(state: RuntimeState) -> "DispatcherProtocol":
     load order, which keeps the import graph acyclic even under engine/__init__.
     """
     from engine.dispatcher import Dispatcher
-    return Dispatcher(state)
+    return Dispatcher(state, tool_registry=tool_registry, event_bus=event_bus)
+
 
 
 def extract_json_array(raw_output: str) -> list:
@@ -225,17 +226,22 @@ class NativeDeepAgent:
         clarify_callback: Callable[[str, list[str]], str] | None = None,
         dispatcher: DispatcherProtocol | None = None,
         evidence_log: EvidenceLog | None = None,
+        tool_registry: Any | None = None,
+        event_bus: Any | None = None,
     ) -> None:
         self.runtime_state = runtime_state
         self.llm = llm_client
         self.max_iterations = max_iterations
         self.hitl_callback = hitl_callback
         self.clarify_callback = clarify_callback
+        self.tool_registry = tool_registry
+        self.event_bus = event_bus
         # Dependency Injection: a dispatcher is injected if provided, otherwise
         # built lazily so importing engine.deep_agent never forces
         # engine.dispatcher -> engine.tool_registry -> tools.base to load first.
-        self.dispatcher = dispatcher or _build_dispatcher(runtime_state)
+        self.dispatcher = dispatcher or _build_dispatcher(runtime_state, tool_registry=tool_registry, event_bus=event_bus)
         self.evidence_log = evidence_log or EvidenceLog()
+
         # Phase3.2: True only for the FIRST execute_node call after an LMK
         # resume, so the mid-EXECUTE re-dispatch guard fires once (then cleared).
         self._resume_mode = False

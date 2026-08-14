@@ -60,17 +60,20 @@ def test_tool_started_and_completed_payload_contract(monkeypatch):
 
     # 1. Verify exact keys and types for tool_started payload
     started = started_payloads[0]
-    assert set(started.keys()) == {"tool", "args", "step"}
+    assert set(started.keys()) == {"tool", "args", "step", "session_id"}
     assert isinstance(started["tool"], str) and started["tool"] == "dummy_tool"
     assert isinstance(started["args"], dict) and started["args"] == {"param": "val"}
     assert isinstance(started["step"], int) and started["step"] == 3
+    assert started["session_id"] == "test_contract"
 
     # 2. Verify exact keys and types for tool_completed payload
     completed = completed_payloads[0]
-    assert set(completed.keys()) == {"tool", "result", "success", "returncode", "diff", "step"}
+    assert set(completed.keys()) == {"tool", "result", "success", "returncode", "diff", "step", "session_id"}
     assert isinstance(completed["tool"], str) and completed["tool"] == "dummy_tool"
     assert isinstance(completed["result"], ToolResult)
     assert isinstance(completed["success"], bool) and completed["success"] is True
     assert isinstance(completed["returncode"], int) and completed["returncode"] == 0
     assert isinstance(completed["diff"], str) and completed["diff"] == "+ hello"
     assert isinstance(completed["step"], int) and completed["step"] == 3
+    assert completed["session_id"] == "test_contract"
+

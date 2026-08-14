@@ -59,11 +59,14 @@ class EventBus:
                     return True
         return False
 
-    def emit(self, event_name: str, payload: Any = None):
+    def emit(self, event_name: str, payload: Any = None, session_id: str | None = None):
         """
         Emit an event to all subscribers.
-        Example: emit("tool_executed", {"tool": "shell", "status": "success"})
+        Example: emit("tool_executed", {"tool": "shell", "status": "success"}, session_id="abc")
         """
+        if isinstance(payload, dict) and session_id is not None and "session_id" not in payload:
+            payload["session_id"] = session_id
+
         if event_name in self._subscribers:
             # Use a snapshot of values to avoid concurrent modification
             for callback in list(self._subscribers[event_name].values()):

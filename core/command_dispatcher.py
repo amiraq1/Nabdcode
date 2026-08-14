@@ -51,17 +51,20 @@ def _cmd_undo(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
 def _cmd_scan(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
     from core.repo_scanner import SECURE_REPO_SCANNER
     from core.kernel.security import get_workspace_root
+    from core.ui_bridge import get_bridge
     try:
-        from rich.console import Console
-        from ui.widgets.scan_display import render_scan_result
-        render_scan_result(
-            Console(),
-            SECURE_REPO_SCANNER()._deep_scan(get_workspace_root()),
-        )
+        scan_data = SECURE_REPO_SCANNER()._deep_scan(get_workspace_root())
+        bridge = get_bridge()
+        if bridge and hasattr(bridge, "render_scan_result"):
+            bridge.render_scan_result(scan_data)
+        else:
+            total_f = scan_data.get("total_files", len(scan_data.get("files", [])))
+            sys.stdout.write(f"\n[Scan] Found {total_f} files in workspace.\n\n")
     except Exception as _scan_exc:
         sys.stdout.write(f"\n\033[91m⚠ deep scan failed: {_scan_exc}\033[0m\n\n")
     sys.stdout.flush()
     return True
+
 
 def _cmd_refactor(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
     parts = user_input.split()
@@ -190,7 +193,7 @@ def _cmd_fix(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
 def _cmd_expand(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
     parts = user_input.split(maxsplit=1)
     cid_arg = parts[1].strip() if len(parts) > 1 else ""
-    from ui.cc_style import CollapseStore, collapse_store
+    from core.kernel.collapse import CollapseStore, collapse_store
     if not cid_arg:
         ids = collapse_store.ids()
         if not ids:

@@ -137,15 +137,19 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         no_stream: bool = False,
         exact_action_mode: bool = False,
         consent_manager: Any | None = None,
+        tool_registry: Any | None = None,
+        event_bus: Any | None = None,
     ) -> None:
 
         self.state = state
         # NBD-05: one injected ConsentManager drives the whole loop; tests
         # inject a prompt function instead of env/stdin hacks.
         self.consent_manager = consent_manager or ConsentManager()
+        self.tool_registry = tool_registry
+        self.event_bus = event_bus
         # Dependency Injection: the dispatcher is injected (or built lazily) so
         # engine.loop never needs a module-level import of engine.dispatcher.
-        self.dispatcher = dispatcher or _build_dispatcher(state)
+        self.dispatcher = dispatcher or _build_dispatcher(state, tool_registry=tool_registry, event_bus=event_bus)
         self.llm_provider = llm_provider or _resolve_default_provider()
         self._verifier_provider = verifier_provider or _resolve_default_verifier()
         self._verifier_calls = 0  # step6: per-run budget for independent checker
@@ -685,7 +689,6 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         to the non-streaming path.
         """
         from core.sanitize import sanitize
-        from engine.loop import _normalize_response
         from llm_router import router as _router
 
         bus.emit("llm_request_started", {"step": self.state.step_count})
