@@ -93,6 +93,55 @@ class TestEngineCycleLint(unittest.TestCase):
         self.assertIs(agent.dispatcher.registry, reg)
         self.assertIs(agent.dispatcher.bus, eb)
 
+    def test_core_semantic_retriever_subsystem_is_acyclic(self):
+        """Validates CYC-03 resolution: core.hybrid_retriever, core.semantic_index, and core.storage
+
+        asserts no top-level circular import cycles exist between the three modules.
+        """
+        repo_root = Path(__file__).resolve().parent.parent
+        modules = ["core.hybrid_retriever", "core.semantic_index", "core.storage"]
+        graph: dict[str, set[str]] = {m: set() for m in modules}
+
+        for m in modules:
+            file_path = repo_root / Path(m.replace(".", "/") + ".py")
+            tree = ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))
+            for node in tree.body:
+                if isinstance(node, ast.If):
+                    if hasattr(node.test, "id") and node.test.id == "TYPE_CHECKING":
+                        continue
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name in modules:
+                            graph[m].add(alias.name)
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module in modules:
+                        graph[m].add(node.module)
+
+        # Detect cycles using DFS
+        visited: dict[str, int] = {m: 0 for m in graph}
+        detected_cycles: list[list[str]] = []
+
+        def dfs(node: str, path: list[str]):
+            visited[node] = 1
+            for neighbor in sorted(graph.get(node, set())):
+                if neighbor not in graph:
+                    continue
+                if visited.get(neighbor) == 1:
+                    cycle = path + [neighbor]
+                    detected_cycles.append(cycle[cycle.index(neighbor):])
+                elif visited.get(neighbor) == 0:
+                    dfs(neighbor, path + [neighbor])
+            visited[node] = 2
+
+        for m in graph:
+            if visited[m] == 0:
+                dfs(m, [m])
+
+        self.assertEqual(
+            len(detected_cycles),
+            0,
+            f"Detected circular import cycle in semantic retriever subsystem: {detected_cycles}",
+        )
 
 
 if __name__ == "__main__":
