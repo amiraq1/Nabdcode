@@ -1,5 +1,5 @@
 {
-  "commit": "e2eeff4f230206c643ff768c5fc315edfd37e75c",
+  "commit": "3f96d87eea1e633a29cee1821a306fb0c01f01c7",
   "policy": "Fail-closed — No silent skips permitted on core invariants",
   "documented_platform_constraints": [
     {

@@ -1,10 +1,10 @@
 {
-  "commit": "e2eeff4f230206c643ff768c5fc315edfd37e75c",
+  "commit": "3f96d87eea1e633a29cee1821a306fb0c01f01c7",
   "test_suite": {
     "total_test_files": 241,
-    "total_sync_test_functions": 2054,
+    "total_sync_test_functions": 2055,
     "total_async_test_functions": 2,
-    "total_test_functions": 2056,
+    "total_test_functions": 2057,
     "total_test_classes": 330,
     "async_test_details": [
       {
