@@ -165,3 +165,13 @@ def test_salt_is_created_and_stored(tmp_path: Path) -> None:
         assert salt_file.exists()
         mode = stat.S_IMODE(os.stat(salt_file).st_mode)
         assert mode == 0o600
+
+
+def test_noninteractive_mode_refuses_missing_key_without_prompt(
+    temp_config: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Automation must fail fast instead of blocking on getpass()."""
+    monkeypatch.setenv("NABD_NONINTERACTIVE", "1")
+
+    with pytest.raises(ValueError, match="non-interactive mode"):
+        temp_config.get_or_prompt_api_key("openrouter")

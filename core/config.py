@@ -29,10 +29,26 @@ def _clamp(val: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, val))
 
 
+def _noninteractive_mode() -> bool:
+    """Return whether prompting must be disabled for automation or CI."""
+    return os.getenv("NABD_NONINTERACTIVE", "").lower() in ("1", "true", "yes")
+
+
 # ── AES-256-GCM API key encryption ───────────────────────────────────────────
 
 CONFIG_DIR = Path.home() / ".config" / "nabdcode"
 SALT_FILE = CONFIG_DIR / ".salt"
+
+
+def _ensure_private_config_dir(path: Path) -> None:
+    """Create *path* and enforce owner-only access where the OS supports it."""
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        # Some filesystems (notably restricted/mobile mounts) do not support
+        # POSIX modes. File-level permissions remain enforced separately.
+        pass
 
 
 def _get_machine_id() -> str:
@@ -57,7 +73,7 @@ def _get_or_create_salt() -> bytes:
     if SALT_FILE.exists():
         return SALT_FILE.read_bytes()
     salt = secrets.token_bytes(32)
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_private_config_dir(CONFIG_DIR)
     SALT_FILE.write_bytes(salt)
     try:
         os.chmod(SALT_FILE, 0o600)
@@ -205,7 +221,7 @@ class ConfigManager:
         Creates the temp file directly with 0o600 permissions to eliminate
         permission TOCTOU windows, then atomically replaces config.json.
         """
-        self.config_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_private_config_dir(self.config_dir)
 
         # Encrypt API keys before writing to disk
         to_write = dict(data)
@@ -289,6 +305,12 @@ class ConfigManager:
         existing = self.get_api_key(provider)
         if existing:
             return existing
+
+        if _noninteractive_mode():
+            raise ValueError(
+                f"No API key provided for '{provider}' in non-interactive mode. "
+                "Set the key explicitly or configure a test provider."
+            )
 
         prompt = (
             "🔑 [NABD OS] API Key not found. "

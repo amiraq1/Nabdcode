@@ -62,6 +62,9 @@ The security model is **defense-in-depth**:
 - All LLM API calls (OpenRouter, OrcaRouter, NVIDIA) use HTTPS only.
 - Local model (Ollama) probing is **non-blocking** with a 2-second
   timeout; an absent server never stalls startup.
+- Set `NABD_NONINTERACTIVE=1` in CI or automation. When a required API key
+  is absent, `ConfigManager.get_or_prompt_api_key()` raises a clear error
+  instead of opening a `getpass` prompt or waiting for human input.
 
 ### 4. Filesystem
 
@@ -76,6 +79,18 @@ The security model is **defense-in-depth**:
   the terminal (buffered internally, expandable via Ctrl+O).
 - Raw tool-call JSON is stripped from final-answer rendering.
 
+### 6. Delegated Sub-agents
+
+- The `task` delegation path is intentionally **read-only**. A child loop
+  receives a separate runtime state and evidence log, a hard step budget,
+  and a filtered tool registry.
+- The child may use workspace file reads/lists, memory search, web search,
+  and code intelligence. It cannot edit files, execute shell commands, or
+  delegate another `task`.
+- The `file_system` capability is wrapped inside the child registry and
+  accepts only `read`, `read_many`, and `list`; attempted mutation actions
+  fail with status `policy_denied`.
+
 ## Security Hardening Checklist
 
 | Area | Mechanism | Location |
@@ -88,3 +103,5 @@ The security model is **defense-in-depth**:
 | Output redaction | Secret redaction in tool output | `core/sanitize.py`, `tools/shell.py` |
 | Reasoning leak | No-op thought display | `ui/repl_termux.py` |
 | Ollama boot | Async 2s probe | `core/llm.py` |
+| CI key handling | `NABD_NONINTERACTIVE=1` fails fast instead of prompting | `core/config.py`, `tests/conftest.py` |
+| Delegated tasks | Read-only registry + real step budget | `engine/subagent_policy.py`, `engine/subagent_runner.py` |

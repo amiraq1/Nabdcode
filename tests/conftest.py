@@ -14,6 +14,11 @@ registered extra ones), and that any test-registered tools are removed
 after each test function.
 """
 import os
+
+# Set this during collection, not only inside a fixture: some modules build
+# runtime objects while pytest imports them, before autouse fixtures run.
+os.environ.setdefault("NABD_NONINTERACTIVE", "1")
+
 import pytest
 from engine.tool_registry import registry
 
@@ -38,6 +43,8 @@ def _isolate_tool_registry():
     os.environ["TERM"] = "xterm-256color"
     saved_approve = os.environ.get("NABD_AUTO_APPROVE")
     os.environ["NABD_AUTO_APPROVE"] = "1"
+    saved_noninteractive = os.environ.get("NABD_NONINTERACTIVE")
+    os.environ["NABD_NONINTERACTIVE"] = "1"
     
     yield
     
@@ -49,6 +56,10 @@ def _isolate_tool_registry():
         os.environ.pop("NABD_AUTO_APPROVE", None)
     else:
         os.environ["NABD_AUTO_APPROVE"] = saved_approve
+    if saved_noninteractive is None:
+        os.environ.pop("NABD_NONINTERACTIVE", None)
+    else:
+        os.environ["NABD_NONINTERACTIVE"] = saved_noninteractive
     
     registry._tools = saved_tools
     core.kernel.security._WORKSPACE_ROOT = saved_root
