@@ -25,6 +25,7 @@ from core.todo import TodoManager
 from core.snapshot import SnapshotEngine
 from engine.renderer import Renderer
 from engine.tool_registry import registry
+from core.kernel.events import bus
 from tools import ShellTool, FileSystemTool, WebSearchTool, SearchMemoryTool, RagSearchTool, CodeIntelligenceTool, PythonREPLTool, TasteManagerTool, GraphifyTool, GraphIntelTool, GitTool
 from tools.todo import TodoWriteTool
 from tools.termux_monitor import TermuxMonitorTool
