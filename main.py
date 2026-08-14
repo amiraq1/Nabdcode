@@ -236,7 +236,6 @@ def _handle_one_shot_query(
 
         outcome = engine.run(one_shot_query)
         display_text = outcome.safe_message or outcome.final_answer or "(Session completed - no text returned)"
-        import sys
         if sys.stdout.isatty():
             from rich.console import Console
             import ui.cc_style as cc_style
