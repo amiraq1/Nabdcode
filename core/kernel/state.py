@@ -196,6 +196,10 @@ class RuntimeState:
     apply_authorized_revision: int = 0
     plan_audit: List[Dict[str, Any]] = field(default_factory=list)
     plan_mode_changed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    review_revision: int = 0
+    review_report: Dict[str, Any] = field(default_factory=dict)
+    review_test_status: str = "not_run"
+    review_approved_revision: int = 0
 
     def get_lock(self) -> Lock:
         return self._lock
@@ -241,6 +245,10 @@ class RuntimeState:
             self.plan_items = ()
             self.apply_authorized_revision = 0
             self.plan_audit.clear()
+            self.review_revision = 0
+            self.review_report = {}
+            self.review_test_status = "not_run"
+            self.review_approved_revision = 0
             self.plan_mode_changed_at = datetime.now(timezone.utc).isoformat()
             self.last_updated = datetime.now(timezone.utc).isoformat()
 

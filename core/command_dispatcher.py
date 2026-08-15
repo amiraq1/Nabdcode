@@ -227,7 +227,12 @@ def _print_plan_status(state: Any) -> None:
     revision = int(snapshot["revision"])
     items = list(snapshot["items"])
     approved = bool(snapshot["apply_authorized"])
-    sys.stdout.write(f"\n[Plan/Apply] mode={mode}; revision={revision}; apply_authorized={approved}\n")
+    review_status = snapshot.get("review_status", "not_run")
+    review_approved = bool(snapshot.get("review_approved", False))
+    sys.stdout.write(
+        f"\n[Plan/Apply] mode={mode}; revision={revision}; "
+        f"apply_authorized={approved}; review={review_status}; review_approved={review_approved}\n"
+    )
     if items:
         for index, item in enumerate(items, start=1):
             sys.stdout.write(f"  {index}. {item}\n")
@@ -287,6 +292,35 @@ def _cmd_mode(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
     return True
 
 
+def _cmd_review(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
+    """Show, run, or approve the diff/test review for the current plan."""
+    from core.diff_review import (
+        approve_review,
+        build_review,
+        format_review,
+        run_review_tests,
+        store_review,
+    )
+    from core.kernel.security import get_workspace_root
+
+    option = user_input[len("/review"):].strip().lower()
+    if option in {"approve", "accept"}:
+        ok, message = approve_review(state)
+        sys.stdout.write(f"\n[Review] {message}\n")
+    elif option in {"run", "check", "tests"}:
+        report = run_review_tests(build_review(state, get_workspace_root()), get_workspace_root())
+        store_review(state, report)
+        sys.stdout.write(f"\n{format_review(report)}\n")
+    else:
+        report = dict(getattr(state, "review_report", {}) or {})
+        if int(report.get("revision", 0) or 0) != int(getattr(state, "plan_revision", 0) or 0):
+            report = build_review(state, get_workspace_root())
+            store_review(state, report)
+        sys.stdout.write(f"\n{format_review(report)}\n")
+    sys.stdout.flush()
+    return True
+
+
 COMMANDS = {
     "clear": _cmd_clear, "/clear": _cmd_clear, "/reset": _cmd_clear, "/c": _cmd_clear,
     "/undo": _cmd_undo,
@@ -297,6 +331,7 @@ COMMANDS = {
     "/plan": _cmd_plan,
     "/apply": _cmd_apply,
     "/mode": _cmd_mode,
+    "/review": _cmd_review,
 }
 
 def process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
@@ -311,7 +346,7 @@ def process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str)
         
     for prefix in (
         "/undo", "/refactor", "nabd refactor", "/dag", "/resume",
-        "nabd resume", "/fix", "/expand", "/plan", "/apply", "/mode",
+        "nabd resume", "/fix", "/expand", "/plan", "/apply", "/mode", "/review",
     ):
         if lowered.startswith(prefix):
             return COMMANDS[prefix](user_input, state, ctx, base_inst)

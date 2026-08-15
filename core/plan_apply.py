@@ -76,12 +76,20 @@ def enter_plan_mode(state: Any) -> None:
     """Enter read-only planning and revoke approval for any prior plan."""
     _set_mode(state, PLAN_MODE)
     state.apply_authorized_revision = 0
+    state.review_revision = 0
+    state.review_report = {}
+    state.review_test_status = "not_run"
+    state.review_approved_revision = 0
 
 
 def return_to_normal_mode(state: Any) -> None:
     """Leave the explicit workflow without deleting the recorded plan."""
     _set_mode(state, NORMAL_MODE)
     state.apply_authorized_revision = 0
+    state.review_revision = 0
+    state.review_report = {}
+    state.review_test_status = "not_run"
+    state.review_approved_revision = 0
 
 
 def record_plan(state: Any, items: Iterable[object]) -> int:
@@ -94,6 +102,10 @@ def record_plan(state: Any, items: Iterable[object]) -> int:
     state.plan_revision = revision
     state.plan_items = clean_items
     state.apply_authorized_revision = 0
+    state.review_revision = 0
+    state.review_report = {}
+    state.review_test_status = "not_run"
+    state.review_approved_revision = 0
     state.plan_audit.append(
         {
             "event": "plan_recorded",
@@ -114,6 +126,10 @@ def authorize_apply(state: Any) -> tuple[bool, str]:
     revision = int(getattr(state, "plan_revision", 0) or 0)
     if revision <= 0 or not tuple(getattr(state, "plan_items", ()) or ()):
         return False, "No recorded plan exists. Run `/plan`, create a TODO plan, then retry `/apply`."
+
+    from core.diff_review import review_is_approved
+    if not review_is_approved(state):
+        return False, "Current plan has no approved diff/test review. Run `/review run`, inspect it, then `/review approve`."
 
     _set_mode(state, APPLY_MODE)
     state.apply_authorized_revision = revision
@@ -141,6 +157,8 @@ def plan_status(state: Any) -> dict[str, object]:
         "revision": int(getattr(state, "plan_revision", 0) or 0),
         "items": list(getattr(state, "plan_items", ()) or ()),
         "apply_authorized": apply_is_authorized(state),
+        "review_status": str(getattr(state, "review_test_status", "not_run")),
+        "review_approved": bool(getattr(state, "review_approved_revision", 0)) == int(getattr(state, "plan_revision", 0) or 0) and int(getattr(state, "plan_revision", 0) or 0) > 0,
     }
 
 
@@ -182,11 +200,15 @@ def runtime_tool_block_reason(tool_name: str, tool_args: object, state: Any) -> 
     if plan_reason:
         return plan_reason
 
-    if current_mode(state) == APPLY_MODE and not apply_is_authorized(state):
-        return (
-            "APPLY MODE is not authorized for the current plan revision. "
-            "Review the updated plan and run `/apply` again before tool execution."
-        )
+    if current_mode(state) == APPLY_MODE:
+        from core.diff_review import review_is_approved
+        if not review_is_approved(state):
+            return "APPLY MODE is not authorized: an approved diff/test review is required for the current plan revision."
+        if not apply_is_authorized(state):
+            return (
+                "APPLY MODE is not authorized for the current plan revision. "
+                "Review the updated plan and run `/apply` again before tool execution."
+            )
     return None
 
 
@@ -196,5 +218,9 @@ def reset_plan_apply(state: Any) -> None:
     state.plan_revision = 0
     state.plan_items = ()
     state.apply_authorized_revision = 0
-    state.plan_audit.clear()
+    state.review_revision = 0
+    state.review_report = {}
+    state.review_test_status = "not_run"
+    state.review_approved_revision = 0
+    state.plan_mode_changed_at = _now()
     state.plan_mode_changed_at = _now()
