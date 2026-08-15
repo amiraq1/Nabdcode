@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;800&family=Fira+Code&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #121212;
+            font-family: 'Cairo', sans-serif;
+            position: relative;
+        }
+        
+        .header {
+            text-align: center;
+            padding-top: 60px;
+            margin-bottom: 40px;
+        }
+        
+        h1 {
+            color: #FFFFFF;
+            font-weight: 800;
+            font-size: 54px;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            padding: 0 60px;
+        }
+
+        .text-col {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            justify-content: center;
+        }
+
+        .bullet-point {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .bullet-icon {
+            color: #BB86FC;
+            font-weight: 800;
+            font-size: 28px;
+            line-height: 1.2;
+        }
+
+        .bullet-text {
+            color: #B3B3B3;
+            font-weight: 400;
+            font-size: 26px;
+            line-height: 1.5;
+        }
+        
+        .highlight {
+            color: #03DAC6;
+            font-weight: 800;
+        }
+        
+        .code-inline {
+            font-family: 'Fira Code', monospace;
+            color: #BB86FC;
+            font-size: 22px;
+            direction: ltr;
+            display: inline-block;
+        }
+
+        .visual-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        .diagram-box {
+            border: 2px solid #333;
+            padding: 15px;
+            width: 90%;
+            text-align: center;
+            background: rgba(255,255,255,0.02);
+        }
+        
+        .diagram-title {
+            color: #FFFFFF;
+            font-weight: 800;
+            font-size: 22px;
+            margin-bottom: 5px;
+        }
+        
+        .diagram-code {
+            color: #B3B3B3;
+            font-size: 18px;
+            font-family: 'Fira Code', monospace;
+            direction: ltr;
+        }
+
+        .split-container {
+            display: flex;
+            width: 90%;
+            justify-content: space-between;
+            position: relative;
+        }
+
+        .split-path {
+            width: 45%;
+            border: 2px solid #BB86FC;
+            padding: 15px;
+            text-align: center;
+            background: rgba(187, 134, 252, 0.05);
+        }
+
+        .split-path.interactive {
+            border-color: #03DAC6;
+            background: rgba(3, 218, 198, 0.05);
+        }
+
+        .arrow-down {
+            color: #666;
+            font-size: 24px;
+            line-height: 1;
+        }
+
+        .lock-icon {
+            color: #E53935;
+            font-weight: 800;
+            font-size: 20px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>الحدث يسير عبر مسارين متكاملين</h1>
+        </div>
+        
+        <div class="content-grid">
+            <div class="text-col">
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="highlight">المسار المركزي:</span> يمر عبر <span class="code-inline">ui/event_wiring.py</span> إلى <span class="code-inline">Renderer</span>.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="highlight">المسار التفاعلي:</span> يمر عبر <span class="code-inline">ui/repl_termux.py</span> إلى <span class="code-inline">TerminalVisualizer</span>.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text">لا يملك المساران معًا الطرفية في اللحظة نفسها؛ <span class="highlight">العلم التشغيلي</span> يمنع الطباعة المزدوجة.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="highlight">النتيجة:</span> تجربة حيّة في REPL ومخرجات متسقة في نمط التنفيذ غير التفاعلي.</div>
+                </div>
+            </div>
+            
+            <div class="visual-col">
+                <div class="diagram-box" style="border-color: #FFFFFF;">
+                    <div class="diagram-title">مصدر الأحداث</div>
+                    <div class="diagram-code">EventBus</div>
+                </div>
+                
+                <div class="arrow-down">▼</div>
+                
+                <div class="split-container">
+                    <div class="split-path">
+                        <div class="diagram-title">المسار المركزي</div>
+                        <div class="diagram-code">event_wiring.py</div>
+                        <div class="arrow-down" style="margin: 5px 0;">▼</div>
+                        <div class="diagram-code">Renderer</div>
+                    </div>
+                    
+                    <div class="split-path interactive">
+                        <div class="diagram-title">المسار التفاعلي</div>
+                        <div class="diagram-code">repl_termux.py</div>
+                        <div class="arrow-down" style="margin: 5px 0;">▼</div>
+                        <div class="diagram-code">TerminalVisualizer</div>
+                    </div>
+                </div>
+                
+                <div class="lock-icon">[ حماية ضد الطباعة المزدوجة ]</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
