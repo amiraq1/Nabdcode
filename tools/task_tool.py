@@ -35,6 +35,13 @@ class TaskInput(BaseModel):
             "Delegated role: research, review, or implement. Unknown roles are rejected."
         ),
     )
+    task_id: Optional[str] = Field(
+        None,
+        description=(
+            "Optional existing Task Graph node ID. In PLAN mode, a missing ID may create "
+            "a read-only delegated node automatically; in APPLY mode it must already exist."
+        ),
+    )
     model: Optional[str] = Field(
         None, description="Override model for this sub-task (default: cheapest available)"
     )
@@ -80,11 +87,120 @@ class TaskTool(BaseTool):
 
         return _provider
 
+    def _begin_graph_task(
+        self,
+        parent_state: Any,
+        prompt: str,
+        role: str,
+        requested_task_id: Optional[str],
+    ) -> Optional[str]:
+        """Bind one delegated run to the current Task Graph, when present."""
+        if parent_state is None:
+            return None
+        graph = getattr(parent_state, "task_graph", None)
+        if graph is None:
+            return None
+
+        from core.plan_apply import PLAN_MODE, current_mode, start_task
+        from core.task_graph import TaskGraphError
+
+        mode = current_mode(parent_state)
+        if mode not in {PLAN_MODE, "apply"}:
+            raise TaskGraphError("delegated task requires PLAN or APPLY mode while a Task Graph is active")
+
+        task_id = str(requested_task_id or "").strip()
+        if not task_id:
+            if mode != PLAN_MODE or role == "implement":
+                raise TaskGraphError(
+                    "task_id is required for delegated work outside PLAN mode and for implement role"
+                )
+            sequence = len(graph.tasks()) + 1
+            task_id = f"delegated-r{getattr(parent_state, 'plan_revision', 0)}-{sequence}"
+            while True:
+                try:
+                    graph.get_task(task_id)
+                except TaskGraphError:
+                    break
+                sequence += 1
+                task_id = f"delegated-r{getattr(parent_state, 'plan_revision', 0)}-{sequence}"
+            graph.add_task(
+                task_id,
+                f"Delegated {role}: {str(prompt).strip()[:240]}",
+                role=role,
+                plan_revision=getattr(parent_state, "plan_revision", 0),
+            )
+            parent_state.plan_audit.append(
+                {
+                    "event": "delegated_task_added",
+                    "revision": getattr(parent_state, "plan_revision", 0),
+                    "task_id": task_id,
+                    "role": role,
+                }
+            )
+
+        node = start_task(parent_state, task_id, role=role)
+        parent_state.plan_audit.append(
+            {
+                "event": "delegated_task_started",
+                "revision": getattr(parent_state, "plan_revision", 0),
+                "task_id": node.task_id,
+                "role": node.role,
+            }
+        )
+        return node.task_id
+
+    def _fail_graph_task(self, parent_state: Any, task_id: Optional[str], reason: str) -> None:
+        if parent_state is None or not task_id:
+            return
+        from core.plan_apply import fail_task
+
+        try:
+            node = fail_task(parent_state, task_id, reason=reason)
+            parent_state.plan_audit.append(
+                {
+                    "event": "delegated_task_failed",
+                    "revision": getattr(parent_state, "plan_revision", 0),
+                    "task_id": node.task_id,
+                    "reason": str(reason)[:300],
+                }
+            )
+        except Exception:
+            # The original failure remains authoritative; lifecycle cleanup must
+            # never turn a denied/failed delegated call into an exception leak.
+            return
+
+    def _complete_graph_task(
+        self,
+        parent_state: Any,
+        task_id: Optional[str],
+        evidence_ids: list[str],
+    ) -> None:
+        if parent_state is None or not task_id:
+            return
+        from core.plan_apply import complete_task
+
+        node = complete_task(
+            parent_state,
+            task_id,
+            evidence_ids=evidence_ids,
+            reason="delegated task completed",
+        )
+        parent_state.plan_audit.append(
+            {
+                "event": "delegated_task_completed",
+                "revision": getattr(parent_state, "plan_revision", 0),
+                "task_id": node.task_id,
+                "evidence_ids": list(node.evidence_ids),
+            }
+        )
+
     def execute(
         self,
         prompt: str,
         role: str = "research",
+        task_id: Optional[str] = None,
         model: Optional[str] = None,
+        _parent_state: Any = None,
     ) -> ToolResult:
         """Called by the Dispatcher — transfers to a sub-ExecutionLoop.
 
@@ -92,9 +208,6 @@ class TaskTool(BaseTool):
         structured JSON summary. Never raises into the caller; failures become
         a ToolResult with ``success=False``.
         """
-        from core.evidence import EvidenceLog
-        from core.kernel.state import RuntimeState, GoalSpec
-        from engine.loop import ExecutionLoop
         from engine.subagent_policy import normalize_role
         from engine.subagent_runner import SubagentRunner
 
@@ -108,35 +221,77 @@ class TaskTool(BaseTool):
 
         try:
             role = normalize_role(role)
-            cheap_provider = self._cheap_provider(model)
+            graph_task_id = self._begin_graph_task(_parent_state, prompt, role, task_id)
         except Exception as exc:  # pragma: no cover - defensive
             return ToolResult(
                 success=False,
-                stderr=f"Failed to build sub-agent provider: {exc}",
+                stderr=f"Failed to prepare delegated task: {exc}",
                 returncode=-1,
-                status="error",
+                status="policy_denied",
+                metadata={"task_graph_task_id": str(task_id or "")},
             )
 
-        runner = SubagentRunner(
-            router=cheap_provider,
-            max_rounds=5,
-            timeout=60,
-            role=role,
-        )
-        result = runner.run(prompt)
-
-        if "error" in result and not result.get("result"):
+        try:
+            cheap_provider = self._cheap_provider(model)
+            runner = SubagentRunner(
+                router=cheap_provider,
+                max_rounds=5,
+                timeout=60,
+                role=role,
+            )
+            result = runner.run(prompt)
+        except Exception as exc:  # pragma: no cover - defensive
+            failure = f"Delegated task setup failed: {exc}"
+            self._fail_graph_task(_parent_state, graph_task_id, failure)
             return ToolResult(
                 success=False,
-                stderr=str(result.get("error", "Sub-agent failed")),
+                stderr=failure,
                 returncode=-1,
                 status="error",
+                metadata={"task_graph_task_id": graph_task_id or "", "task_graph_status": "failed"},
+            )
+
+        if "error" in result and not result.get("result"):
+            failure = str(result.get("error", "Sub-agent failed"))
+            self._fail_graph_task(_parent_state, graph_task_id, failure)
+            return ToolResult(
+                success=False,
+                stderr=failure,
+                returncode=-1,
+                status="error",
+                metadata={"task_graph_task_id": graph_task_id or "", "task_graph_status": "failed"},
+            )
+
+        evidence_ids = [str(item) for item in result.get("evidence", []) if str(item)]
+        if graph_task_id and not evidence_ids:
+            failure = "Delegated task returned no evidence; graph completion is denied."
+            self._fail_graph_task(_parent_state, graph_task_id, failure)
+            return ToolResult(
+                success=False,
+                stderr=failure,
+                returncode=-1,
+                status="evidence_missing",
+                metadata={"task_graph_task_id": graph_task_id, "task_graph_status": "failed"},
+            )
+        try:
+            self._complete_graph_task(_parent_state, graph_task_id, evidence_ids)
+        except Exception as exc:
+            failure = f"Task Graph completion denied: {exc}"
+            self._fail_graph_task(_parent_state, graph_task_id, failure)
+            return ToolResult(
+                success=False,
+                stderr=failure,
+                returncode=-1,
+                status="policy_denied",
+                metadata={"task_graph_task_id": graph_task_id or "", "task_graph_status": "failed"},
             )
 
         payload = json.dumps(
             {
                 "result": result.get("result", ""),
                 "role": result.get("role", role),
+                "task_graph_task_id": graph_task_id,
+                "task_graph_status": "completed" if graph_task_id else "untracked",
                 "files_read": result.get("files_read", []),
                 "tool_calls": result.get("tool_calls", 0),
                 "evidence_ids": result.get("evidence", []),
@@ -148,4 +303,9 @@ class TaskTool(BaseTool):
             stdout=payload,
             returncode=0,
             status="success",
+            metadata={
+                "task_graph_task_id": graph_task_id or "",
+                "task_graph_status": "completed" if graph_task_id else "untracked",
+                "evidence_ids": evidence_ids,
+            },
         )

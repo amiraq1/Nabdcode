@@ -102,7 +102,12 @@ class Dispatcher:
         # worker pool. Handle it directly and bypass admission control entirely.
         if tool_name == "task":
             try:
-                result = tool(**kwargs)
+                # Runtime state is an internal capability, never an LLM-facing
+                # tool argument. TaskTool uses it only to bind a delegated run
+                # to the current revision-bound Task Graph.
+                task_kwargs = dict(kwargs)
+                task_kwargs["_parent_state"] = self.state
+                result = tool.execute(**task_kwargs)
             except Exception as exc:
                 result = ToolResult(
                     success=False,

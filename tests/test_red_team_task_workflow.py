@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.kernel.state import RuntimeState
-from core.plan_apply import record_plan, start_task
+from core.plan_apply import enter_plan_mode, record_plan, start_task
 from core.task_graph import TaskGraphError, TaskStatus
 from engine.subagent_policy import RestrictedToolRegistry
 from tools.models import ToolResult
@@ -48,6 +48,7 @@ class _Tool:
 
 def test_red_team_implement_cannot_forge_apply_through_workflow_facade():
     state = RuntimeState("red-team-implement")
+    enter_plan_mode(state)
     record_plan(state, ["Apply guarded change"])
     state.task_graph.add_task("apply", "mutate workspace", role="implement")
 
@@ -59,6 +60,7 @@ def test_red_team_implement_cannot_forge_apply_through_workflow_facade():
 
 def test_red_team_role_confusion_is_rejected_at_authority_seam():
     state = RuntimeState("red-team-role")
+    enter_plan_mode(state)
     record_plan(state, ["Research only"])
     state.task_graph.add_task("inspect", "read source", role="research")
 
@@ -70,6 +72,7 @@ def test_red_team_role_confusion_is_rejected_at_authority_seam():
 
 def test_red_team_new_revision_discards_old_graph_nodes():
     state = RuntimeState("red-team-stale")
+    enter_plan_mode(state)
     record_plan(state, ["Original scope"])
     state.task_graph.add_task("legacy", "old task", role="research")
     old_graph = state.task_graph

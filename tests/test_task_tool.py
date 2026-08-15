@@ -16,15 +16,18 @@ class TestTaskTool:
         schema = tool.args_schema
         assert issubclass(schema, BaseModel)
         assert "prompt" in schema.model_fields
+        assert "task_id" in schema.model_fields
 
     def test_task_input_schema(self):
         """TaskInput requires prompt, accepts optional model."""
         ti = TaskInput(prompt="count the py files")
         assert ti.prompt == "count the py files"
         assert ti.model is None
+        assert ti.task_id is None
         # model override
-        ti2 = TaskInput(prompt="x", model="google/gemini-2.5-flash")
+        ti2 = TaskInput(prompt="x", task_id="review-config", model="google/gemini-2.5-flash")
         assert ti2.model == "google/gemini-2.5-flash"
+        assert ti2.task_id == "review-config"
 
     def test_execute_empty_prompt_rejected(self):
         """Empty prompt must fail fast without spawning a sub-loop."""
