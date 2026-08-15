@@ -154,6 +154,26 @@ def apply_is_authorized(state: Any) -> bool:
     ) == revision
 
 
+def start_task(state: Any, task_id: str, *, role: str) -> Any:
+    """Move one ready graph task to running through the Plan/Apply authority seam.
+
+    The caller cannot forge an Apply boolean: authorization is derived from the
+    current runtime state and handed to the graph with the current revision.
+    This function does not execute a tool; it only records a permitted task
+    lifecycle transition.
+    """
+    graph = getattr(state, "task_graph", None)
+    if graph is None:
+        raise ValueError("No Task Graph exists for the current plan revision.")
+    revision = int(getattr(state, "plan_revision", 0) or 0)
+    return graph.mark_running(
+        task_id,
+        plan_revision=revision,
+        role=role,
+        apply_authorized=apply_is_authorized(state),
+    )
+
+
 def plan_status(state: Any) -> dict[str, object]:
     """Return a JSON-friendly snapshot suitable for commands and UI surfaces."""
     return {
