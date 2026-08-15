@@ -94,8 +94,14 @@ def display_path(path: str | Path, *, workspace_root: Path | None = None,
         if is_workspace_pinned():
             workspace_root = get_workspace_root()
         else:
-            # No workspace: reveal only the final component in normal mode.
-            return str(p.name) if not diagnostic else str(p.resolve())
+            # No workspace pinned: keep a relative path intact (the caller may
+            # be showing a project-relative path like "core/task_graph.py").
+            # An absolute path is privacy-sensitive → hide it entirely.
+            if not p.is_absolute():
+                return p.as_posix()
+            if not diagnostic:
+                return "<outside-workspace>"
+            return str(p.resolve())
 
     try:
         root = Path(workspace_root).resolve()

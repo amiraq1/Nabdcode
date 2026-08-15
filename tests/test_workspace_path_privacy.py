@@ -85,10 +85,26 @@ def test_display_path_windows_diagnostic_reveals(env):
 
 # ── display_path: no workspace pinned ──────────────────────────────────────
 
-def test_display_path_no_workspace_returns_basename(env):
+def test_display_path_no_workspace_relative_kept_intact(env):
+    """Without a pinned workspace, relative multi-segment paths stay intact."""
     pin_workspace_root(None)
     assert not is_workspace_pinned()
-    assert display_path("/home/alice/private/secret.txt") == "secret.txt"
+    assert display_path("core/task_graph.py") == "core/task_graph.py"
+    assert display_path("src/app.py") == "src/app.py"
+
+
+def test_display_path_no_workspace_abs_hidden(env):
+    """Without a pinned workspace, an absolute path is hidden entirely."""
+    pin_workspace_root(None)
+    assert not is_workspace_pinned()
+    assert display_path("/home/alice/private/secret.txt") == "<outside-workspace>"
+
+
+def test_display_path_no_workspace_abs_diagnostic_reveals(env):
+    """Diagnostic mode reveals the absolute path even without a workspace."""
+    pin_workspace_root(None)
+    assert not is_workspace_pinned()
+    assert display_path("/home/alice/private/secret.txt", diagnostic=True) == "/home/alice/private/secret.txt"
 
 
 # ── scrub_absolute_paths: shell output privacy ─────────────────────────────
