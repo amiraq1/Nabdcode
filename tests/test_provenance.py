@@ -56,6 +56,18 @@ def _is_quarantined(sha: str, known: set[str]) -> bool:
     return any(low.startswith(entry) for entry in known)
 
 
+def _quarantine_records() -> list[tuple[str, str]]:
+    """Return declared-debt entries and their required human-readable reasons."""
+    records: list[tuple[str, str]] = []
+    for line in QUARANTINE.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        sha, separator, reason = stripped.partition("#")
+        records.append((sha.strip().lower(), reason.strip() if separator else ""))
+    return records
+
+
 def _contaminated(cwd: Path | None = None) -> dict[str, list[str]]:
     """Every reachable commit whose message carries foreign provenance.
 
@@ -99,6 +111,24 @@ def test_no_foreign_provenance_outside_quarantine() -> None:
             for sha, hits in sorted(unknown.items())
         )
     )
+
+
+def test_quarantine_records_are_unique_documented_and_nonambiguous() -> None:
+    """Declared debt is documented and unambiguous, including in shallow clones."""
+    records = _quarantine_records()
+    entries = [sha for sha, _reason in records]
+    assert len(entries) == len(set(entries)), "quarantine contains duplicate commit prefixes"
+    assert all(re.fullmatch(r"[0-9a-f]{7,40}", sha) for sha in entries)
+    assert all(reason for _sha, reason in records), "every quarantine entry needs a reason"
+
+    # A development or CI checkout may be shallow, so historical debt can be
+    # unavailable locally. When a matching reachable commit exists, its prefix
+    # must still be unambiguous; otherwise the exact documented record remains
+    # the audit reference and the no-new-contamination guards continue to run.
+    contaminated = _contaminated()
+    for entry in entries:
+        matches = [sha for sha in contaminated if sha.startswith(entry)]
+        assert len(matches) <= 1, f"quarantine entry {entry} is ambiguous"
 
 
 def test_quarantine_does_not_grow_silently():
