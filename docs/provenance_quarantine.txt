@@ -34,3 +34,8 @@ b0b6251  # Architectural refactor: evidence verification, AppContext, TODO syste
 # Going forward, assistant commits are made WITHOUT the trailer (repo policy).
 478766d  # Am+8 Persistent UI: جعل شريط الحالة مرئياً بعد انتهاء المهمة
 e9c447e  # Am+8 Protocol Debt Batch 1: استبدال 5 ألوان خام بثوابت دلالية
+
+# 2026-08-15 — HUMAN DECISION: historical local-main commit was reachable
+# through the preserved pre-sync branch and carries the legacy wrapper trailer.
+# It is recorded as declared debt rather than rewriting published history.
+5b743e8  # fix(main): remove local import sys that shadowed module-level sys

@@ -81,15 +81,22 @@ The security model is **defense-in-depth**:
 
 ### 6. Delegated Sub-agents
 
-- The `task` delegation path is intentionally **read-only**. A child loop
-  receives a separate runtime state and evidence log, a hard step budget,
-  and a filtered tool registry.
-- The child may use workspace file reads/lists, memory search, web search,
-  and code intelligence. It cannot edit files, execute shell commands, or
-  delegate another `task`.
-- The `file_system` capability is wrapped inside the child registry and
-  accepts only `read`, `read_many`, and `list`; attempted mutation actions
-  fail with status `policy_denied`.
+- The `task` delegation path is role-based and **closed-world**. A child loop
+  receives a separate runtime state and evidence log, a hard step budget, and a
+  filtered tool registry. Adding a tool to the global registry never grants it
+  to a delegated role.
+- `research` is the default role and can use only workspace reads/lists,
+  memory search, web search, and code intelligence. `review` has the same
+  read-only surface and is intended for risk, diff, and test assessment.
+- `implement` is the only delegated role with access to `file_system`,
+  `execute_shell`, and `todo_write`, plus read-oriented analysis tools. It
+  cannot invoke `task` itself, and every mutation remains subject to the
+  normal Dispatcher consent and Plan/Apply gates; the role is not an approval
+  bypass.
+- Unknown role names are rejected before a child loop starts. For `research`
+  and `review`, the `file_system` capability is wrapped inside the child
+  registry and accepts only `read`, `read_many`, and `list`; attempted mutation
+  actions fail with status `policy_denied`.
 
 ### 7. Explicit Plan/Apply Workflow
 
@@ -119,7 +126,7 @@ The security model is **defense-in-depth**:
 | Ollama boot | Async 2s probe | `core/llm.py` |
 | CI key handling | `NABD_NONINTERACTIVE=1` fails fast instead of prompting | `core/config.py`, `tests/conftest.py` |
 | Plan/Apply | Runtime allowlist in Plan; revision-bound Apply authorization | `core/plan_apply.py`, `engine/_dispatch.py` |
-| Delegated tasks | Read-only registry + real step budget | `engine/subagent_policy.py`, `engine/subagent_runner.py` |
+| Delegated tasks | Role allowlists, read-only defaults, no nested delegation, real step budget | `engine/subagent_policy.py`, `engine/subagent_runner.py`, `tools/task_tool.py` |
 
 ### 8. Pre-Apply Diff and Test Review
 
