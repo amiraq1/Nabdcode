@@ -62,6 +62,42 @@ class _ToolDispatchMixin:
         rejected/approved) and the caller should return early. Returns ``False``
         when execution should proceed to dispatch.
         """
+        # ── Explicit Plan/Apply policy ─────────────────────────────────────
+        # This is a runtime gate, not a prompt hint: a model cannot bypass it
+        # by choosing a write-capable tool while the operator is reviewing.
+        from core.plan_apply import runtime_tool_block_reason
+
+        _plan_block = runtime_tool_block_reason(tool_name, tool_args, self.state)
+        if _plan_block:
+            _result = ToolResult(
+                success=False,
+                stdout="",
+                stderr=_plan_block,
+                returncode=-1,
+                status="policy_denied",
+                metadata={"blocked_by": "plan_mode"},
+            )
+            self.evidence_log.record(
+                tool=tool_name,
+                command_or_path=_extract_cmd_or_path(tool_args),
+                success=False,
+                output_snippet=_plan_block,
+                action=(
+                    str((tool_args or {}).get("action", ""))
+                    if isinstance(tool_args, dict)
+                    else ""
+                ),
+            )
+            _output = truncate(_result.output or _result.stderr or "", self.max_output_len)
+            _feedback = self._build_tool_feedback(_result, tool_name, tool_args, _output)
+            self.state.append_message({
+                "role": "system",
+                "content": f"[TOOL RESULT: {tool_name}]\n{_feedback}",
+            })
+            self.state.increment_step()
+            time.sleep(self.POLL_DELAY)
+            return True
+
         # ── Consent Loop (Phase 2 Public Release Protocol) ──────────────────
         # NBD-05: ONE injected ConsentManager instance drives the whole loop
         # (tests replace its prompt function without env/stdin hacks).
@@ -272,6 +308,23 @@ class _ToolDispatchMixin:
 
             if _todo_sig and self._ctx is not None:
                 self._ctx.last_todo_sig = _todo_sig
+
+        # A plan created through the agent's ordinary TODO tool becomes the
+        # revision that `/apply` can authorize.  Recording a new revision
+        # invalidates any previous authorization by design.
+        if (
+            tool_name == "todo_write"
+            and isinstance(tool_args, dict)
+            and tool_args.get("action") == "plan"
+            and getattr(result, "success", False)
+        ):
+            from core.plan_apply import record_plan
+
+            _revision = record_plan(self.state, tool_args.get("items") or [])
+            _metadata = dict(getattr(result, "metadata", None) or {})
+            _metadata["plan_revision"] = _revision
+            result.metadata = _metadata
+
         # ── Evidence Recording ───────────────────────────────────────────────
         cmd_summary = _extract_cmd_or_path(tool_args)
         # PATCH-R4.4: Extract workspace_relative_path from tool post-execution

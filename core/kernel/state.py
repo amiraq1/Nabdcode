@@ -188,6 +188,14 @@ class RuntimeState:
     past_steps_summary: str = ""
     compacted_memory: List[str] = field(default_factory=list)
     tool_interactions: list = field(default_factory=list)
+    # Explicit Plan/Apply workflow.  The dispatcher enforces this state; it is
+    # not merely a UI hint or a prompt-level instruction.
+    operation_mode: str = "normal"
+    plan_revision: int = 0
+    plan_items: Tuple[str, ...] = field(default_factory=tuple)
+    apply_authorized_revision: int = 0
+    plan_audit: List[Dict[str, Any]] = field(default_factory=list)
+    plan_mode_changed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def get_lock(self) -> Lock:
         return self._lock
@@ -228,6 +236,12 @@ class RuntimeState:
             self.compacted_memory.clear()
             self.tool_interactions.clear()
             self.active_goal = None
+            self.operation_mode = "normal"
+            self.plan_revision = 0
+            self.plan_items = ()
+            self.apply_authorized_revision = 0
+            self.plan_audit.clear()
+            self.plan_mode_changed_at = datetime.now(timezone.utc).isoformat()
             self.last_updated = datetime.now(timezone.utc).isoformat()
 
     def get_last_message(self) -> Dict[str, str] | None:
@@ -290,4 +304,10 @@ class RuntimeState:
                 "messages": list(self.messages),
                 "last_updated": self.last_updated,
                 "start_time": self.start_time.isoformat() if isinstance(self.start_time, datetime) else str(self.start_time),
+                "operation_mode": self.operation_mode,
+                "plan_revision": self.plan_revision,
+                "plan_items": list(self.plan_items),
+                "apply_authorized_revision": self.apply_authorized_revision,
+                "plan_audit": list(self.plan_audit),
+                "plan_mode_changed_at": self.plan_mode_changed_at,
             }

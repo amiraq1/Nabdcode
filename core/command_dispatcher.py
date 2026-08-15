@@ -219,13 +219,84 @@ def _cmd_expand(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
     sys.stdout.flush()
     return True
 
+def _print_plan_status(state: Any) -> None:
+    from core.plan_apply import plan_status
+
+    snapshot = plan_status(state)
+    mode = str(snapshot["mode"]).upper()
+    revision = int(snapshot["revision"])
+    items = list(snapshot["items"])
+    approved = bool(snapshot["apply_authorized"])
+    sys.stdout.write(f"\n[Plan/Apply] mode={mode}; revision={revision}; apply_authorized={approved}\n")
+    if items:
+        for index, item in enumerate(items, start=1):
+            sys.stdout.write(f"  {index}. {item}\n")
+    else:
+        sys.stdout.write("  (no recorded plan)\n")
+    sys.stdout.flush()
+
+
+def _cmd_plan(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
+    """Enter explicit read-only planning or display the current plan record."""
+    from core.plan_apply import (
+        PLAN_MODE_INSTRUCTION,
+        enter_plan_mode,
+        return_to_normal_mode,
+        synchronize_mode_context,
+    )
+
+    option = user_input[len("/plan"):].strip().lower()
+    if option in {"status", "show"}:
+        _print_plan_status(state)
+        return True
+    if option in {"off", "normal", "exit"}:
+        return_to_normal_mode(state)
+        synchronize_mode_context(state, None)
+        sys.stdout.write("\n[Plan/Apply] Returned to NORMAL mode.\n")
+        sys.stdout.flush()
+        return True
+
+    enter_plan_mode(state)
+    synchronize_mode_context(state, PLAN_MODE_INSTRUCTION)
+    sys.stdout.write(
+        "\n[Plan/Apply] PLAN mode active. Workspace exploration is read-only. "
+        "Ask the agent to inspect and record a TODO plan; run /apply only after review.\n"
+    )
+    sys.stdout.flush()
+    return True
+
+
+def _cmd_apply(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
+    """Authorize the currently recorded plan revision for gated execution."""
+    from core.plan_apply import APPLY_MODE_INSTRUCTION, authorize_apply, synchronize_mode_context
+
+    ok, message = authorize_apply(state)
+    if not ok:
+        sys.stdout.write(f"\n[Plan/Apply] APPLY refused: {message}\n")
+        sys.stdout.flush()
+        return True
+
+    synchronize_mode_context(state, APPLY_MODE_INSTRUCTION)
+    sys.stdout.write(f"\n[Plan/Apply] {message} Existing consent and edit gates remain active.\n")
+    sys.stdout.flush()
+    return True
+
+
+def _cmd_mode(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
+    _print_plan_status(state)
+    return True
+
+
 COMMANDS = {
     "clear": _cmd_clear, "/clear": _cmd_clear, "/reset": _cmd_clear, "/c": _cmd_clear,
     "/undo": _cmd_undo,
     "فحص": _cmd_scan, "فحص مستودع": _cmd_scan, "scan": _cmd_scan, "scan repo": _cmd_scan, "/deep-scan": _cmd_scan,
     "/refactor": _cmd_refactor, "nabd refactor": _cmd_refactor, "/dag": _cmd_refactor, "/resume": _cmd_refactor, "nabd resume": _cmd_refactor,
     "/fix": _cmd_fix,
-    "/expand": _cmd_expand
+    "/expand": _cmd_expand,
+    "/plan": _cmd_plan,
+    "/apply": _cmd_apply,
+    "/mode": _cmd_mode,
 }
 
 def process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
@@ -238,7 +309,10 @@ def process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str)
     if stripped in COMMANDS:
         return COMMANDS[stripped](user_input, state, ctx, base_inst)
         
-    for prefix in ("/undo", "/refactor", "nabd refactor", "/dag", "/resume", "nabd resume", "/fix", "/expand"):
+    for prefix in (
+        "/undo", "/refactor", "nabd refactor", "/dag", "/resume",
+        "nabd resume", "/fix", "/expand", "/plan", "/apply", "/mode",
+    ):
         if lowered.startswith(prefix):
             return COMMANDS[prefix](user_input, state, ctx, base_inst)
             
