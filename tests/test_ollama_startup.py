@@ -31,12 +31,23 @@ class TestOllamaStartup:
         assert elapsed < 0.5, f"check_ollama_async blocked for {elapsed:.2f}s"
 
     def test_probe_thread_is_daemon(self):
-        """The probe thread must be a daemon so it never blocks exit."""
-        threads_before = {t.ident for t in threading.enumerate()}
-        check_ollama_async()
-        new_threads = [t for t in threading.enumerate() if t.ident not in threads_before]
-        assert new_threads, "Expected a new probe thread"
-        assert all(t.daemon for t in new_threads)
+        """The probe thread is configured as daemon without timing-sensitive enumeration."""
+        captured = {}
+
+        class _ProbeThread:
+            def __init__(self, *, target, daemon):
+                captured["target"] = target
+                captured["daemon"] = daemon
+
+            def start(self):
+                captured["started"] = True
+
+        with patch.object(llm.threading, "Thread", _ProbeThread):
+            check_ollama_async()
+
+        assert callable(captured.get("target"))
+        assert captured.get("daemon") is True
+        assert captured.get("started") is True
 
     def test_timeout_2_seconds_max(self):
         """The probe timeout must not exceed 2 seconds."""
