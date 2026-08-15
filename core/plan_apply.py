@@ -207,6 +207,46 @@ def fail_task(state: Any, task_id: str, *, reason: str) -> Any:
     return graph.mark_failed(task_id, reason=reason)
 
 
+def task_graph_live_status(state: Any) -> str | None:
+    """Return a bounded, read-only Task Graph summary for terminal status UI."""
+    from core.sanitize import sanitize
+
+    def _display_id(value: object) -> str:
+        return sanitize(str(value), preserve_tabs=False)[:48]
+
+    graph = getattr(state, "task_graph", None)
+    if graph is None:
+        return None
+    snapshot = graph.to_dict()
+    tasks = list(snapshot.get("tasks", []))
+    counts: dict[str, int] = {}
+    for task in tasks:
+        status = str(task.get("status", "unknown"))
+        counts[status] = counts.get(status, 0) + 1
+
+    running = [task for task in tasks if task.get("status") == "running"]
+    active = "-"
+    if running:
+        active_task = running[0]
+        active = (
+            f"{_display_id(active_task.get('task_id', '?'))}/"
+            f"{_display_id(active_task.get('role', '?'))}"
+        )
+
+    ready = [_display_id(task.get("task_id")) for task in tasks if task.get("status") == "ready"]
+    ready_display = ",".join(ready[:3]) if ready else "-"
+    if len(ready) > 3:
+        ready_display += "+"
+    evidence_count = sum(len(task.get("evidence_ids", [])) for task in tasks)
+    return (
+        f"TaskGraph r{snapshot.get('plan_revision', 0)} "
+        f"mode={current_mode(state)} active={active} "
+        f"ready={ready_display} blocked={counts.get('blocked', 0)} "
+        f"done={counts.get('completed', 0)} failed={counts.get('failed', 0)} "
+        f"evidence={evidence_count}"
+    )
+
+
 def plan_status(state: Any) -> dict[str, object]:
     """Return a JSON-friendly snapshot suitable for commands and UI surfaces."""
     return {
