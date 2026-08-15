@@ -91,6 +91,20 @@ The security model is **defense-in-depth**:
   accepts only `read`, `read_many`, and `list`; attempted mutation actions
   fail with status `policy_denied`.
 
+### 7. Explicit Plan/Apply Workflow
+
+- Run `/plan` to enter a runtime-enforced, read-only review phase. The agent
+  can explore the workspace and create `todo_write(action='plan')`, but cannot
+  execute shell commands, edit files, delegate work, or invoke unknown tools.
+- A successful TODO plan becomes an auditable numbered revision in
+  `RuntimeState.plan_audit`. Recording a new plan invalidates any previous
+  Apply authorization.
+- Run `/apply` only after reviewing the recorded plan. It approves the current
+  revision exactly; normal consent and per-edit approval gates still apply to
+  every sensitive action.
+- Run `/mode` or `/plan status` to inspect the active mode and plan revision;
+  run `/plan off` to leave the explicit workflow without deleting the record.
+
 ## Security Hardening Checklist
 
 | Area | Mechanism | Location |
@@ -104,4 +118,5 @@ The security model is **defense-in-depth**:
 | Reasoning leak | No-op thought display | `ui/repl_termux.py` |
 | Ollama boot | Async 2s probe | `core/llm.py` |
 | CI key handling | `NABD_NONINTERACTIVE=1` fails fast instead of prompting | `core/config.py`, `tests/conftest.py` |
+| Plan/Apply | Runtime allowlist in Plan; revision-bound Apply authorization | `core/plan_apply.py`, `engine/_dispatch.py` |
 | Delegated tasks | Read-only registry + real step budget | `engine/subagent_policy.py`, `engine/subagent_runner.py` |
