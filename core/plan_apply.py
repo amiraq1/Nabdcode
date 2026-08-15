@@ -163,6 +163,8 @@ def start_task(state: Any, task_id: str, *, role: str) -> Any:
     lifecycle transition.
     """
     graph = getattr(state, "task_graph", None)
+    if current_mode(state) not in {PLAN_MODE, APPLY_MODE}:
+        raise ValueError("Task start requires PLAN or APPLY mode.")
     if graph is None:
         raise ValueError("No Task Graph exists for the current plan revision.")
     revision = int(getattr(state, "plan_revision", 0) or 0)
