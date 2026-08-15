@@ -120,3 +120,17 @@ The security model is **defense-in-depth**:
 | CI key handling | `NABD_NONINTERACTIVE=1` fails fast instead of prompting | `core/config.py`, `tests/conftest.py` |
 | Plan/Apply | Runtime allowlist in Plan; revision-bound Apply authorization | `core/plan_apply.py`, `engine/_dispatch.py` |
 | Delegated tasks | Read-only registry + real step budget | `engine/subagent_policy.py`, `engine/subagent_runner.py` |
+
+### 8. Pre-Apply Diff and Test Review
+
+- Run `/review` to inspect the current plan revision, affected pending-edit paths, addition/removal counts, redacted diff previews, and a conservative risk level.
+- Run `/review run` to execute only repository-local pytest files selected from affected paths. The runner uses `python -m pytest`, never a shell string or a model-supplied command, and sets `NABD_NONINTERACTIVE=1`.
+- Run `/review approve` only after inspecting the report. Apply authorization is bound to the exact plan revision and requires passing selected tests, or an explicit `not_applicable` result when no affected-file test exists.
+- Recording a new TODO plan invalidates the review and requires a new `/review run` and `/review approve` cycle.
+- `/mode` exposes `review`, `review_approved`, and `apply_authorized` fields. Diff previews redact values resembling API keys, tokens, passwords, secrets, or authorization headers.
+
+| Review gate | Enforcement | Location |
+|---|---|---|
+| Diff/test review before Apply | Revision-bound approval and test status | `core/diff_review.py`, `core/plan_apply.py` |
+| Central tool enforcement | Reject Apply without current review | `engine/_dispatch.py` |
+| Operator commands | `/review`, `/review run`, `/review approve` | `core/command_dispatcher.py` |

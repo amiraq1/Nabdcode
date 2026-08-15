@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from core.command_dispatcher import process_slash_command
 from core.evidence import EvidenceLog
+from core.diff_review import approve_review, build_review, store_review
 from core.kernel.state import RuntimeState
 from core.plan_apply import (
     APPLY_MODE,
@@ -20,6 +21,12 @@ from core.plan_apply import (
 )
 from engine._dispatch import _ToolDispatchMixin
 from tools.models import ToolResult
+
+
+def _approve_current_review(state: RuntimeState) -> None:
+    store_review(state, build_review(state))
+    ok, message = approve_review(state)
+    assert ok is True, message
 
 
 def test_plan_mode_is_allowlist_based_for_tools() -> None:
@@ -46,6 +53,7 @@ def test_apply_requires_recorded_plan_and_is_revision_bound() -> None:
 
     enter_plan_mode(state)
     assert record_plan(state, ["Inspect module", "Propose diff"]) == 1
+    _approve_current_review(state)
     ok, _ = authorize_apply(state)
     assert ok is True
     assert state.operation_mode == APPLY_MODE
@@ -89,6 +97,8 @@ def test_explicit_slash_commands_drive_state_and_prompt(capsys) -> None:
     assert "APPLY refused" in capsys.readouterr().out
 
     record_plan(state, ["Read the target file"])
+    assert process_slash_command("/review run", state, ctx, "base") is True
+    assert process_slash_command("/review approve", state, ctx, "base") is True
     assert process_slash_command("/apply", state, ctx, "base") is True
     assert state.operation_mode == APPLY_MODE
     assert apply_is_authorized(state) is True
@@ -157,5 +167,6 @@ def test_dispatch_records_todo_plan_as_a_revision() -> None:
     assert result.success is True
     assert result.metadata["plan_revision"] == 1
     assert harness.state.plan_items == ("Inspect config", "Write tests")
+    _approve_current_review(harness.state)
     ok, _ = authorize_apply(harness.state)
     assert ok is True
