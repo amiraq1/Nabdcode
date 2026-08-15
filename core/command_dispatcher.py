@@ -292,6 +292,32 @@ def _cmd_mode(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
     return True
 
 
+def _cmd_tasks(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
+    """Display the current Task Graph; this command is intentionally read-only."""
+    graph = getattr(state, "task_graph", None)
+    if graph is None:
+        sys.stdout.write("\n[Tasks] No Task Graph exists for the current plan revision.\n")
+        sys.stdout.flush()
+        return True
+
+    snapshot = graph.to_dict()
+    sys.stdout.write(
+        f"\n[Tasks] plan_revision={snapshot['plan_revision']} "
+        f"count={len(snapshot['tasks'])}\n"
+    )
+    if not snapshot["tasks"]:
+        sys.stdout.write("  (no graph nodes recorded)\n")
+    else:
+        for task in snapshot["tasks"]:
+            deps = ", ".join(task["depends_on"]) or "-"
+            sys.stdout.write(
+                f"  {task['task_id']}: status={task['status']} "
+                f"role={task['role']} depends_on={deps}\n"
+            )
+    sys.stdout.flush()
+    return True
+
+
 def _cmd_review(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
     """Show, run, or approve the diff/test review for the current plan."""
     from core.diff_review import (
@@ -331,6 +357,7 @@ COMMANDS = {
     "/plan": _cmd_plan,
     "/apply": _cmd_apply,
     "/mode": _cmd_mode,
+    "/tasks": _cmd_tasks,
     "/review": _cmd_review,
 }
 
@@ -346,7 +373,7 @@ def process_slash_command(user_input: str, state: Any, ctx: Any, base_inst: str)
         
     for prefix in (
         "/undo", "/refactor", "nabd refactor", "/dag", "/resume",
-        "nabd resume", "/fix", "/expand", "/plan", "/apply", "/mode", "/review",
+        "nabd resume", "/fix", "/expand", "/plan", "/apply", "/mode", "/tasks", "/review",
     ):
         if lowered.startswith(prefix):
             return COMMANDS[prefix](user_input, state, ctx, base_inst)

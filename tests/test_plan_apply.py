@@ -53,6 +53,7 @@ def test_apply_requires_recorded_plan_and_is_revision_bound() -> None:
 
     enter_plan_mode(state)
     assert record_plan(state, ["Inspect module", "Propose diff"]) == 1
+    assert state.task_graph.plan_revision == 1
     _approve_current_review(state)
     ok, _ = authorize_apply(state)
     assert ok is True
@@ -60,7 +61,10 @@ def test_apply_requires_recorded_plan_and_is_revision_bound() -> None:
     assert apply_is_authorized(state) is True
 
     # A revised plan revokes approval and returns the workflow to review state.
+    old_graph = state.task_graph
     assert record_plan(state, ["Inspect module", "Propose safer diff"]) == 2
+    assert state.task_graph is not old_graph
+    assert state.task_graph.plan_revision == 2
     assert apply_is_authorized(state) is False
     assert state.apply_authorized_revision == 0
     assert "not authorized" in runtime_tool_block_reason(
@@ -82,6 +86,7 @@ def test_clear_context_resets_plan_apply_state() -> None:
     assert state.plan_items == ()
     assert state.apply_authorized_revision == 0
     assert state.plan_audit == []
+    assert state.task_graph is None
 
 
 def test_explicit_slash_commands_drive_state_and_prompt(capsys) -> None:
@@ -170,3 +175,18 @@ def test_dispatch_records_todo_plan_as_a_revision() -> None:
     _approve_current_review(harness.state)
     ok, _ = authorize_apply(harness.state)
     assert ok is True
+
+
+def test_tasks_command_is_read_only_and_displays_graph(capsys):
+    state = RuntimeState("tasks-command")
+    record_plan(state, ["Inspect", "Implement"])
+    state.task_graph.add_task("inspect", "Inspect repository", role="research")
+    state.task_graph.add_task("implement", "Implement change", depends_on=["inspect"], role="implement")
+    ctx = SimpleNamespace()
+
+    assert process_slash_command("/tasks", state, ctx, "base") is True
+    output = capsys.readouterr().out
+    assert "plan_revision=1" in output
+    assert "inspect: status=ready role=research" in output
+    assert "implement: status=pending role=implement depends_on=inspect" in output
+    assert state.task_graph.get_task("inspect").status.value == "ready"
