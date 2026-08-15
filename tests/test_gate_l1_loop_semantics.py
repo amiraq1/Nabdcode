@@ -14,23 +14,23 @@ class TestGateL1TruthTableSemantics(TestCase):
         ('engine/_tool_runner.py', 62, 'FINAL_ANSWER'),
         ('engine/_tool_runner.py', 132, 'CONTINUE'),
         ('engine/_tool_runner.py', 144, 'PROCEED'),
-        ('engine/loop.py', 387, 'TERMINATE'),
-        ('engine/loop.py', 388, 'CONTINUE'),
-        ('engine/loop.py', 811, 'TERMINATE'),
-        ('engine/loop.py', 832, 'TERMINATE'),
-        ('engine/loop.py', 836, 'PROCEED'),
-        ('engine/loop.py', 918, 'CONTINUE'),
-        ('engine/loop.py', 923, 'CONTINUE'),
-        ('engine/loop.py', 925, 'PROCEED'),
-        ('engine/loop.py', 960, 'CONTINUE'),
-        ('engine/loop.py', 966, 'PROCEED'),
-        ('engine/loop.py', 1000, 'CONTINUE'),
-        ('engine/loop.py', 1022, 'CONTINUE'),
-        ('engine/loop.py', 1025, 'PROCEED'),
-        ('engine/loop.py', 1058, 'PROCEED'),
-        ('engine/loop.py', 1680, 'TERMINATE'),
+        ('engine/loop.py', 391, 'TERMINATE'),
+        ('engine/loop.py', 392, 'CONTINUE'),
+        ('engine/loop.py', 814, 'TERMINATE'),
+        ('engine/loop.py', 835, 'TERMINATE'),
+        ('engine/loop.py', 839, 'PROCEED'),
+        ('engine/loop.py', 921, 'CONTINUE'),
+        ('engine/loop.py', 926, 'CONTINUE'),
+        ('engine/loop.py', 928, 'PROCEED'),
+        ('engine/loop.py', 963, 'CONTINUE'),
+        ('engine/loop.py', 969, 'PROCEED'),
+        ('engine/loop.py', 1003, 'CONTINUE'),
+        ('engine/loop.py', 1025, 'CONTINUE'),
+        ('engine/loop.py', 1028, 'PROCEED'),
+        ('engine/loop.py', 1061, 'PROCEED'),
         ('engine/loop.py', 1683, 'TERMINATE'),
-        ('engine/loop.py', 1701, 'CONTINUE'),
+        ('engine/loop.py', 1686, 'TERMINATE'),
+        ('engine/loop.py', 1704, 'CONTINUE'),
     ]
 
     def test_truth_table_every_return_site_enumerated(self):
@@ -87,9 +87,9 @@ class TestGateL1TruthTableSemantics(TestCase):
         """Retry decrements happen strictly around CONTINUE paths like _note_provider_failure."""
         with open("engine/loop.py") as f:
             lines = f.read().splitlines()
-        line_term = lines[386]  # loop.py line 387 returns TERMINATE
+        line_term = lines[390]  # loop.py line 391 returns TERMINATE
         self.assertIn("TERMINATE", line_term)
-        line_cont = lines[387]  # loop.py line 388 returns CONTINUE
+        line_cont = lines[391]  # loop.py line 392 returns CONTINUE
         self.assertIn("CONTINUE", line_cont)
     
     def test_no_dual_terminal_outcome(self):

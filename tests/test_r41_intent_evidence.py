@@ -11,8 +11,10 @@ Run:  PYTHONPATH=/data/data/com.termux/files/home/smart-agent \
 import os
 import sys
 import unittest
+from pathlib import Path
 
-PROJECT_ROOT = "/data/data/com.termux/files/home/smart-agent"
+# Keep the test runnable in Termux, CI, and a local checkout alike.
+PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 

@@ -2,3 +2,4 @@
 #   python -m pip install -r requirements-test.txt
 # Tests must run fully offline: no API keys, no network, no interactive prompts.
 pytest>=7.0
+pytest-mock>=3.12
