@@ -514,12 +514,16 @@ def _run_repl(
     from core.plan_apply import APPLY_MODE, PLAN_MODE, current_mode, task_graph_live_status
 
     def _prompt_chrome() -> HTML:
+        from engine.ui_theme import term_width
         mode = current_mode(state)
         task_summary = task_graph_live_status(state) or ""
         hint = workflow_prompt_hint(mode, task_summary)
         hint_html = html.escape(hint).replace("\n", "<br/>")
         color = "ansigreen" if mode == APPLY_MODE else ("ansiyellow" if mode == PLAN_MODE else "ansimagenta")
-        rule = "─" * 48
+        # Dynamic rule: fit the terminal width so a 50-column Termux screen
+        # never tears mid-glyph.  Clamp to a sane maximum.
+        width = max(20, min(term_width(), 120))
+        rule = "─" * width
 
         # Stage 3 (UI plan): a compact context bar above the prompt with
         # workspace root + mode + graph status — from real state only.
@@ -536,11 +540,14 @@ def _run_repl(
             ws_label = "no workspace selected"
         ws_html = html.escape(ws_label)
         mode_label = "normal" if mode not in (APPLY_MODE, PLAN_MODE) else mode
+
+        # Context line: on narrow screens the graph summary is the first
+        # thing dropped so the workspace + mode never tear mid-word.
         graph_part = ""
-        if task_summary:
-            # task_summary already contains "TaskGraph rX ..." — show only
-            # the mode + ready/active portion to keep the line compact.
-            graph_part = f"  ·  {html.escape(task_summary)}"
+        if task_summary and width >= 70:
+            # task_summary already contains "TaskGraph rX ..." — keep only
+            # a bounded fragment to avoid wrapping on narrow terminals.
+            graph_part = f"  ·  {html.escape(task_summary[:60])}"
         ctx_line = (
             f"<style fg='grey'>workspace: {ws_html}  ·  mode: {mode_label}</style>"
             f"<style fg='grey'>{graph_part}</style>"

@@ -85,8 +85,9 @@ def test_prompt_chrome_hides_graph_when_absent():
     import main
     import inspect
     src = inspect.getsource(main._run_repl)
-    # graph_part is only filled when task_summary is truthy.
-    assert "if task_summary:" in src
+    # graph_part is only filled when task_summary is truthy AND the
+    # terminal is wide enough (narrow Termux screens drop it).
+    assert "if task_summary and width >= 70:" in src
 
 
 if __name__ == "__main__":
