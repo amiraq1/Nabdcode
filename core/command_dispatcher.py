@@ -1,4 +1,5 @@
 import sys
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -293,27 +294,154 @@ def _cmd_mode(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
 
 
 def _cmd_tasks(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
-    """Display the current Task Graph; this command is intentionally read-only."""
-    graph = getattr(state, "task_graph", None)
-    if graph is None:
-        sys.stdout.write("\n[Tasks] No Task Graph exists for the current plan revision.\n")
+    """Operate the Task Graph only through constrained, auditable transitions."""
+    from core.plan_apply import (
+        APPLY_MODE,
+        PLAN_MODE,
+        complete_task,
+        current_mode,
+        fail_task,
+        start_task,
+    )
+    from core.task_graph import TaskGraphError
+
+    remainder = user_input[len("/tasks"):].strip()
+    try:
+        tokens = shlex.split(remainder) if remainder else []
+    except ValueError as exc:
+        sys.stdout.write(f"\n[Tasks] Invalid quoting: {exc}\n")
         sys.stdout.flush()
         return True
 
-    snapshot = graph.to_dict()
-    sys.stdout.write(
-        f"\n[Tasks] plan_revision={snapshot['plan_revision']} "
-        f"count={len(snapshot['tasks'])}\n"
-    )
-    if not snapshot["tasks"]:
-        sys.stdout.write("  (no graph nodes recorded)\n")
-    else:
-        for task in snapshot["tasks"]:
-            deps = ", ".join(task["depends_on"]) or "-"
+    graph = getattr(state, "task_graph", None)
+    if not tokens or tokens[0] in {"show", "list"}:
+        if graph is None:
+            sys.stdout.write("\n[Tasks] No Task Graph exists for the current plan revision.\n")
+        else:
+            snapshot = graph.to_dict()
             sys.stdout.write(
-                f"  {task['task_id']}: status={task['status']} "
-                f"role={task['role']} depends_on={deps}\n"
+                f"\n[Tasks] plan_revision={snapshot['plan_revision']} "
+                f"count={len(snapshot['tasks'])}\n"
             )
+            if not snapshot["tasks"]:
+                sys.stdout.write("  (no graph nodes recorded)\n")
+            for task in snapshot["tasks"]:
+                deps = ", ".join(task["depends_on"]) or "-"
+                sys.stdout.write(
+                    f"  {task['task_id']}: status={task['status']} "
+                    f"role={task['role']} depends_on={deps}\n"
+                )
+        sys.stdout.flush()
+        return True
+
+    action = tokens[0].lower()
+    if action in {"help", "?"}:
+        sys.stdout.write(
+            "\n[Tasks] Commands:\n"
+            "  /tasks\n"
+            "  /tasks ready\n"
+            "  /tasks add <id> <research|review|implement> <description> [--depends id,id]\n"
+            "  /tasks start <id> <role>\n"
+            "  /tasks complete <id> <evidence-id> [evidence-id ...]\n"
+            "  /tasks fail <id> <reason>\n"
+        )
+        sys.stdout.flush()
+        return True
+
+    if graph is None:
+        sys.stdout.write("\n[Tasks] Refused: create a Plan/Apply plan first.\n")
+        sys.stdout.flush()
+        return True
+
+    try:
+        if action == "ready":
+            ready = graph.ready_tasks(plan_revision=getattr(state, "plan_revision", 0))
+            sys.stdout.write("\n[Tasks] Ready nodes:\n")
+            if not ready:
+                sys.stdout.write("  (none)\n")
+            for node in ready:
+                sys.stdout.write(f"  {node.task_id}: role={node.role} — {node.description}\n")
+
+        elif action == "add":
+            if current_mode(state) != PLAN_MODE:
+                raise TaskGraphError("task creation is allowed only in PLAN mode")
+            if len(tokens) < 4:
+                raise TaskGraphError("usage: /tasks add <id> <role> <description> [--depends id,id]")
+            task_id, role = tokens[1], tokens[2]
+            payload = tokens[3:]
+            dependencies: list[str] = []
+            if "--depends" in payload:
+                marker = payload.index("--depends")
+                if marker == len(payload) - 1:
+                    raise TaskGraphError("--depends requires a comma-separated task id list")
+                dependencies = [item.strip() for item in payload[marker + 1].split(",") if item.strip()]
+                payload = payload[:marker]
+            description = " ".join(payload).strip()
+            node = graph.add_task(
+                task_id,
+                description,
+                role=role,
+                depends_on=dependencies,
+                plan_revision=getattr(state, "plan_revision", 0),
+            )
+            state.plan_audit.append(
+                {
+                    "event": "task_added",
+                    "revision": getattr(state, "plan_revision", 0),
+                    "task_id": node.task_id,
+                    "role": node.role,
+                    "depends_on": list(node.depends_on),
+                }
+            )
+            sys.stdout.write(f"\n[Tasks] Added {node.task_id} (role={node.role}).\n")
+
+        elif action == "start":
+            if len(tokens) != 3:
+                raise TaskGraphError("usage: /tasks start <id> <role>")
+            if current_mode(state) not in {PLAN_MODE, APPLY_MODE}:
+                raise TaskGraphError("task start requires PLAN or APPLY mode")
+            node = start_task(state, tokens[1], role=tokens[2])
+            state.plan_audit.append(
+                {
+                    "event": "task_started",
+                    "revision": getattr(state, "plan_revision", 0),
+                    "task_id": node.task_id,
+                    "role": node.role,
+                }
+            )
+            sys.stdout.write(f"\n[Tasks] Started {node.task_id} (role={node.role}).\n")
+
+        elif action == "complete":
+            if len(tokens) < 3:
+                raise TaskGraphError("usage: /tasks complete <id> <evidence-id> [evidence-id ...]")
+            node = complete_task(state, tokens[1], evidence_ids=tokens[2:])
+            state.plan_audit.append(
+                {
+                    "event": "task_completed",
+                    "revision": getattr(state, "plan_revision", 0),
+                    "task_id": node.task_id,
+                    "evidence_ids": list(node.evidence_ids),
+                }
+            )
+            sys.stdout.write(f"\n[Tasks] Completed {node.task_id}.\n")
+
+        elif action == "fail":
+            if len(tokens) < 3:
+                raise TaskGraphError("usage: /tasks fail <id> <reason>")
+            node = fail_task(state, tokens[1], reason=" ".join(tokens[2:]))
+            state.plan_audit.append(
+                {
+                    "event": "task_failed",
+                    "revision": getattr(state, "plan_revision", 0),
+                    "task_id": node.task_id,
+                }
+            )
+            sys.stdout.write(f"\n[Tasks] Failed {node.task_id}; dependents were re-evaluated.\n")
+
+        else:
+            raise TaskGraphError("unknown action; run /tasks help")
+    except (TaskGraphError, ValueError) as exc:
+        sys.stdout.write(f"\n[Tasks] Refused: {exc}\n")
     sys.stdout.flush()
     return True
 
