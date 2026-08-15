@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;800&family=Fira+Code&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #121212;
+            font-family: 'Cairo', sans-serif;
+            position: relative;
+        }
+        
+        .header {
+            text-align: center;
+            padding-top: 60px; /* do not change upper padding */
+            margin-bottom: 40px; /* reduced to save height */
+        }
+        
+        h1 {
+            color: #FFFFFF;
+            font-weight: 800;
+            font-size: 54px;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px; /* moderate horizontal gap */
+            padding: 0 60px; /* reduced horizontal padding */
+        }
+
+        .text-col {
+            display: flex;
+            flex-direction: column;
+            gap: 18px; /* reduced vertical gap between bullets */
+            justify-content: center;
+        }
+
+        .bullet-point {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px; /* reduced inner gap */
+        }
+
+        .bullet-icon {
+            color: #BB86FC;
+            font-weight: 800;
+            font-size: 28px;
+            line-height: 1.2;
+        }
+
+        .bullet-text {
+            color: #B3B3B3;
+            font-weight: 400;
+            font-size: 26px; /* font sizes must not change */
+            line-height: 1.5; /* slightly reduced line-height */
+        }
+        
+        .highlight {
+            color: #03DAC6;
+            font-weight: 800;
+        }
+        
+        .code-inline {
+            font-family: 'Fira Code', monospace;
+            color: #BB86FC;
+            font-size: 22px;
+            direction: ltr;
+            display: inline-block;
+        }
+
+        .visual-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px; /* reduced gap between boxes and arrows */
+        }
+
+        .layer-box {
+            border: 2px solid #333;
+            padding: 10px; /* reduced padding to shrink box height */
+            width: 80%;
+            text-align: center;
+            position: relative;
+            background: rgba(255,255,255,0.02);
+        }
+        
+        .layer-box.active {
+            border-color: #03DAC6;
+        }
+        
+        .layer-title {
+            color: #FFFFFF;
+            font-weight: 800;
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        
+        .layer-desc {
+            color: #B3B3B3;
+            font-size: 18px;
+            font-family: 'Fira Code', monospace;
+            direction: ltr;
+        }
+        
+        .arrow {
+            color: #BB86FC;
+            font-size: 24px;
+            line-height: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>أربع طبقات تفصل المعنى عن الرسم</h1>
+        </div>
+        
+        <div class="content-grid">
+            <div class="text-col">
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="highlight">طبقة الأحداث:</span> رصد <span class="code-inline">tool_started</span> و <span class="code-inline">tool_completed</span>.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="highlight">طبقة الدلالة:</span> تصنيف العملية إلى READ أو EDIT أو SHELL أو TASK بناءً على الفعل.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="highlight">طبقة التنسيق:</span> استخراج السياق وبناء الشارة والرأس الملون.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="highlight">طبقة العرض:</span> طباعة آمنة ومخزنة مؤقتًا عبر <span class="code-inline">Renderer</span> أو <span class="code-inline">TerminalVisualizer</span>.</div>
+                </div>
+            </div>
+            
+            <div class="visual-col">
+                <div class="layer-box">
+                    <div class="layer-title">الأحداث (Events)</div>
+                    <div class="layer-desc">EventBus / loop thread</div>
+                </div>
+                <div class="arrow">▼</div>
+                <div class="layer-box">
+                    <div class="layer-title">الدلالة (Semantics)</div>
+                    <div class="layer-desc">map_tool_to_badge()</div>
+                </div>
+                <div class="arrow">▼</div>
+                <div class="layer-box">
+                    <div class="layer-title">التنسيق (Formatting)</div>
+                    <div class="layer-desc">tool_header()</div>
+                </div>
+                <div class="arrow">▼</div>
+                <div class="layer-box active">
+                    <div class="layer-title">العرض (Display)</div>
+                    <div class="layer-desc">Renderer.flush()</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

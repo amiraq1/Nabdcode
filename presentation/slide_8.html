@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;800&family=Fira+Code&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #121212;
+            font-family: 'Cairo', sans-serif;
+            position: relative;
+        }
+        
+        .header {
+            text-align: center;
+            padding-top: 60px;
+            margin-bottom: 60px;
+        }
+        
+        h1 {
+            color: #FFFFFF;
+            font-weight: 800;
+            font-size: 54px;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 50px;
+            padding: 0 70px;
+        }
+
+        .text-col {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+            justify-content: center;
+        }
+
+        .bullet-point {
+            display: flex;
+            align-items: flex-start;
+            gap: 15px;
+        }
+
+        .bullet-icon {
+            color: #BB86FC;
+            font-weight: 800;
+            font-size: 28px;
+            line-height: 1.2;
+        }
+
+        .bullet-text {
+            color: #B3B3B3;
+            font-weight: 400;
+            font-size: 26px;
+            line-height: 1.5;
+        }
+        
+        .highlight {
+            color: #03DAC6;
+            font-weight: 800;
+        }
+        
+        .code-inline {
+            font-family: 'Fira Code', monospace;
+            color: #BB86FC;
+            font-size: 22px;
+            direction: ltr;
+            display: inline-block;
+        }
+
+        .visual-col {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .terminal-mockup {
+            background-color: #0A0A0A;
+            border: 1px solid #333;
+            width: 100%;
+            padding: 25px;
+            font-family: 'Fira Code', monospace;
+            direction: ltr;
+            text-align: left;
+        }
+        
+        .term-line {
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        
+        .term-badge {
+            background-color: #BB86FC;
+            color: #000;
+            padding: 2px 8px;
+            font-weight: bold;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        
+        .term-badge.edit { background-color: #03DAC6; }
+        .term-badge.task { background-color: #E6E6E6; }
+        
+        .term-path { color: #B3B3B3; }
+        .term-dim { color: #666; margin-left: 8px; }
+        .term-tree { color: #5A5A64; margin-right: 8px; }
+        .term-diff-add { color: #4ADE80; }
+        .term-diff-del { color: #F87171; }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>الإكمال يعرض الدليل لا الضجيج</h1>
+        </div>
+        
+        <div class="content-grid">
+            <div class="text-col">
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="code-inline">tool_completed</span> يبني ملخصًا قصيرًا بدل تمرير مخرجات خام طويلة إلى الطرفية.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text">القراءة تعرض <span class="highlight">عدد الأسطر</span>؛ shell يعرض الأمر وعدد السطور؛ التعديل يعرض <span class="highlight">diff محدودًا وملونًا</span>.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="code-inline">TASK</span> يعرض الدور وحالة العقدة وعدد الأدلة من <span class="code-inline">ToolResult.metadata</span>.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text">تبقى المخرجات الطويلة محفوظة وقابلة للتوسيع عبر <span class="highlight">Ctrl+O</span>.</div>
+                </div>
+            </div>
+            
+            <div class="visual-col">
+                <div class="terminal-mockup">
+                    <div class="term-line">
+                        <span class="term-badge">READ</span> <span class="term-path">[core/llm.py]</span>
+                    </div>
+                    <div class="term-line">
+                        <span class="term-tree">└</span><span class="term-dim">382 lines</span>
+                    </div>
+                    
+                    <div class="term-line" style="margin-top: 20px;">
+                        <span class="term-badge edit">EDIT</span> <span class="term-path">[engine/renderer.py]</span>
+                    </div>
+                    <div class="term-line">
+                        <span class="term-tree">└</span><span class="term-dim">Updated with +2 -1</span>
+                    </div>
+                    <div class="term-line">
+                        <span class="term-tree">└</span><span class="term-diff-del">-        self._lines.append(text)</span>
+                    </div>
+                    <div class="term-line">
+                        <span class="term-tree">└</span><span class="term-diff-add">+        with self._lock:</span>
+                    </div>
+                    <div class="term-line">
+                        <span class="term-tree">└</span><span class="term-diff-add">+            self._lines.append(text)</span>
+                    </div>
+                    
+                    <div class="term-line" style="margin-top: 20px;">
+                        <span class="term-badge task">TASK</span> <span class="term-path">[review] check diff</span>
+                    </div>
+                    <div class="term-line">
+                        <span class="term-tree">└</span><span class="term-dim">review · completed · node=review-1 · evidence=2</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

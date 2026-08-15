@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;800&family=Fira+Code&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #121212;
+            font-family: 'Cairo', sans-serif;
+            position: relative;
+        }
+        
+        .header {
+            text-align: center;
+            padding-top: 60px; /* keep upper padding */
+            margin-bottom: 16px; /* reduced to save vertical space */
+        }
+        
+        h1 {
+            color: #FFFFFF;
+            font-weight: 800;
+            font-size: 54px;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            padding: 0 60px;
+        }
+
+        .text-col {
+            display: flex;
+            flex-direction: column;
+            gap: 10px; /* reduced spacing between bullets */
+            justify-content: center;
+        }
+
+        .bullet-point {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .bullet-icon {
+            color: #BB86FC;
+            font-weight: 800;
+            font-size: 28px;
+            line-height: 1.2;
+        }
+
+        .bullet-text {
+            color: #B3B3B3;
+            font-weight: 400;
+            font-size: 26px;
+            line-height: 1.5;
+        }
+        
+        .highlight {
+            color: #03DAC6;
+            font-weight: 800;
+        }
+        
+        .code-inline {
+            font-family: 'Fira Code', monospace;
+            color: #BB86FC;
+            font-size: 22px;
+            direction: ltr;
+            display: inline-block;
+        }
+
+        .visual-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .code-block {
+            background-color: #0A0A0A;
+            border: 1px solid #333;
+            border-left: 4px solid #03DAC6;
+            width: 100%;
+            padding: 16px; /* reduced padding to save height */
+            font-family: 'Fira Code', monospace;
+            direction: ltr;
+            text-align: left;
+            color: #B3B3B3;
+            font-size: 20px;
+            line-height: 1.8;
+        }
+        
+        .func-name {
+            color: #BB86FC;
+            font-weight: bold;
+        }
+        
+        .func-arg {
+            color: #03DAC6;
+        }
+        
+        .comment {
+            color: #666;
+        }
+        
+        .indent-1 { margin-left: 20px; }
+        .indent-2 { margin-left: 40px; }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>دوال صغيرة تؤلف رأسًا واحدًا</h1>
+        </div>
+        
+        <div class="content-grid">
+            <div class="text-col">
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="code-inline">Renderer.tool_start()</span> يجمع النوع والتفصيل ثم يضيف السطر إلى مخزن المخرجات.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="code-inline">_format_args()</span> يكيّف التفاصيل حسب نوع الشارة، بما في ذلك الدور وعقدة Task Graph.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text"><span class="code-inline">tool_header()</span> يرسم شارة ANSI ومسارًا بلون سياقي وبيانات إضافية محدودة.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text">في REPL، ينتج <span class="code-inline">tool_header_line()</span> النص ثم يطبّق <span class="code-inline">BADGE_STYLE</span> عند الطباعة.</div>
+                </div>
+            </div>
+            
+            <div class="visual-col">
+                <div class="code-block">
+                    <div><span class="comment"># Central Rendering Path</span></div>
+                    <div><span class="func-name">def</span> <span class="func-arg">tool_start</span>(tool, args):</div>
+                    <div class="indent-1">kind = <span class="func-name">map_tool_to_badge</span>(tool, args)</div>
+                    <div class="indent-1">detail, extra = <span class="func-name">_format_args</span>(kind, tool, args)</div>
+                    <div class="indent-1">header = <span class="func-name">tool_header</span>(kind, detail, extra)</div>
+                    <div class="indent-1">self.<span class="func-name">_lines_append</span>(header)</div>
+                    <div><span class="comment"># REPL Interactive Path</span></div>
+                    <div><span class="func-name">def</span> <span class="func-arg">on_tool_started</span>(data):</div>
+                    <div class="indent-1">header = <span class="func-name">tool_header_line</span>(tool_name, args)</div>
+                    <div class="indent-1">console.<span class="func-name">print</span>(f"[{BADGE_STYLE}] {header}")</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

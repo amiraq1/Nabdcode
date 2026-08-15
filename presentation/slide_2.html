@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;800&family=Fira+Code&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #121212;
+            font-family: 'Cairo', sans-serif;
+            position: relative;
+        }
+        
+        .header {
+            text-align: center;
+            padding-top: 60px;
+            margin-bottom: 80px;
+        }
+        
+        h1 {
+            color: #FFFFFF;
+            font-weight: 800;
+            font-size: 54px;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 60px;
+            padding: 0 80px;
+        }
+
+        .text-col {
+            display: flex;
+            flex-direction: column;
+            gap: 40px;
+            justify-content: center;
+        }
+
+        .bullet-point {
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+        }
+
+        .bullet-icon {
+            color: #BB86FC;
+            font-weight: 800;
+            font-size: 28px;
+            line-height: 1.2;
+        }
+
+        .bullet-text {
+            color: #B3B3B3;
+            font-weight: 400;
+            font-size: 28px;
+            line-height: 1.6;
+        }
+        
+        .highlight {
+            color: #03DAC6;
+            font-weight: 800;
+        }
+
+        .visual-col {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .terminal-mockup {
+            background-color: #0A0A0A;
+            border: 1px solid #333;
+            width: 100%;
+            padding: 30px;
+            font-family: 'Fira Code', monospace;
+            direction: ltr;
+            text-align: left;
+        }
+        
+        .term-line {
+            margin-bottom: 20px;
+            font-size: 20px;
+        }
+        
+        .term-badge {
+            background-color: #BB86FC;
+            color: #000;
+            padding: 2px 10px;
+            font-weight: bold;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        
+        .term-badge.edit {
+            background-color: #03DAC6;
+        }
+        
+        .term-path {
+            color: #B3B3B3;
+        }
+        
+        .term-dim {
+            color: #666;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>الشارة تجعل الفعل قابلاً للمسح البصري</h1>
+        </div>
+        
+        <div class="content-grid">
+            <div class="text-col">
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text">الهدف ليس عرض اسم تقني للأداة، بل توضيح <span class="highlight">أثرها الفعلي</span>: قراءة، تعديل، تشغيل، تفويض.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text">الرأس يربط الشارة <span class="highlight">بسياق صغير</span>: المسار أو الأمر أو الاستعلام أو عقدة المهمة.</div>
+                </div>
+                
+                <div class="bullet-point">
+                    <div class="bullet-icon">[ ]</div>
+                    <div class="bullet-text">النتيجة هي تسلسل طرفي <span class="highlight">سريع القراءة</span>، مناسب للمراجعة على شاشة صغيرة.</div>
+                </div>
+            </div>
+            
+            <div class="visual-col">
+                <div class="terminal-mockup">
+                    <div class="term-line">
+                        <span class="term-badge">READ</span> <span class="term-path">[core/plan_apply.py]</span> <span class="term-dim">382 lines</span>
+                    </div>
+                    <div class="term-line">
+                        <span class="term-badge edit">EDIT</span> <span class="term-path">[engine/renderer.py]</span>
+                    </div>
+                    <div class="term-line" style="margin-left: 40px; color: #B3B3B3;">
+                        └ <span class="term-dim">Updated with +15 -2</span>
+                    </div>
+                    <div class="term-line">
+                        <span class="term-badge" style="background-color: #E6E6E6;">SHELL</span> <span class="term-path">[pytest -q tests/...]</span> <span class="term-dim">(24 lines)</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
