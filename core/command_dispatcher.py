@@ -302,6 +302,7 @@ def _cmd_tasks(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
         current_mode,
         fail_task,
         start_task,
+        task_graph_live_status,
     )
     from core.task_graph import TaskGraphError
 
@@ -340,6 +341,7 @@ def _cmd_tasks(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
             "\n[Tasks] Commands:\n"
             "  /tasks\n"
             "  /tasks ready\n"
+            "  /tasks status\n"
             "  /tasks add <id> <research|review|implement> <description> [--depends id,id]\n"
             "  /tasks start <id> <role>\n"
             "  /tasks complete <id> <evidence-id> [evidence-id ...]\n"
@@ -354,7 +356,10 @@ def _cmd_tasks(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
         return True
 
     try:
-        if action == "ready":
+        if action == "status":
+            sys.stdout.write(f"\n[Tasks] {task_graph_live_status(state)}\n")
+
+        elif action == "ready":
             ready = graph.ready_tasks(plan_revision=getattr(state, "plan_revision", 0))
             sys.stdout.write("\n[Tasks] Ready nodes:\n")
             if not ready:

@@ -1749,7 +1749,13 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         if tool_call.tool in ("file_system", "edit_file", "replace_file_content"):
             bridge.emit("edit_proposed", file=tool_call.args.get("path") or tool_call.args.get("file", ""), diff=tool_call.args.get("content") or tool_call.args.get("diff", ""))
         self._dispatch_and_record_evidence(tool_call)
-        bridge.emit("status_update", message=f"Cycle completed. Step: {self.state.step_count}")
+        from core.plan_apply import task_graph_live_status
+
+        status_message = f"Cycle completed. Step: {self.state.step_count}"
+        graph_summary = task_graph_live_status(self.state)
+        if graph_summary:
+            status_message = f"{status_message} | {graph_summary}"
+        bridge.emit("status_update", message=status_message)
 
         # ── Phase 2.4: Early exit after exact-action tool success ──────────
         # After a single execute_shell dispatch in exact_action_mode, use the
