@@ -1,5 +1,9 @@
 # NBD-07: one documented command to create the test environment:
 #   python -m pip install -r requirements-test.txt
 # Tests must run fully offline: no API keys, no network, no interactive prompts.
+# The wheel smoke test uses pip --no-build-isolation, so its backend must be
+# available in the test environment rather than borrowed from a runner image.
+setuptools>=61.0
+wheel>=0.40.0
 pytest>=7.0
 pytest-mock>=3.12
