@@ -29,6 +29,12 @@ from tools.base import BaseTool, BaseModel, Field, ToolResult
 
 class TaskInput(BaseModel):
     prompt: str = Field(..., description="Self-contained task for the subagent")
+    role: str = Field(
+        "research",
+        description=(
+            "Delegated role: research, review, or implement. Unknown roles are rejected."
+        ),
+    )
     model: Optional[str] = Field(
         None, description="Override model for this sub-task (default: cheapest available)"
     )
@@ -74,7 +80,12 @@ class TaskTool(BaseTool):
 
         return _provider
 
-    def execute(self, prompt: str, model: Optional[str] = None) -> ToolResult:
+    def execute(
+        self,
+        prompt: str,
+        role: str = "research",
+        model: Optional[str] = None,
+    ) -> ToolResult:
         """Called by the Dispatcher — transfers to a sub-ExecutionLoop.
 
         Spawns an isolated sub-agent, waits up to the timeout, and returns a
@@ -84,6 +95,7 @@ class TaskTool(BaseTool):
         from core.evidence import EvidenceLog
         from core.kernel.state import RuntimeState, GoalSpec
         from engine.loop import ExecutionLoop
+        from engine.subagent_policy import normalize_role
         from engine.subagent_runner import SubagentRunner
 
         if not prompt or not str(prompt).strip():
@@ -95,6 +107,7 @@ class TaskTool(BaseTool):
             )
 
         try:
+            role = normalize_role(role)
             cheap_provider = self._cheap_provider(model)
         except Exception as exc:  # pragma: no cover - defensive
             return ToolResult(
@@ -104,7 +117,12 @@ class TaskTool(BaseTool):
                 status="error",
             )
 
-        runner = SubagentRunner(router=cheap_provider, max_rounds=5, timeout=60)
+        runner = SubagentRunner(
+            router=cheap_provider,
+            max_rounds=5,
+            timeout=60,
+            role=role,
+        )
         result = runner.run(prompt)
 
         if "error" in result and not result.get("result"):
@@ -118,6 +136,7 @@ class TaskTool(BaseTool):
         payload = json.dumps(
             {
                 "result": result.get("result", ""),
+                "role": result.get("role", role),
                 "files_read": result.get("files_read", []),
                 "tool_calls": result.get("tool_calls", 0),
                 "evidence_ids": result.get("evidence", []),

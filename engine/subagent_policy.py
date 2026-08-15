@@ -15,7 +15,41 @@ prompt wording and prevents a model from reaching an omitted tool by name.
 
 from __future__ import annotations
 
-from typing import Any, Final, Iterable
+from typing import Any, Final, Iterable, Mapping
+
+
+ROLE_RESEARCH: Final[str] = "research"
+ROLE_REVIEW: Final[str] = "review"
+ROLE_IMPLEMENT: Final[str] = "implement"
+
+# Role capabilities are explicit and closed-world: adding a tool to the global
+# registry never grants it to a delegated role.  ``implement`` remains subject
+# to the normal Dispatcher Plan/Apply and consent gates.
+ROLE_TOOL_ALLOWLISTS: Final[Mapping[str, frozenset[str]]] = {
+    ROLE_RESEARCH: frozenset(
+        {"file_system", "search_memory", "web_search", "code_intelligence"}
+    ),
+    ROLE_REVIEW: frozenset(
+        {"file_system", "search_memory", "web_search", "code_intelligence"}
+    ),
+    ROLE_IMPLEMENT: frozenset(
+        {"file_system", "execute_shell", "todo_write", "search_memory", "code_intelligence"}
+    ),
+}
+
+DEFAULT_SUBAGENT_ROLE: Final[str] = ROLE_RESEARCH
+
+
+def normalize_role(role: object) -> str:
+    """Normalize and validate a delegated role; unknown roles fail closed."""
+    normalized = str(role or DEFAULT_SUBAGENT_ROLE).strip().lower()
+    if normalized not in ROLE_TOOL_ALLOWLISTS:
+        raise ValueError(
+            f"Unknown sub-agent role {normalized!r}; allowed roles: "
+            + ", ".join(sorted(ROLE_TOOL_ALLOWLISTS))
+        )
+    return normalized
+
 
 from tools.base import BaseTool
 from tools.models import ToolResult
@@ -86,13 +120,28 @@ class RestrictedToolRegistry:
     generation and dispatch resolve against the same limited surface.
     """
 
-    def __init__(self, source_registry: Any, allowed_tools: Iterable[str] = DEFAULT_SUBAGENT_TOOLS) -> None:
+    def __init__(
+        self,
+        source_registry: Any,
+        allowed_tools: Iterable[str] | None = None,
+        *,
+        role: str | None = None,
+    ) -> None:
+        if role is not None:
+            role = normalize_role(role)
+            allowed_tools = ROLE_TOOL_ALLOWLISTS[role]
+        elif allowed_tools is None:
+            allowed_tools = DEFAULT_SUBAGENT_TOOLS
+
+        self.role = role or DEFAULT_SUBAGENT_ROLE
         self._tools: dict[str, Any] = {}
         for name in allowed_tools:
             if name not in source_registry:
                 continue
             tool = source_registry.get_tool(name)
-            if name == "file_system":
+            # Research and review are structurally read-only. Implement is
+            # still gated by Dispatcher, but needs the real file/shell tools.
+            if name == "file_system" and self.role != ROLE_IMPLEMENT:
                 tool = ReadOnlyFileSystemTool(tool)
             self._tools[name] = tool
 

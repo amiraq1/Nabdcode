@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from engine.subagent_policy import RestrictedToolRegistry
 from tools.file_system import FileSystemTool
 from tools.models import ToolResult
@@ -106,3 +108,67 @@ def test_subagent_runner_injects_restricted_registry_and_step_budget(tmp_path, m
     assert "task" not in policy_registry
     assert captured["dispatcher"].registry is policy_registry
     assert result["result"] == "delegated result"
+
+
+def test_roles_are_explicit_and_fail_closed(tmp_path):
+    from engine.subagent_policy import ROLE_TOOL_ALLOWLISTS, RestrictedToolRegistry
+
+    source = _registry_with_file_tool(tmp_path)
+    research = RestrictedToolRegistry(source, role="research")
+    review = RestrictedToolRegistry(source, role="review")
+    implement = RestrictedToolRegistry(source, role="implement")
+
+    assert set(research._tools) <= ROLE_TOOL_ALLOWLISTS["research"]
+    assert set(review._tools) <= ROLE_TOOL_ALLOWLISTS["review"]
+    assert "execute_shell" not in research
+    assert "execute_shell" not in review
+    assert "execute_shell" in implement
+    assert "task" not in implement
+    assert research.role == "research"
+    assert review.role == "review"
+    assert implement.role == "implement"
+
+    with pytest.raises(ValueError, match="Unknown sub-agent role"):
+        RestrictedToolRegistry(source, role="admin")
+
+
+def test_implement_role_uses_real_file_tool_but_never_nested_task(tmp_path):
+    registry = RestrictedToolRegistry(_registry_with_file_tool(tmp_path), role="implement")
+    assert registry.get_tool("file_system").__class__.__name__ == "FileSystemTool"
+    assert "task" not in registry
+
+
+def test_runner_passes_role_to_policy_registry(tmp_path, monkeypatch):
+    import engine.subagent_runner as runner_module
+
+    captured = {}
+
+    class _FakeLoop:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self._last_response = "reviewed"
+
+        def run(self, prompt):
+            captured["prompt"] = prompt
+
+    monkeypatch.setattr(runner_module, "ExecutionLoop", _FakeLoop)
+    runner = runner_module.SubagentRunner(
+        router=lambda *_args, **_kwargs: "",
+        max_rounds=2,
+        timeout=5,
+        tool_registry=_registry_with_file_tool(tmp_path),
+        role="review",
+    )
+    result = runner.run("review the patch")
+
+    assert result["role"] == "review"
+    assert captured["tool_registry"].role == "review"
+    assert "execute_shell" not in captured["tool_registry"]
+
+
+def test_task_input_defaults_to_research_and_exposes_role():
+    from tools.task_tool import TaskInput
+
+    task = TaskInput(prompt="inspect")
+    assert task.role == "research"
+    assert TaskInput.model_json_schema()["properties"]["role"]["default"] == "research"

@@ -15,7 +15,11 @@ from core.evidence import EvidenceLog
 from core.kernel.state import RuntimeState, GoalSpec
 from engine.dispatcher import Dispatcher
 from engine.loop import ExecutionLoop
-from engine.subagent_policy import RestrictedToolRegistry
+from engine.subagent_policy import (
+    DEFAULT_SUBAGENT_ROLE,
+    RestrictedToolRegistry,
+    normalize_role,
+)
 from engine.tool_registry import registry
 
 
@@ -28,6 +32,7 @@ class SubagentRunner:
         max_rounds: int = 5,
         timeout: int = 60,
         tool_registry: Any = None,
+        role: str = DEFAULT_SUBAGENT_ROLE,
     ) -> None:
         # ``router`` here is the cheap-model ``llm_provider`` callable built by
         # TaskTool (ExecutionLoop expects ``llm_provider``, not a ProviderRouter).
@@ -35,6 +40,7 @@ class SubagentRunner:
         self._max_rounds = max(1, int(max_rounds))
         self._timeout = max(1, int(timeout))
         self._source_registry = tool_registry or registry
+        self._role = normalize_role(role)
 
     def run(self, prompt: str, model: Optional[str] = None) -> dict:
         """Run a delegated task with isolated state, evidence, budget, and tools.
@@ -51,7 +57,10 @@ class SubagentRunner:
             max_steps=self._max_rounds,
         )
         sub_evidence = EvidenceLog()
-        restricted_registry = RestrictedToolRegistry(self._source_registry)
+        restricted_registry = RestrictedToolRegistry(
+            self._source_registry,
+            role=self._role,
+        )
         restricted_dispatcher = Dispatcher(sub_state, tool_registry=restricted_registry)
 
         loop = ExecutionLoop(
@@ -72,6 +81,7 @@ class SubagentRunner:
                 result_container.append(
                     {
                         "result": getattr(loop, "_last_response", "") or "",
+                        "role": self._role,
                         "evidence": [getattr(r, "evidence_id", "") for r in records],
                         "files_read": [
                             getattr(r, "command_or_path", "")
@@ -91,5 +101,5 @@ class SubagentRunner:
         t.start()
         t.join(timeout=self._timeout)
         if t.is_alive():
-            return {"error": "Subagent timeout", "result": ""}
-        return result_container[0] if result_container else {"error": "No result", "result": ""}
+            return {"error": "Subagent timeout", "result": "", "role": self._role}
+        return result_container[0] if result_container else {"error": "No result", "result": "", "role": self._role}
