@@ -2,7 +2,7 @@
 
 Verifies:
   1. map_tool_to_badge returns 'EDIT' for file_system write/append/replace actions.
-  2. select_status_verb returns stage-aware verbs (Sculpting, Examining, Tuning, etc.).
+  2. select_status_verb returns stage-aware verbs (Editing, Examining, Executing, etc.).
   3. FileSystemTool write/append/replace computes real unified diff and stores metadata (additions, deletions).
   4. Renderer tool_end renders diff stats line (+A -D) correctly.
 """
@@ -26,12 +26,12 @@ def test_map_tool_to_badge_edit_actions():
 
 
 def test_select_status_verb_stages():
-    assert select_status_verb("edit", "file_system", turn_index=0) == "Sculpting"
-    assert select_status_verb("edit", "file_system", turn_index=1) == "Crafting"
-    assert select_status_verb("shell", "execute_shell", turn_index=0) == "Tuning"
-    assert select_status_verb("shell", "execute_shell", turn_index=1) == "Verifying"
+    assert select_status_verb("edit", "file_system", turn_index=0) == "Editing"
+    assert select_status_verb("edit", "file_system", turn_index=1) == "Editing"
+    assert select_status_verb("shell", "execute_shell", turn_index=0) == "Executing"
+    assert select_status_verb("shell", "execute_shell", turn_index=1) == "Executing"
     assert select_status_verb("read", "file_system", turn_index=0) == "Examining"
-    assert select_status_verb("init", "", turn_index=0) == "Examining"
+    assert select_status_verb("init", "", turn_index=0) == "Reading"
 
 
 def test_filesystem_diff_and_metadata():

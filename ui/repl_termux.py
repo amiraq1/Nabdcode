@@ -65,7 +65,10 @@ from ui.theme import (
     PROMPT_HTML_HR,
 )
 
-console = Console(theme=CUSTOM_THEME)
+# Stage 7: honor NO_COLOR / TERM=dumb — plain-text fallback for restricted
+# terminals. Rich Console renders plain (no ANSI) when color_system=None.
+from ui.design.theme import colors_enabled
+console = Console(theme=CUSTOM_THEME, color_system=None if not colors_enabled() else "auto")
 
 import threading
 
@@ -335,13 +338,19 @@ def _maybe_auto_scan(text: str, agent: Any) -> bool:
         return False
 
     if not result["success"]:
-        if result.get("error") == "Auto-scan returned empty listing.":
-            console.print(f"  [warning]⚠ Auto-scan returned empty listing.[/]")
+        err = result.get("error", "Unknown error")
+        root = result.get("workspace_root")
+        if root:
+            # Privacy: show the project name, never the absolute root path.
+            from core.kernel.security import display_path
+            console.print(f"  [error]✗ Auto-scan error at {display_path(root)}: {err}[/]")
         else:
-            console.print(f"  [error]✗ Auto-scan error: {result.get('error')}[/]")
+            console.print(f"  [error]✗ Auto-scan error: {err}[/]")
         return False
 
-    console.print(f"  [success]✓ Auto-scan completed — {result['entry_count']} entries found[/]")
+    from core.kernel.security import display_path
+    root = result.get("workspace_root", "unknown")
+    console.print(f"  [success]✓ Auto-scan completed — {result['entry_count']} entries found at {display_path(root)}[/]")
     return True
 
 
@@ -1199,7 +1208,21 @@ class TerminalVisualizer:
 
             # UI-CC-5: compact lines instead of heavy panels.
             if style_key == "error":
-                console.print(error_line(response_text))
+                # Stage 6: actionable error — add a next step when the error
+                # is one of the common, recoverable classes.
+                lower = response_text.lower()
+                step = ""
+                cause = ""
+                if "connection" in lower or "network" in lower or "provider" in lower:
+                    cause = "network/API issue"
+                    step = "Check your connection or API key, then retry."
+                elif "verify" in lower:
+                    cause = "verification failed"
+                    step = "Review the output with Ctrl+O and re-run the check."
+                elif "permission" in lower or "denied" in lower:
+                    cause = "security policy blocked the action"
+                    step = "Use /workspace <path> or an allowed command."
+                console.print(error_line(response_text, cause=cause, step=step))
             else:
                 console.print(Text(response_text, style="white"))
             console.print()  # A.3: Fix missing newline before next prompt

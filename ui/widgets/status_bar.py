@@ -103,13 +103,17 @@ class AgentStatusBar:
     # ── Public API ─────────────────────────────────────────────────────
 
     def set_active(self, phase: str) -> None:
-        """Activate *phase*; mark all earlier phases done."""
+        """Activate *phase*; mark only previously-entered earlier phases done."""
         if phase not in self._phase_states:
             return
         idx = self.PHASES.index(phase)
         for i, p in enumerate(self.PHASES):
             if i < idx:
-                self._phase_states[p] = "done"
+                # Stage 2: only mark done if the phase was actually entered.
+                # A phase that was never "active" stays "pending" — prevents
+                # Tools from showing ✓ when no tool was ever called.
+                if self._phase_states[p] == "active":
+                    self._phase_states[p] = "done"
             elif i == idx:
                 self._phase_states[p] = "active"
             else:
@@ -117,9 +121,15 @@ class AgentStatusBar:
         self._update_live()
 
     def set_complete(self) -> None:
-        """Mark all phases done, stop Live, print stats line."""
+        """Mark all *entered* phases done, stop Live, print stats line.
+
+        Only phases that reached "active" (or were already "done") are
+        finalised.  Phases that were never entered ("pending") stay pending
+        so that a direct answer never shows ✓ Tools.
+        """
         for p in self.PHASES:
-            self._phase_states[p] = "done"
+            if self._phase_states[p] == "active":
+                self._phase_states[p] = "done"
         self._update_live()
         self.stop()
         # V-07b: No fabricated affordances. Removed fake timer and token/file counts

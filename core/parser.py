@@ -26,6 +26,8 @@ from core.utils import safe_strip
 from core.kernel.security import (  # noqa: F401
     pin_workspace_root,
     get_workspace_root,
+    is_workspace_pinned,
+    display_path,
     _validate_path,
 )
 

@@ -45,36 +45,30 @@ def typing_indicator_frame(index: int) -> "Text":
 # Badge background routes through the semantic palette (no raw #hex).
 BADGE_STYLE = f"bold white on {SEMANTIC.action_badge}"
 
-_STATUS_VERBS = ("Drafting", "Conjuring", "Choreographing",
-                 "Abracadabraing", "Crafting")
-_verb_cycle = itertools.cycle(_STATUS_VERBS)
+# Honest status verbs — each maps to a real action; no fabricated alternation.
+_HONEST_STATUS_VERBS = ("Examining", "Editing", "Executing", "Searching",
+                        "Delegating", "Reasoning", "Writing")
+_verb_cycle = itertools.cycle(_HONEST_STATUS_VERBS)
 
 
 def badge_for_tool(tool: str, args: dict | None = None) -> tuple[str, str]:
-    """Map a tool name and optional action to (LABEL, rich-style) for the badge."""
-    t = tool.lower()
-    if t in ("file_system", "file"):
-        action = str((args or {}).get("action", "read")).lower()
-        return ("EDIT" if action in ("edit", "write", "append", "replace", "patch") else "READ"), BADGE_STYLE
-    if t == "task" or "subagent" in t or "delegate" in t:
-        return "TASK", BADGE_STYLE
-    if "read" in t:
-        return "READ", BADGE_STYLE
-    if any(k in t for k in ("write", "edit", "replace")):
-        return "EDIT", BADGE_STYLE
-    if "shell" in t:
-        return "SHELL", BADGE_STYLE
-    if any(k in t for k in ("list", "scan")):
-        return "LIST", BADGE_STYLE
-    if any(k in t for k in ("search", "web")):
-        return "SEARCH", BADGE_STYLE
-    if "kill" in t:
-        return "KILL", "bold white on red"
-    return "TOOL", BADGE_STYLE
+    """Map a tool name and optional action to (LABEL, rich-style) for the badge.
+
+    Label classification is delegated to ``map_tool_to_badge`` (engine/ui_theme.py)
+    so that the REPL and one-shot rendering paths share a single source of truth.
+    """
+    from engine.ui_theme import map_tool_to_badge
+    label = map_tool_to_badge(tool, args)
+    style = "bold white on red" if label == "KILL" else BADGE_STYLE
+    return label, style
 
 
-def collapse_lines(lines: Sequence[str], keep: int = 3) -> list[str]:
-    """Keep first `keep` lines; append a collapse footer if longer."""
+def collapse_lines(lines: Sequence[str], keep: int = 5) -> list[str]:
+    """Keep first `keep` lines; append a collapse footer if longer.
+
+    Default threshold is 5, matching ``ToolResultWidget.COLLAPSE_THRESHOLD``
+    so the REPL and one-shot paths collapse at the same point.
+    """
     lines = list(lines)
     if len(lines) <= keep:
         return lines
@@ -112,6 +106,7 @@ def format_tokens(n: int) -> str:
 
 
 def next_status_verb() -> str:
+    """Return the next honest status verb (cycles real action verbs)."""
     return next(_verb_cycle)
 
 
@@ -240,8 +235,12 @@ def status_compact_line(
     return t
 
 
-def error_line(msg: str) -> "Text":
-    """Build a compact red error line: ``✖ ERROR: <msg>``.
+def error_line(msg: str, cause: str = "", step: str = "") -> "Text":
+    """Build a compact red error line with an actionable next step.
+
+    Stage 6 (UI plan): every error should answer *what happened* (msg),
+    *why it happened* (cause), and *what to do next* (step) — never a bare
+    ``permission denied`` or ``failed`` without context.
 
     Returns a rich ``Text`` (not a Panel).
     """
@@ -249,6 +248,10 @@ def error_line(msg: str) -> "Text":
     t = Text()
     t.append("✖ ERROR: ", style="bold red")
     t.append(str(msg), style="red")
+    if cause:
+        t.append(f" — {cause}", style="red")
+    if step:
+        t.append(f" {step}", style="bold yellow")
     return t
 
 

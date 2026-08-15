@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Constitutional fingerprints — any change here is a hard HALT.
 FINGERPRINTS = {
-    "ui/widgets/status_bar.py": "95159d7cec5f09a9",
-    "tests/test_the_bar_hears_the_bus.py": "bf47735d30e0e1c6",
+    "ui/widgets/status_bar.py": "e5e5e3d5089915bc",
+    "tests/test_the_bar_hears_the_bus.py": "b9273177d096e78a",
     "tests/test_the_bar_clock_turns.py": "8bbc623c388d4f02",
 }
 

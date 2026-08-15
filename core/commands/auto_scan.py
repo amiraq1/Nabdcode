@@ -59,15 +59,35 @@ def maybe_auto_scan(text: str, agent: Any) -> dict:
         - error (str | None): error message if scan failed
     """
     if not _detect_arabic_scan_intent(text):
-        return {"triggered": False, "success": False, "entry_count": 0, "error": None}
+        return {"triggered": False, "success": False, "entry_count": 0, "error": None,
+                "workspace_root": None}
 
+    from core.kernel.security import get_workspace_root, is_workspace_pinned
+
+    # Stage 4: use the explicit, pinned workspace root — never silently scan
+    # an unverified cwd.
+    workspace_root = get_workspace_root()
+
+    if not is_workspace_pinned():
+        # No workspace was explicitly set — do not scan silently.
+        return {
+            "triggered": True,
+            "success": False,
+            "entry_count": 0,
+            "error": (
+                "لا يوجد مستودع محدد لهذه الجلسة. "
+                "اختر مجلد مشروع أو استخدم /workspace <path>."
+            ),
+            "workspace_root": str(workspace_root),
+        }
 
     try:
-        entries = sorted(os.listdir("."))
+        entries = sorted(os.listdir(workspace_root))
         output = "\n".join(entries)
         if not output:
             return {"triggered": True, "success": False, "entry_count": 0,
-                    "error": "Auto-scan returned empty listing."}
+                    "error": f"Auto-scan returned empty listing at {workspace_root}.",
+                    "workspace_root": str(workspace_root)}
 
         # ── Seed evidence log ─────────────────────────────────────────────
         evidence_log = getattr(agent, "evidence_log", None)
@@ -75,7 +95,7 @@ def maybe_auto_scan(text: str, agent: Any) -> dict:
             try:
                 evidence_log.record(
                     tool="file_system",
-                    command_or_path=".",
+                    command_or_path=str(workspace_root),
                     success=True,
                     output_snippet=output[:200],
                     action="list",
@@ -90,7 +110,8 @@ def maybe_auto_scan(text: str, agent: Any) -> dict:
                 msg = (
                     "[CONTROL] Auto-scan: workspace listing was performed because "
                     "your request contained a scan command.\n\n"
-                    f"Directory listing (workspace root):\n{output[:2000]}\n\n"
+                    f"Directory listing (workspace root: {workspace_root}):\n"
+                    f"{output[:2000]}\n\n"
                     "You should now read specific files from this listing to "
                     "answer the user's request. Call file_system with "
                     "action='read' on relevant files."
@@ -104,10 +125,12 @@ def maybe_auto_scan(text: str, agent: Any) -> dict:
             "success": True,
             "entry_count": len(output.splitlines()),
             "error": None,
+            "workspace_root": str(workspace_root),
         }
 
     except Exception as exc:
-        return {"triggered": True, "success": False, "entry_count": 0, "error": str(exc)}
+        return {"triggered": True, "success": False, "entry_count": 0,
+                "error": str(exc), "workspace_root": str(workspace_root)}
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
