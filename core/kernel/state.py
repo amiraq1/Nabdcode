@@ -200,6 +200,9 @@ class RuntimeState:
     review_report: Dict[str, Any] = field(default_factory=dict)
     review_test_status: str = "not_run"
     review_approved_revision: int = 0
+    # Lazily attached by core.plan_apply to avoid importing the execution graph
+    # into the kernel layer. A new plan revision replaces this graph.
+    task_graph: Any = None
 
     def get_lock(self) -> Lock:
         return self._lock
@@ -249,6 +252,7 @@ class RuntimeState:
             self.review_report = {}
             self.review_test_status = "not_run"
             self.review_approved_revision = 0
+            self.task_graph = None
             self.plan_mode_changed_at = datetime.now(timezone.utc).isoformat()
             self.last_updated = datetime.now(timezone.utc).isoformat()
 

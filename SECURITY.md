@@ -128,7 +128,28 @@ The security model is **defense-in-depth**:
 | Plan/Apply | Runtime allowlist in Plan; revision-bound Apply authorization | `core/plan_apply.py`, `engine/_dispatch.py` |
 | Delegated tasks | Role allowlists, read-only defaults, no nested delegation, real step budget | `engine/subagent_policy.py`, `engine/subagent_runner.py`, `tools/task_tool.py` |
 
-### 8. Pre-Apply Diff and Test Review
+### 8. Task Graph Integrity
+
+- Task Graph is a dependency/state model, not an execution-permission surface.
+  It accepts only the explicit roles `research`, `review`, and `implement`.
+- Duplicate IDs, missing dependencies, self-dependencies, cycles, unknown roles,
+  and stale plan revisions are rejected before a graph mutation is committed.
+- A task becomes `ready` only after every dependency is `completed`. A failed
+  task recursively blocks its dependents; no dependent task is retried or run
+  implicitly.
+- A task cannot become `completed` without at least one evidence ID. Every state
+  transition records the task, revision, reason, and evidence IDs.
+- Recording a new Plan/Apply revision replaces the prior graph and revokes all
+  prior execution authorization. The graph never bypasses consent or review.
+
+| Task Graph control | Enforcement | Location |
+|---|---|---|
+| Dependency and cycle validation | Closed-world graph mutations | `core/task_graph.py` |
+| Revision binding | New plan creates a new graph | `core/plan_apply.py`, `core/kernel/state.py` |
+| Evidence-bound completion | Completion requires evidence IDs | `core/task_graph.py` |
+| Failure containment | Failed nodes block dependents | `core/task_graph.py` |
+
+### 9. Pre-Apply Diff and Test Review
 
 - Run `/review` to inspect the current plan revision, affected pending-edit paths, addition/removal counts, redacted diff previews, and a conservative risk level.
 - Run `/review run` to execute only repository-local pytest files selected from affected paths. The runner uses `python -m pytest`, never a shell string or a model-supplied command, and sets `NABD_NONINTERACTIVE=1`.

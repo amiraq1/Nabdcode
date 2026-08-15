@@ -101,6 +101,10 @@ def record_plan(state: Any, items: Iterable[object]) -> int:
     revision = int(getattr(state, "plan_revision", 0) or 0) + 1
     state.plan_revision = revision
     state.plan_items = clean_items
+    # A plan revision owns exactly one graph. Replacing it prevents stale task
+    # nodes from being executed after the operator records a new plan.
+    from core.task_graph import TaskGraph
+    state.task_graph = TaskGraph(plan_revision=revision)
     state.apply_authorized_revision = 0
     state.review_revision = 0
     state.review_report = {}
@@ -159,6 +163,11 @@ def plan_status(state: Any) -> dict[str, object]:
         "apply_authorized": apply_is_authorized(state),
         "review_status": str(getattr(state, "review_test_status", "not_run")),
         "review_approved": bool(getattr(state, "review_approved_revision", 0)) == int(getattr(state, "plan_revision", 0) or 0) and int(getattr(state, "plan_revision", 0) or 0) > 0,
+        "task_graph": (
+            getattr(state, "task_graph", None).to_dict()
+            if getattr(state, "task_graph", None) is not None
+            else None
+        ),
     }
 
 
