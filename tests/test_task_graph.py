@@ -87,3 +87,17 @@ def test_serialization_contains_auditable_state():
     assert payload["tasks"][0]["status"] == "ready"
     assert payload["tasks"][0]["role"] == "review"
     assert payload["tasks"][0]["events"][0]["to_status"] == "ready"
+
+
+def test_implement_requires_apply_authorization_and_matching_role():
+    graph = TaskGraph(plan_revision=1)
+    graph.add_task("implement", "apply change", role="implement")
+
+    with pytest.raises(TaskGraphError, match="Plan/Apply authorization"):
+        graph.mark_running("implement", role="implement", apply_authorized=False)
+
+    with pytest.raises(TaskGraphError, match="role mismatch"):
+        graph.mark_running("implement", role="review", apply_authorized=True)
+
+    node = graph.mark_running("implement", role="implement", apply_authorized=True)
+    assert node.status == TaskStatus.RUNNING

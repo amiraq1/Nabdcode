@@ -156,12 +156,27 @@ class TaskGraph:
         with self._lock:
             return tuple(node for node in self._tasks.values() if node.status == TaskStatus.BLOCKED)
 
-    def mark_running(self, task_id: str, *, plan_revision: int | None = None) -> TaskNode:
+    def mark_running(
+        self,
+        task_id: str,
+        *,
+        plan_revision: int | None = None,
+        role: str | None = None,
+        apply_authorized: bool = False,
+    ) -> TaskNode:
         with self._lock:
             node = self.get_task(task_id)
             revision = self.plan_revision if plan_revision is None else int(plan_revision)
             if revision != self.plan_revision or node.plan_revision != revision:
                 raise TaskGraphError("task is bound to a stale plan revision")
+            if role is not None and str(role).strip().lower() != node.role:
+                raise TaskGraphError(
+                    f"role mismatch for {node.task_id}: expected {node.role}, got {role}"
+                )
+            if node.role == "implement" and not apply_authorized:
+                raise TaskGraphError(
+                    "implement tasks require current Plan/Apply authorization"
+                )
             self._refresh_ready_locked()
             if node.status != TaskStatus.READY:
                 raise TaskGraphError(
