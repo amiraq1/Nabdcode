@@ -14,7 +14,7 @@ import logging
 import time
 from typing import Optional, Tuple
 
-from core.kernel.events import bus
+from core.kernel.events import bus, emit_with_session
 from core.parser import extract_json_from_response, extract_command, validate_tool_call, ToolCall
 from engine._loop_helpers import _extract_final_answer
 from engine._loop_types import _LoopSignal
@@ -72,11 +72,12 @@ class _ToolRunnerMixin:
             except Exception:
                 pass
             if not is_valid:
-                bus.emit("ui_validation_failed", {"error": error, "step": self.state.step_count})
-                bus.emit(
-                    "tool_validation_failed",
-                    {"error": error, "raw_json": raw_json, "step": self.state.step_count},
-                )
+                emit_with_session(bus, "ui_validation_failed",
+                                  {"error": error, "step": self.state.step_count},
+                                  getattr(self.state, "session_id", "unknown"))
+                emit_with_session(bus, "tool_validation_failed",
+                                  {"error": error, "raw_json": raw_json, "step": self.state.step_count},
+                                  getattr(self.state, "session_id", "unknown"))
                 attempt_tool = ""
                 try:
                     parsed_tmp = json.loads(raw_json) if isinstance(raw_json, str) else raw_json

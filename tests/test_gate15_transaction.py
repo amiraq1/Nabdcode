@@ -87,7 +87,7 @@ class TestGate15Transaction(unittest.TestCase):
 
     def test_side_effect_occurs_exactly_once(self):
         edit_id, fpath = self._setup_edit()
-        with mock.patch("core.accept_edits_state._atomic_write", wraps=__import__("core.accept_edits_state").accept_edits_state._atomic_write) as m_atomic:
+        with mock.patch("core.accept_edits_state._atomic_write_if_unchanged", wraps=__import__("core.accept_edits_state").accept_edits_state._atomic_write_if_unchanged) as m_atomic:
             accept_edit(edit_id)
             self.assertEqual(m_atomic.call_count, 1)
         self.assertEqual(fpath.read_text(), "new")
@@ -180,11 +180,11 @@ class TestGate15Transaction(unittest.TestCase):
     def test_cleanup_failure_prevents_resolved(self):
         # We don't have a distinct cleanup step in atomic_write except returning temp_artifact_remaining
         edit_id, fpath = self._setup_edit()
-        def mock_atomic(p, c):
+        def mock_atomic(p, c, expected=None):
             p.write_bytes(c)
             return AtomicWriteResult(True, True, False, WriteStage.TEMP_CLEANUP, "Err", "msg", True)
             
-        with mock.patch("core.accept_edits_state._atomic_write", side_effect=mock_atomic):
+        with mock.patch("core.accept_edits_state._atomic_write_if_unchanged", side_effect=mock_atomic):
             res = accept_edit(edit_id)
             self.assertEqual(res.outcome, TransactionOutcome.RECONCILIATION_REQUIRED)
             records = self._read_journal()
@@ -212,11 +212,11 @@ class TestGate15Transaction(unittest.TestCase):
 
     def test_durability_warning_is_not_resolved(self):
         edit_id, fpath = self._setup_edit()
-        def mock_atomic(p, c):
+        def mock_atomic(p, c, expected=None):
             p.write_bytes(c)
             return AtomicWriteResult(True, False, True, WriteStage.PARENT_FSYNC, "Warn", "msg", False)
             
-        with mock.patch("core.accept_edits_state._atomic_write", side_effect=mock_atomic):
+        with mock.patch("core.accept_edits_state._atomic_write_if_unchanged", side_effect=mock_atomic):
             res = accept_edit(edit_id)
             self.assertEqual(res.outcome, TransactionOutcome.ACCEPTED_WITH_DURABILITY_WARNING)
             records = self._read_journal()
@@ -225,10 +225,10 @@ class TestGate15Transaction(unittest.TestCase):
 
     def test_reconciliation_required_never_retries_side_effect(self):
         edit_id, fpath = self._setup_edit()
-        def mock_atomic(p, c):
+        def mock_atomic(p, c, expected=None):
             return AtomicWriteResult(False, False, False, WriteStage.TEMP_WRITE, "Err", "msg", True)
             
-        with mock.patch("core.accept_edits_state._atomic_write", side_effect=mock_atomic):
+        with mock.patch("core.accept_edits_state._atomic_write_if_unchanged", side_effect=mock_atomic):
             res = accept_edit(edit_id)
             self.assertEqual(res.outcome, TransactionOutcome.RECONCILIATION_REQUIRED)
             self.assertEqual(fpath.read_text(), "old")
@@ -238,14 +238,14 @@ class TestGate15Transaction(unittest.TestCase):
         edit2_id, fpath2 = self._setup_edit(content="old2", new_content="new2", filename="test2.txt")
         
         # op1 fails
-        orig = __import__("core.accept_edits_state").accept_edits_state._atomic_write
-        def mock_atomic(p, c):
+        orig = __import__("core.accept_edits_state").accept_edits_state._atomic_write_if_unchanged
+        def mock_atomic(p, c, expected=None):
             if str(p).endswith("test.txt"):
                 p.write_bytes(c)
                 return AtomicWriteResult(True, False, False, WriteStage.TEMP_CLEANUP, "Err", "msg", True)
-            return orig(p, c)
+            return orig(p, c, expected)
             
-        with mock.patch("core.accept_edits_state._atomic_write", side_effect=mock_atomic):
+        with mock.patch("core.accept_edits_state._atomic_write_if_unchanged", side_effect=mock_atomic):
             res1 = accept_edit(edit_id)
             res2 = accept_edit(edit2_id)
                 
@@ -275,7 +275,7 @@ class TestGate15Transaction(unittest.TestCase):
         # Just verifying journal appending doesn't overwrite
         edit_id, fpath = self._setup_edit()
         edit2_id, fpath2 = self._setup_edit(content="old2", new_content="new2")
-        with mock.patch("core.accept_edits_state._atomic_write", side_effect=OSError("fail")):
+        with mock.patch("core.accept_edits_state._atomic_write_if_unchanged", side_effect=OSError("fail")):
             accept_edit(edit_id)
         accept_edit(edit2_id)
         records = self._read_journal()
@@ -284,7 +284,7 @@ class TestGate15Transaction(unittest.TestCase):
     def test_no_global_error_transport(self):
         # We assert that TransactionResult contains all the error state
         edit_id, fpath = self._setup_edit()
-        with mock.patch("core.accept_edits_state._atomic_write", side_effect=OSError("fail")):
+        with mock.patch("core.accept_edits_state._atomic_write_if_unchanged", side_effect=OSError("fail")):
             res = accept_edit(edit_id)
             self.assertEqual(res.failed_items[0].error_type, "OSError")
 
@@ -293,10 +293,10 @@ class TestGate15Transaction(unittest.TestCase):
 
     def test_no_resolved_event_when_requires_review(self):
         edit_id, fpath = self._setup_edit()
-        def mock_atomic(p, c):
+        def mock_atomic(p, c, expected=None):
             return AtomicWriteResult(True, False, True, WriteStage.PARENT_FSYNC, "Warn", "msg", False)
             
-        with mock.patch("core.accept_edits_state._atomic_write", side_effect=mock_atomic):
+        with mock.patch("core.accept_edits_state._atomic_write_if_unchanged", side_effect=mock_atomic):
             accept_edit(edit_id)
             records = self._read_journal()
             events = [r["event_type"] for r in records]

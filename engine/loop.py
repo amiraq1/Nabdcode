@@ -19,7 +19,7 @@ from typing import Any, Callable, Final, Optional
 # re-enter mid-import. Injecting the dispatcher via DI + a Protocol keeps the
 # module-level import graph acyclic.
 from engine.consent import ConsentManager
-from core.kernel.events import bus
+from core.kernel.events import bus, emit_with_session
 from engine.interfaces import DispatcherProtocol
 from engine.state import RuntimeState, GoalSpec, parse_goal_command, build_goal_block
 from engine.goal_verifier import evaluate_goal_exit, MAX_GOAL_RETRIES
@@ -361,20 +361,21 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         self._provider_fail_streak += 1
         self.state.provider_fail_streak = self._provider_fail_streak
         preview = str(err)[:200]
-        bus.emit(
-            "provider_failed",
-            {
-                "error": preview,
-                "streak": self._provider_fail_streak,
-                "step": self.state.step_count,
-            },
-        )
+        emit_with_session(bus, "provider_failed",
+                          {
+                              "error": preview,
+                              "streak": self._provider_fail_streak,
+                              "step": self.state.step_count,
+                          },
+                          getattr(self.state, "session_id", "unknown"))
         if self._provider_fail_streak >= 2 and not getattr(self.state, "is_fallback_mode_active", False):
             self.state.is_fallback_mode_active = True
-            bus.emit("fallback_mode_activated", {
-                "streak": self._provider_fail_streak,
-                "allowed_tools": sorted(FALLBACK_ALLOWED_TOOLS)
-            })
+            emit_with_session(bus, "fallback_mode_activated",
+                              {
+                                  "streak": self._provider_fail_streak,
+                                  "allowed_tools": sorted(FALLBACK_ALLOWED_TOOLS)
+                              },
+                              getattr(self.state, "session_id", "unknown"))
 
         if self._provider_fail_streak >= MAX_PROVIDER_FAIL_STREAK:
             msg = "[Error: Connection lost. Exiting cleanly to protect context.]"
@@ -384,10 +385,9 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 ctx_prompt,
                 f"Connection lost or repeated provider failure after {self._provider_fail_streak} attempts: {preview}",
             )
-            bus.emit(
-                "loop_completed",
-                {"reason": "connection_lost", "output": safe_msg or msg},
-            )
+            emit_with_session(bus, "loop_completed",
+                              {"reason": "connection_lost", "output": safe_msg or msg},
+                              getattr(self.state, "session_id", "unknown"))
             return _LoopSignal.TERMINATE
         return _LoopSignal.CONTINUE
 
@@ -398,7 +398,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             self.state.provider_fail_streak = 0
             if getattr(self.state, "is_fallback_mode_active", False):
                 self.state.is_fallback_mode_active = False
-                bus.emit("fallback_mode_deactivated")
+                emit_with_session(bus, "fallback_mode_deactivated", None,
+                                  getattr(self.state, "session_id", "unknown"))
 
     # SAFETY: _invoke_llm_and_normalize is intentionally NOT extracted to a
     # separate _llm_mixin.py / _llm.py (attempted + rejected in v2, re-verified
@@ -510,7 +511,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                         "Synthesize your architectural report IMMEDIATELY using final_answer."
                     )
 
-        bus.emit("llm_request_started", {"step": self.state.step_count})
+        emit_with_session(bus, "llm_request_started", {"step": self.state.step_count},
+                          getattr(self.state, "session_id", "unknown"))
 
         compacted = self._compact_messages(self.state.get_messages())
         if compacted and compacted[0].get("role") == "system":
@@ -651,10 +653,9 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         normalized_resp = _normalize_response(response_text)
 
         if not response_text:
-            bus.emit(
-                "ui_validation_failed",
-                {"error": "LLM returned an empty response.", "step": self.state.step_count},
-            )
+            emit_with_session(bus, "ui_validation_failed",
+                              {"error": "LLM returned an empty response.", "step": self.state.step_count},
+                              getattr(self.state, "session_id", "unknown"))
             self.state.append_message(
                 {
                     "role": "system",
@@ -670,10 +671,9 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
 
         self._note_provider_success()
         self.state.append_message({"role": "assistant", "content": response})
-        bus.emit(
-            "llm_request_completed",
-            {"duration": elapsed, "length": len(response)},
-        )
+        emit_with_session(bus, "llm_request_completed",
+                          {"duration": elapsed, "length": len(response)},
+                          getattr(self.state, "session_id", "unknown"))
         return LLMInvocationResult(
             status=LLMInvocationStatus.SUCCESS,
             content=response_text,
@@ -691,7 +691,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         from core.sanitize import sanitize
         from llm_router import router as _router
 
-        bus.emit("llm_request_started", {"step": self.state.step_count})
+        emit_with_session(bus, "llm_request_started", {"step": self.state.step_count},
+                          getattr(self.state, "session_id", "unknown"))
 
         compacted = self._compact_messages(self.state.get_messages())
         if compacted and compacted[0].get("role") == "system":
@@ -705,7 +706,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             try:
                 # Reuse the existing llm_token subscriber in main.py's wire_events,
                 # which renders via renderer.stream_chunk under lock.
-                bus.emit("llm_token", {"token": token_text})
+                emit_with_session(bus, "llm_token", {"token": token_text},
+                                  getattr(self.state, "session_id", "unknown"))
             except Exception:
                 pass
 
@@ -773,10 +775,9 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
 
         self._note_provider_success()
         self.state.append_message({"role": "assistant", "content": response_text})
-        bus.emit(
-            "llm_request_completed",
-            {"duration": 0.0, "length": len(response_text)},
-        )
+        emit_with_session(bus, "llm_request_completed",
+                          {"duration": 0.0, "length": len(response_text)},
+                          getattr(self.state, "session_id", "unknown"))
         return LLMInvocationResult(
             status=LLMInvocationStatus.SUCCESS,
             content=response_text,
@@ -900,7 +901,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         # Phase G+: below 3 reads, redirect to a DIFFERENT file; never end.
         if self._redundant_count >= 2 and self._real_reads() < 3:
             suggestions = self._extract_listing_files()
-            bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count})
+            bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count,
+                                          "session_id": getattr(self.state, "session_id", "unknown")})
             self.state.append_message(
                 {
                     "role": "user",
@@ -922,7 +924,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
 
         if self._redundant_count >= 2 or self._real_reads() >= 5:
             self._force_final = True
-            bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count})
+            bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count,
+                                          "session_id": getattr(self.state, "session_id", "unknown")})
             return _LoopSignal.CONTINUE
 
         return _LoopSignal.PROCEED
@@ -945,7 +948,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             ctx.repeated += 1
             self._fixation_count += 1
             if ctx.repeated >= 2 or (tool_call == ctx.last_command and ctx.repeated >= 1):
-                bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count})
+                bus.emit("ui_repeated_tool", {"tool": tool_name, "step": self.state.step_count,
+                                          "session_id": getattr(self.state, "session_id", "unknown")})
                 _critique_sugg = self._extract_listing_files()
                 self.state.append_message(
                     {
@@ -984,12 +988,15 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         if tool_name == "execute_shell":
             command = tool_args.get("command", "")
             if not is_safe_command(command):
-                bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count})
-                bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count})
+                bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count,
+                                                 "session_id": getattr(self.state, "session_id", "unknown")})
+                bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count,
+                                                   "session_id": getattr(self.state, "session_id", "unknown")})
                 bus.emit("tool_auth_violation", {
                     "role": "ORCHESTRATOR",
                     "tool": tool_name,
                     "error": "shell command violated security policy",
+                    "session_id": getattr(self.state, "session_id", "unknown"),
                 })
                 self._flag_latest_evidence_critical()
                 self.state.append_message(
@@ -1005,8 +1012,10 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             # Interactive permission gate (human-in-the-loop).
             approved = self._request_shell_approval(command, timeout=60.0)
             if approved is False:
-                bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count})
-                bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count})
+                bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count,
+                                                 "session_id": getattr(self.state, "session_id", "unknown")})
+                bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count,
+                                                   "session_id": getattr(self.state, "session_id", "unknown")})
                 self._flag_latest_evidence_critical()
                 warned = self._approval_timed_out
                 self.state.append_message(
@@ -1092,16 +1101,20 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             # Silent auto-approval — MUST NOT touch the live status line so the
             # AgentStatusBar never flickers. Emitted as a structured,
             # non-interactive security log the renderer can consume quietly.
-            bus.emit("security_log", {"level": "info", "message": f"Auto-approved by policy: {command}"})
+            bus.emit("security_log", {"level": "info", "message": f"Auto-approved by policy: {command}",
+                                      "session_id": getattr(self.state, "session_id", "unknown")})
             ctx.approved_shell.add(command)
             return True
         if decision is PermissionDecision.DENY:
             # Auto-reject by policy (distinct from a heuristic block or a user
             # denial). Always runs AFTER the non-overridable Phase 2.1 sweep, so
             # an obfuscated payload is still caught there first.
-            bus.emit("security_log", {"level": "warn", "message": f"Auto-denied by policy: {command} ({reason})"})
-            bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count})
-            bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count})
+            bus.emit("security_log", {"level": "warn", "message": f"Auto-denied by policy: {command} ({reason})",
+                                      "session_id": getattr(self.state, "session_id", "unknown")})
+            bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count,
+                                             "session_id": getattr(self.state, "session_id", "unknown")})
+            bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count,
+                                               "session_id": getattr(self.state, "session_id", "unknown")})
             self._approval_timed_out = False
             self.state.append_message(
                 {
@@ -1228,6 +1241,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                     bus.emit("tool_security_blocked", {
                         "command": f"file_system.{action}({path})",
                         "step": self.state.step_count,
+                        "session_id": getattr(self.state, "session_id", "unknown"),
                     })
                     return ToolResult(
                         success=False,
@@ -1255,6 +1269,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                         "tool": "web_search",
                         "query": raw_query,
                         "step": self.state.step_count,
+                        "session_id": getattr(self.state, "session_id", "unknown"),
                     })
                     return ToolResult(
                         success=True,
@@ -1281,6 +1296,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 bus.emit("tool_security_blocked", {
                     "command": f"{tool_name}({tool_args}) blocked: answer in hand",
                     "step": self.state.step_count,
+                    "session_id": getattr(self.state, "session_id", "unknown"),
                 })
                 return ToolResult(
                     success=True,
@@ -1667,10 +1683,11 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         except KeyboardInterrupt:
             self.state.update_status("PAUSED")
             interrupted = True
-            bus.emit("loop_interrupted", {})
+            bus.emit("loop_interrupted", {"session_id": getattr(self.state, "session_id", "unknown")})
         except Exception as exc:
             self.state.update_status("ERROR")
-            bus.emit("loop_error", {"step": self.state.step_count, "error": str(exc)})
+            bus.emit("loop_error", {"step": self.state.step_count, "error": str(exc),
+                                    "session_id": getattr(self.state, "session_id", "unknown")})
             raise
         finally:
             self._finalize_loop(interrupted)
@@ -1693,7 +1710,8 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             )
             bus.emit("context_compacted", {
                 "messages_after": len(self.state.messages),
-                "tokens_saved_estimate": self._estimate_tokens_saved()
+                "tokens_saved_estimate": self._estimate_tokens_saved(),
+                "session_id": getattr(self.state, "session_id", "unknown"),
             })
 
         self._maybe_auto_trigger_rag()
@@ -1791,6 +1809,7 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 bus.emit("loop_completed", {
                     "reason": "exact_action_complete",
                     "output": tool_output,
+                    "session_id": getattr(self.state, "session_id", "unknown"),
                 })
             else:
                 # Claim gate rejected — apply cap on retries
@@ -1895,13 +1914,15 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
         if not interrupted:
             if self.state.status == "RUNNING" and not self.state.is_loop_safe():
                 self.state.update_status("PAUSED")
-                bus.emit("loop_max_steps_reached", {"max_steps": self.state.max_steps})
+                bus.emit("loop_max_steps_reached", {"max_steps": self.state.max_steps,
+                                                    "session_id": getattr(self.state, "session_id", "unknown")})
             # Phase4.1 Auto-Critical (c): a clean completion means the final
             # successful tool artifact matches the root task — freeze it as the
             # canonical Critical Evidence so an LMK resume keeps the answer anchor.
             if self.state.status in ("COMPLETED", "COMPLETED"):
                 self._flag_latest_success_evidence_critical()
-            bus.emit("loop_finished", {"status": self.state.status, "steps": self.state.step_count})
+            bus.emit("loop_finished", {"status": self.state.status, "steps": self.state.step_count,
+                                       "session_id": getattr(self.state, "session_id", "unknown")})
 
     def _flag_latest_success_evidence_critical(self) -> None:
         """Freeze the most-recent *successful* evidence record as Critical."""

@@ -29,7 +29,7 @@ from typing import Any, Dict, List
 # These symbols are used across multiple methods. All other dependencies are
 # imported lazily inside the scope that needs them (see _lazy_* helpers below).
 from core.agent_manager import MemoryStore
-from core.kernel.events import bus
+from core.kernel.events import bus, emit_with_session
 
 # Local package roots that are NOT third-party (treat as internal, never
 # route through uv). Extend here if more first-party namespaces appear.
@@ -164,7 +164,7 @@ class OrchestratorAgent:
             self.scratchpad["attempts"] = attempt
 
             _broadcast_orch("CODER_START", f"attempt {attempt}/{max_retries}")
-            bus.emit("agent_handoff", {
+            emit_with_session(bus, "agent_handoff", {
                 "from_role": "ORCHESTRATOR",
                 "to_role": "CODER",
                 "payload": task,
@@ -226,7 +226,7 @@ class OrchestratorAgent:
                 _broadcast_sandbox("TEST_PASS", f"attempt {attempt}")
 
             _broadcast_orch("VERIFIER_EVALUATE", f"attempt {attempt}")
-            bus.emit("agent_handoff", {
+            emit_with_session(bus, "agent_handoff", {
                 "from_role": "CODER",
                 "to_role": "AUDITOR",
                 "payload": last_payload[:2000],
@@ -252,7 +252,7 @@ class OrchestratorAgent:
                 pass
             MemoryStore.log_failure(f"orch:{task[:80]}", reasons)
             _broadcast_orch("VERIFIER_REJECT", f"attempt {attempt}: {reasons}")
-            bus.emit("agent_handoff", {
+            emit_with_session(bus, "agent_handoff", {
                 "from_role": "AUDITOR",
                 "to_role": "CODER",
                 "payload": reasons,

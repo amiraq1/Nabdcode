@@ -186,9 +186,9 @@ def _is_thought_only(response_text: str) -> bool:
     Used by the blind-loop guard to abort on the first occurrence, before the
     model can spin an infinite no-progress loop.
     """
-    normalized = _normalize_response(response_text)
-    if len(normalized) < 10:
-        return True
+    # NOTE: no length heuristic here — a short legitimate answer (e.g. "2")
+    # must NOT be classified as thought-only. Only the explicit thought
+    # patterns below (and the repetition check in the caller) are used.
     return any(p.search(response_text.strip()) for p in FORBIDDEN_THOUGHT_PATTERNS)
 
 
@@ -643,10 +643,11 @@ def _commit_terminal_outcome(
         output: The final answer text (optional)
         fallback_msg: Fallback message when output is empty
     """
-    from core.kernel.events import bus
+    from core.kernel.events import bus, emit_with_session
     from core.turn_outcome import TurnOutcome, TurnStatus
 
     ctx = getattr(loop_self, "_ctx", None)
+    _sid = getattr(loop_self.state, "session_id", "unknown")
 
     if status == "COMPLETED":
         # Successful terminal outcome
@@ -658,8 +659,8 @@ def _commit_terminal_outcome(
         loop_self._last_response = final_output
 
         # Emit terminal events exactly once.
-        bus.emit("loop_completed", {"reason": reason, "output": final_output})
-        bus.emit("show_final_answer", {"output": final_output})
+        emit_with_session(bus, "loop_completed", {"reason": reason, "output": final_output}, _sid)
+        emit_with_session(bus, "show_final_answer", {"output": final_output}, _sid)
 
         # Commit to TurnFinalizer (idempotent — rejects duplicates).
         loop_self._turn_finalizer.finalize(TurnOutcome(
@@ -676,8 +677,8 @@ def _commit_terminal_outcome(
         final_output = output or fallback_msg or "(failed)"
         loop_self._last_response = final_output
 
-        bus.emit("loop_completed", {"reason": reason, "output": final_output})
-        bus.emit("show_final_answer", {"output": final_output})
+        emit_with_session(bus, "loop_completed", {"reason": reason, "output": final_output}, _sid)
+        emit_with_session(bus, "show_final_answer", {"output": final_output}, _sid)
 
         loop_self._turn_finalizer.finalize(TurnOutcome(
             status=TurnStatus.FAILED,
@@ -687,7 +688,7 @@ def _commit_terminal_outcome(
     elif status == "PAUSED":
         # Paused — no terminal events emitted.
         loop_self.state.update_status("PAUSED")
-        bus.emit("loop_interrupted", {"reason": reason})
+        emit_with_session(bus, "loop_interrupted", {"reason": reason}, _sid)
     else:
         # Default: FAILED for unknown status.
         loop_self.state.update_status("FAILED")
@@ -697,8 +698,8 @@ def _commit_terminal_outcome(
         final_output = output or fallback_msg or f"(unknown terminal status: {status})"
         loop_self._last_response = final_output
 
-        bus.emit("loop_completed", {"reason": reason, "output": final_output})
-        bus.emit("show_final_answer", {"output": final_output})
+        emit_with_session(bus, "loop_completed", {"reason": reason, "output": final_output}, _sid)
+        emit_with_session(bus, "show_final_answer", {"output": final_output}, _sid)
 
         loop_self._turn_finalizer.finalize(TurnOutcome(
             status=TurnStatus.FAILED,

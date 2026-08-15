@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List
 
-from core.kernel.events import bus
+from core.kernel.events import bus, emit_with_session
 from engine.interfaces import DispatcherProtocol
 from engine.state import RuntimeState, GoalSpec
 from engine.consent import ConsentManager
@@ -283,7 +283,8 @@ class NativeDeepAgent:
                 encoding="utf-8",
             )
             tmp.replace(path)
-            bus.emit("deep_checkpoint_saved", {"iteration": state.iteration, "status": state.status})
+            bus.emit("deep_checkpoint_saved", {"iteration": state.iteration, "status": state.status,
+                                               "session_id": getattr(state, "session_id", "unknown")})
         except Exception:
             # Fail-open: checkpoint loss must not break the running task.
             pass
@@ -385,7 +386,8 @@ class NativeDeepAgent:
             state.status = "CLARIFY"
             state.clarification_question = question
             state.clarification_options = options
-            bus.emit("clarify_triggered", {"question": question, "options": options, "iteration": state.iteration})
+            bus.emit("clarify_triggered", {"question": question, "options": options, "iteration": state.iteration,
+                                           "session_id": getattr(state, "session_id", "unknown")})
             if self.clarify_callback:
                 user_ans = self.clarify_callback(question, options)
                 if user_ans:
@@ -399,7 +401,8 @@ class NativeDeepAgent:
         # Phase3.2: explicit cursor — node entry is checkpointed immediately.
         state.current_node = "PLAN"
         self._save_checkpoint(state)
-        bus.emit("deep_plan", {"task": state.task, "iteration": state.iteration})
+        bus.emit("deep_plan", {"task": state.task, "iteration": state.iteration,
+                               "session_id": getattr(state, "session_id", "unknown")})
 
         if self.llm:
             prompt = (
@@ -431,7 +434,8 @@ class NativeDeepAgent:
         # Phase3.2: explicit cursor — node entry checkpointed immediately.
         state.current_node = "REPLAN"
         self._save_checkpoint(state)
-        bus.emit("deep_replan", {"critique": state.critique, "iteration": state.iteration})
+        bus.emit("deep_replan", {"critique": state.critique, "iteration": state.iteration,
+                                 "session_id": getattr(state, "session_id", "unknown")})
 
         if self.llm:
             prompt = (
@@ -487,7 +491,8 @@ class NativeDeepAgent:
         # Phase3.2: explicit cursor — node entry is checkpointed immediately.
         state.current_node = "EXECUTE"
         self._save_checkpoint(state)
-        bus.emit("deep_exec", {"steps": state.plan, "iteration": state.iteration})
+        bus.emit("deep_exec", {"steps": state.plan, "iteration": state.iteration,
+                               "session_id": getattr(state, "session_id", "unknown")})
 
         # Phase3.2: the mid-EXECUTE re-dispatch guard fires only once, on
         # the FIRST execute_node call after an LMK resume. Consume the flag
@@ -533,7 +538,8 @@ class NativeDeepAgent:
                 break
 
             if self._is_sensitive_action(step) or state.critique:
-                bus.emit("hitl_triggered", {"step": step, "iteration": state.iteration})
+                bus.emit("hitl_triggered", {"step": step, "iteration": state.iteration,
+                                            "session_id": getattr(state, "session_id", "unknown")})
                 if self.hitl_callback and not self.hitl_callback(step):
                     state.critique = f"User rejected step: '{step}'. Re-plan alternative path."
                     state.errors.append("USER_REJECTION")
@@ -542,7 +548,8 @@ class NativeDeepAgent:
                     return state
 
             worker_tag = "[SEC]" if any(k in step.lower() for k in ("security", "audit", "vuln", "patch")) else "[FS]"
-            bus.emit("deep_exec_step", {"step_idx": idx + 1, "total": len(state.plan), "step": step, "worker": worker_tag})
+            bus.emit("deep_exec_step", {"step_idx": idx + 1, "total": len(state.plan), "step": step, "worker": worker_tag,
+                                        "session_id": getattr(state, "session_id", "unknown")})
 
             # Build context from this plan step, past observations, and tool schemas
             tool_schemas = self._tool_schemas_summary()
@@ -689,7 +696,8 @@ class NativeDeepAgent:
         # Phase3.2: explicit cursor — node entry checkpointed immediately.
         state.current_node = "REVIEW"
         self._save_checkpoint(state)
-        bus.emit("deep_review", {"output_len": len(state.final_output), "iteration": state.iteration})
+        bus.emit("deep_review", {"output_len": len(state.final_output), "iteration": state.iteration,
+                                 "session_id": getattr(state, "session_id", "unknown")})
 
         reflection = {
             "success": len(state.errors) == 0,
@@ -751,7 +759,8 @@ class NativeDeepAgent:
             # Phase5 (GoalSpec): re-inject the checkpointed objective into the
             # live runtime_state so the verifiable exit gate fires on resume.
             self._reconcile_goal_with_checkpoint(state)
-            bus.emit("deep_resume", {"task": state.task, "iteration": state.iteration})
+            bus.emit("deep_resume", {"task": state.task, "iteration": state.iteration,
+                                     "session_id": getattr(state, "session_id", "unknown")})
         else:
             state = DeepAgentState(task=task)
             # Phase5 (GoalSpec): mirror any active objective into the checkpoint
@@ -924,12 +933,14 @@ def maybe_resume_deep_agent(agent: "NativeDeepAgent") -> bool:
         return False
 
     if reply in ("y", "yes"):
-        bus.emit("deep_resume_prompted", {"decision": "resume"})
+        bus.emit("deep_resume_prompted", {"decision": "resume",
+                                          "session_id": getattr(getattr(agent, "runtime_state", None), "session_id", "unknown")})
         return True
 
     # Any non-yes answer → purge and start clean.
     agent._clear_checkpoint()
-    bus.emit("deep_resume_prompted", {"decision": "purge"})
+    bus.emit("deep_resume_prompted", {"decision": "purge",
+                                      "session_id": getattr(getattr(agent, "runtime_state", None), "session_id", "unknown")})
     return True
 
 

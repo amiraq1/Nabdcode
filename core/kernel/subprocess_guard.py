@@ -62,7 +62,7 @@ from core.kernel.security import (
     split_pipe_segments,
     validate,
 )
-from core.kernel.events import bus
+from core.kernel.events import bus, emit_with_session
 
 
 # Type aliases -----------------------------------------------------------------
@@ -218,7 +218,7 @@ class SubprocessGuard:
         """
         ok, reason = validate(command)
         if not ok:
-            bus.emit("subprocess_blocked", {
+            emit_with_session(bus, "subprocess_blocked", {
                 "policy": Policy.AGENT_SHELL.value,
                 "command": command,
                 "reason": reason,
@@ -226,7 +226,7 @@ class SubprocessGuard:
             return -1, "", f"Security Violation: {reason}"
 
         if self._consent is not None and not self._consent(tool_name, args or {"command": command}):
-            bus.emit("subprocess_blocked", {
+            emit_with_session(bus, "subprocess_blocked", {
                 "policy": Policy.AGENT_SHELL.value,
                 "command": command,
                 "reason": "user_declined",
@@ -234,7 +234,7 @@ class SubprocessGuard:
             return -1, "", "Execution blocked by user."
 
         result = self._run_simple(command, timeout)
-        bus.emit("subprocess_executed", {
+        emit_with_session(bus, "subprocess_executed", {
             "policy": Policy.AGENT_SHELL.value,
             "command": command,
             "returncode": result[0],
@@ -254,7 +254,7 @@ class SubprocessGuard:
         """
         ok, reason = validate(command)
         if not ok:
-            bus.emit("subprocess_blocked", {
+            emit_with_session(bus, "subprocess_blocked", {
                 "policy": Policy.AGENT_SHELL.value,
                 "command": command,
                 "reason": reason,
@@ -262,7 +262,7 @@ class SubprocessGuard:
             return -1, "", f"Security Violation: {reason}"
 
         if self._consent is not None and not self._consent("execute_shell", {"command": command}):
-            bus.emit("subprocess_blocked", {
+            emit_with_session(bus, "subprocess_blocked", {
                 "policy": Policy.AGENT_SHELL.value,
                 "command": command,
                 "reason": "user_declined",
@@ -276,7 +276,7 @@ class SubprocessGuard:
         for seg in segments:
             safe, scan_reason = _args_safe_for_execution(seg, context="pipeline")
             if not safe:
-                bus.emit("subprocess_blocked", {
+                emit_with_session(bus, "subprocess_blocked", {
                     "policy": Policy.AGENT_SHELL.value,
                     "command": command,
                     "reason": scan_reason,
@@ -326,7 +326,7 @@ class SubprocessGuard:
                 stdout_data or "",
                 combined_err,
             )
-            bus.emit("subprocess_executed", {
+            emit_with_session(bus, "subprocess_executed", {
                 "policy": Policy.AGENT_SHELL.value,
                 "command": command,
                 "returncode": result[0],
@@ -365,7 +365,7 @@ class SubprocessGuard:
 
         ok, reason = validate(bg_cmd)
         if not ok:
-            bus.emit("subprocess_blocked", {
+            emit_with_session(bus, "subprocess_blocked", {
                 "policy": Policy.AGENT_SHELL.value,
                 "command": bg_cmd,
                 "reason": reason,
@@ -373,7 +373,7 @@ class SubprocessGuard:
             return -1, "", f"Security Violation: {reason}"
 
         if self._consent is not None and not self._consent("execute_shell", {"command": bg_cmd}):
-            bus.emit("subprocess_blocked", {
+            emit_with_session(bus, "subprocess_blocked", {
                 "policy": Policy.AGENT_SHELL.value,
                 "command": bg_cmd,
                 "reason": "user_declined",
@@ -389,7 +389,7 @@ class SubprocessGuard:
 
         safe, scan_reason = _args_safe_for_execution(args, context="background")
         if not safe:
-            bus.emit("subprocess_blocked", {
+            emit_with_session(bus, "subprocess_blocked", {
                 "policy": Policy.AGENT_SHELL.value,
                 "command": bg_cmd,
                 "reason": scan_reason,
@@ -406,7 +406,7 @@ class SubprocessGuard:
             )
             with self._bg_lock:
                 self._bg[proc.pid] = proc
-            bus.emit("subprocess_spawned", {
+            emit_with_session(bus, "subprocess_spawned", {
                 "policy": Policy.AGENT_SHELL.value,
                 "command": bg_cmd,
                 "pid": proc.pid,
@@ -485,7 +485,7 @@ class SubprocessGuard:
             return -1, "", f"Git args blocked: {reason}"
 
         result = self._run_tokens(args, timeout, cwd=str(cwd_path))
-        bus.emit("subprocess_executed", {
+        emit_with_session(bus, "subprocess_executed", {
             "policy": Policy.GIT.value,
             "command": " ".join(args),
             "returncode": result[0],
@@ -537,7 +537,7 @@ class SubprocessGuard:
         except Exception as exc:  # noqa: BLE001 - containment boundary
             result = (-1, "", f"{type(exc).__name__}: {exc}")
 
-        bus.emit("subprocess_executed", {
+        emit_with_session(bus, "subprocess_executed", {
             "policy": Policy.INFRA.value,
             "command": " ".join(args),
             "returncode": result[0],
@@ -595,7 +595,7 @@ class SubprocessGuard:
 
             # If timeout is specified, wait for the process and kill on expiry.
             if proc is not None:
-                bus.emit("subprocess_spawned", {
+                emit_with_session(bus, "subprocess_spawned", {
                     "policy": Policy.INFRA.value,
                     "command": " ".join(args),
                     "pid": proc.pid,

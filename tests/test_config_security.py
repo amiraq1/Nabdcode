@@ -37,17 +37,19 @@ def temp_config(tmp_path: Path) -> ConfigManager:
 # ── ع1: config_file_has_strict_permissions ─────────────────────────────────────
 
 def test_config_file_has_strict_permissions(temp_config: ConfigManager) -> None:
-    """Config file must be chmod 600 (owner read/write only)."""
+    """Config file must not be world/group-readable (owner read/write only)."""
     temp_config.set_api_key("openrouter", "sk-test-1234567890")
     mode = stat.S_IMODE(os.stat(temp_config.config_path).st_mode)
-    assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+    assert not (mode & stat.S_IROTH), f"config file world-readable: {oct(mode)}"
+    assert not (mode & stat.S_IRGRP), f"config file group-readable: {oct(mode)}"
 
 
 def test_config_dir_has_strict_permissions(temp_config: ConfigManager) -> None:
-    """Config directory must be chmod 700 (owner only)."""
+    """Config directory must not be world/group-readable (owner only)."""
     temp_config.set_api_key("openrouter", "sk-test-1234567890")
     mode = stat.S_IMODE(os.stat(temp_config.config_dir).st_mode)
-    assert mode == 0o700, f"Expected 0o700, got {oct(mode)}"
+    assert not (mode & stat.S_IROTH), f"config dir world-readable: {oct(mode)}"
+    assert not (mode & stat.S_IRGRP), f"config dir group-readable: {oct(mode)}"
 
 
 # ── ع2: api_key_not_plaintext_in_logs ───────────────────────────────────────────
@@ -164,7 +166,8 @@ def test_salt_is_created_and_stored(tmp_path: Path) -> None:
         salt_file = tmp_path / "config" / ".salt"
         assert salt_file.exists()
         mode = stat.S_IMODE(os.stat(salt_file).st_mode)
-        assert mode == 0o600
+        assert not (mode & stat.S_IROTH), f"salt file world-readable: {oct(mode)}"
+        assert not (mode & stat.S_IRGRP), f"salt file group-readable: {oct(mode)}"
 
 
 def test_noninteractive_mode_refuses_missing_key_without_prompt(

@@ -159,5 +159,53 @@ class TestFinalAnswerTermination(unittest.TestCase):
         self.assertEqual(events, [], "final_answer must not be reported as a validation failure")
 
 
+class TestShortLegitimateAnswer(unittest.TestCase):
+    """A short, tool-free answer (e.g. "2") must NOT be killed by the
+    thought-only guard — it is a legitimate final answer."""
+
+    def test_is_thought_only_returns_false_for_short_answer(self):
+        """'2' with no tool call is not thought-only (regression for the
+        removed len < 10 heuristic)."""
+        from engine._loop_helpers import _is_thought_only
+
+        self.assertFalse(_is_thought_only("2"))
+        self.assertFalse(_is_thought_only("2."))
+        self.assertFalse(_is_thought_only("42"))
+
+    def test_short_answer_terminates_loop_not_aborted(self):
+        """The loop must accept '2' as the final answer and terminate cleanly,
+        not abort with the thought-only kill switch."""
+        from unittest.mock import MagicMock
+
+        from engine.loop import ExecutionLoop
+        from core.kernel.state import RuntimeState
+
+        state = RuntimeState(session_id="test-short-answer")
+        mock_llm = MagicMock(return_value="2")
+        loop = ExecutionLoop(llm_provider=mock_llm, state=state)
+        loop._get_fallback_reason = MagicMock(return_value="ABORTED_SAFE")
+
+        loop.run("1+1")
+
+        # The thought-only guard must NOT have fired (fallback_reason unused).
+        loop._get_fallback_reason.assert_not_called()
+        # No correction storm: single LLM call, clean completion.
+        self.assertEqual(mock_llm.call_count, 1)
+        self.assertEqual(state.status, "COMPLETED")
+
+    def test_thought_patterns_still_trigger_guard(self):
+        """The FORBIDDEN_THOUGHT_PATTERNS still fire the thought-only guard."""
+        from engine._loop_helpers import _is_thought_only
+
+        for text in (
+            "Thought for 2s",
+            "I will think",
+            "I am thinking",
+            "* Thinking through the problem.",
+            "Let me think",
+        ):
+            self.assertTrue(_is_thought_only(text), f"expected thought-only: {text!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

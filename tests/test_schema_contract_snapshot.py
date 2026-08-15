@@ -28,10 +28,30 @@ def _get_schema_fields(cls) -> dict:
     """Return {field_name: {'type': type_str, 'default': repr(default)}}."""
     result = {}
     for f in dataclasses.fields(cls):
-        typ = str(f.type.__name__) if hasattr(f.type, "__name__") else str(f.type)
+        typ = _normalize_type(f.type)
         dflt = f.default
         result[f.name] = {"type": typ, "default": repr(dflt)}
     return result
+
+
+def _normalize_type(t) -> str:
+    """Version-independent string form of a field's type annotation.
+
+    ``typing.Optional[X]``/``Union[X, None]`` has different ``__name__``
+    across Python versions ('Optional' on 3.12, 'Union' on 3.14), so
+    ``__name__`` is NOT a stable key. Normalize via ``get_origin``/``get_args``:
+    any Union (including Optional) is always rendered as the bare ``Union``
+    name — matching the existing snapshot's canonical form — so the comparison
+    is deterministic across Python versions.
+    """
+    import typing
+
+    origin = typing.get_origin(t)
+    if origin is typing.Union:
+        return "Union"
+    if hasattr(t, "__name__"):
+        return str(t.__name__)
+    return str(t)
 
 
 def _compare_fields(snapshot_key: str, cls, snapshot: dict) -> list[str]:

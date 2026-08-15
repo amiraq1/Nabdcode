@@ -541,7 +541,7 @@ class LocalClient:
             method="POST",
             data=body,
         )
-        from core.kernel.events import bus
+        from core.kernel.events import bus, emit_with_session
 
         accumulated: list[str] = []
         STREAM_READ_TIMEOUT = 60.0
@@ -567,7 +567,7 @@ class LocalClient:
                         content = sanitize(delta.get("content", ""))
                         if content:
                             accumulated.append(content)
-                            bus.emit("llm_token", {"token": content})
+                            emit_with_session(bus, "llm_token", {"token": content})
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
             if exc.code == 429:

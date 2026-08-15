@@ -103,3 +103,5 @@ session-*.md
 
 # Claude Code local workspace (tool artefact, not project state)
 .claude/
+.coverage
+dist_tmp/
