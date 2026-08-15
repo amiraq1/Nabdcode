@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 # ── Event Wiring ───────────────────────────────────────────────────────────
 from ui.cc_style import status_compact_line
+from engine.ui_theme import thought_summary, select_status_verb
 
 _step_start_time: float | None = None
 _timed_step: object = None
@@ -74,10 +75,13 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
     def _on_llm_completed(p: dict) -> None:
         # UI-CC-7: all phases done — compact line marks completion.
         from rich.console import Console
+        elapsed = p.get("duration") or _elapsed_for(_turn_index)
         Console().print(status_compact_line(
-            step=_turn_index, elapsed=p.get("duration") or _elapsed_for(_turn_index),
+            step=_turn_index, elapsed=elapsed,
             thinking=True, tools=True, generating=True,
         ))
+        # Surface duration only: reasoning content remains intentionally hidden.
+        Console().print(thought_summary(elapsed, expand_hint="activity summary"))
         renderer.flush()
         metrics.record_api_call(duration=p.get("duration", 1.0))
 
@@ -128,6 +132,14 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         elif kind in ("SEARCH", "MEMORY") and output:
             count = output.count("[")
             summary = f"{count} results"
+        elif kind == "TASK":
+            metadata = getattr(result, "metadata", {}) or {}
+            node_id = str(metadata.get("task_graph_task_id", "")).strip()
+            graph_status = str(metadata.get("task_graph_status", "untracked")).strip()
+            evidence_ids = metadata.get("evidence_ids", []) or []
+            role = str(_last_tool_args.get("role", "research")).strip().lower() or "research"
+            node_part = f"node={node_id}" if node_id else "no graph node"
+            summary = f"{role} · {graph_status} · {node_part} · evidence={len(evidence_ids)}"
 
         renderer.tool_end(
             tool,
@@ -136,6 +148,7 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
             summary=summary,
             diff=diff_text if kind == "EDIT" and diff_text else "",
         )
+        renderer.status_snapshot(select_status_verb(_last_stage, tool, _turn_index))
         renderer.flush()
 
         # Render TODO list when the todo_write tool completes

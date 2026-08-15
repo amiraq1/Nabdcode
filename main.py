@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 import json
 import os
+import html
 import sys
 import threading
 from typing import Any
@@ -25,10 +26,10 @@ from core.turn_outcome import TurnOutcome, TurnStatus
 from core.text_utils import safe_display
 from ui.design.theme.semantic import SEMANTIC
 from ui.theme import (
-    PROMPT_HTML_PREFIX,
     PROMPT_HTML_SUFFIX,
     PROMPT_HTML_PLACEHOLDER,
 )
+from engine.ui_theme import workflow_prompt_hint
 from core.prompts import BASE_INSTRUCTIONS
 base_inst = BASE_INSTRUCTIONS
 
@@ -39,6 +40,30 @@ _last_echoed_input: str = ""
 def echo_user_input(text: str) -> None:
     # No-op: PromptSession already displays prompt and user input cleanly.
     pass
+
+
+def toggle_workflow_mode_from_shortcut(state: Any) -> str:
+    """Toggle normal/PLAN from Shift+Tab without revoking approved APPLY mode."""
+    from core.plan_apply import (
+        APPLY_MODE,
+        PLAN_MODE,
+        PLAN_MODE_INSTRUCTION,
+        current_mode,
+        enter_plan_mode,
+        return_to_normal_mode,
+        synchronize_mode_context,
+    )
+
+    mode = current_mode(state)
+    if mode == APPLY_MODE:
+        return mode
+    if mode == PLAN_MODE:
+        return_to_normal_mode(state)
+        synchronize_mode_context(state, None)
+    else:
+        enter_plan_mode(state)
+        synchronize_mode_context(state, PLAN_MODE_INSTRUCTION)
+    return current_mode(state)
 
 
 # ── Tool output summariser ─────────────────────────────────────────────────
@@ -467,10 +492,23 @@ def _run_repl(
     import sys
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import InMemoryHistory
-    from prompt_toolkit.formatted_text import ANSI, HTML
+    from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.key_binding import KeyBindings
 
-    plan_mode: bool = False
+    from core.plan_apply import APPLY_MODE, PLAN_MODE, current_mode, task_graph_live_status
+
+    def _prompt_chrome() -> HTML:
+        mode = current_mode(state)
+        task_summary = task_graph_live_status(state) or ""
+        hint = workflow_prompt_hint(mode, task_summary)
+        hint_html = html.escape(hint).replace("\n", "<br/>")
+        color = "ansigreen" if mode == APPLY_MODE else ("ansiyellow" if mode == PLAN_MODE else "ansimagenta")
+        rule = "─" * 48
+        return HTML(
+            f"<style fg='grey'>{rule}</style><br/>"
+            f"<style fg='{color}'>{hint_html}</style><br/>"
+            f"{PROMPT_HTML_SUFFIX}"
+        )
 
     bindings = KeyBindings()
 
@@ -486,8 +524,8 @@ def _run_repl(
 
     @bindings.add("s-tab")
     def _on_shift_tab(event) -> None:
-        nonlocal plan_mode
-        plan_mode = not plan_mode
+        """Toggle the real read-only PLAN mode; never revoke an approved APPLY by keypress."""
+        toggle_workflow_mode_from_shortcut(state)
 
     input_session = PromptSession(
         history=InMemoryHistory(),
@@ -512,9 +550,7 @@ def _run_repl(
         while True:
             try:
                 user_input = input_session.prompt(
-                    HTML(
-                        f"{PROMPT_HTML_PREFIX}\n{PROMPT_HTML_SUFFIX}"
-                    ),
+                    _prompt_chrome(),
                     placeholder=HTML(PROMPT_HTML_PLACEHOLDER),
                 ).strip()
             except (KeyboardInterrupt, EOFError):
