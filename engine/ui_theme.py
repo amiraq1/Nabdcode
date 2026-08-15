@@ -58,6 +58,8 @@ P: dict[str, tuple[int, int, int]] = {
     "todo_open":    (160, 160, 170),
     "tree":         (90, 90, 100),
     "status_fg":    (255, 255, 255),
+    "thought":      (216, 180, 254),
+    "apply":        (74, 222, 128),
 }
 
 
@@ -103,6 +105,16 @@ def strike(s: str) -> str:
 
 
 # ── Status chip (Examining / Sculpting) ────────────────────────────────────
+def thought_summary(seconds: float | int, *, expand_hint: str = "ctrl+o to expand") -> str:
+    """Render a collapsed, privacy-safe thought-duration line."""
+    whole_seconds = max(0, int(round(float(seconds))))
+    unit = "second" if whole_seconds == 1 else "seconds"
+    return (
+        f"{fg(*P['thought'])}✳ Thought for {whole_seconds} {unit}{_RESET} "
+        f"{dim(f'[{expand_hint}]')}"
+    )
+
+
 def status_chip(verb: str, tokens: str | float | int | None = None) -> str:
     tail = ""
     if tokens is not None:
@@ -140,12 +152,11 @@ def collapsed(n_lines: int, key_hint: str = "") -> str:
 # ── Tools → badge map ──────────────────────────────────────────────────────
 def map_tool_to_badge(tool_name: str, args: Optional[dict[str, Any]] = None) -> str:
     t = (tool_name or "").lower()
-    if t in ("file_system", "file") and args:
-        action = str(args.get("action", "")).lower()
+    if t in ("file_system", "file"):
+        action = str((args or {}).get("action", "read")).lower()
         if action in ("edit", "write", "append", "replace", "patch"):
             return "EDIT"
-        if action in ("read",):
-            return "READ"
+        return "READ"
     if "shell" in t or "exec" in t or t == "bash":
         return "SHELL"
     if "read" in t or t in ("read_file", "open_file", "file_system", "file"):
@@ -160,6 +171,8 @@ def map_tool_to_badge(tool_name: str, args: Optional[dict[str, Any]] = None) -> 
         return "SEARCH"
     if "memory" in t:
         return "MEMORY"
+    if t == "task" or "subagent" in t or "delegate" in t:
+        return "TASK"
     if "kill" in t:
         return "KILL"
     return tool_name.upper()[:12] or "TOOL"
@@ -247,14 +260,29 @@ def assistant_narration(text: str) -> str:
     return dim(f":: {text}")
 
 
-def prompt_footer(plan_mode: bool = False) -> str:
+def workflow_prompt_hint(mode: str = "normal", task_summary: str = "") -> str:
+    """Return a compact, plain-text workflow hint for prompt_toolkit surfaces."""
+    normalized = str(mode or "normal").lower()
+    if normalized == "apply":
+        hint = "apply mode approved  [/review to inspect]"
+    elif normalized == "plan":
+        hint = "plan mode  [shift+tab]"
+    else:
+        hint = "» accept edits on  [shift+tab]"
+    return f"{hint}\n{task_summary}" if task_summary else hint
+
+
+def prompt_footer(plan_mode: bool = False, *, apply_mode: bool = False, task_summary: str = "") -> str:
     w = term_width()
     line = "─" * max(20, w - 1)
-    mode = (
-        f"{fg(250, 204, 21)}plan mode{_RESET} {dim('[shift+tab]')}"
-        if plan_mode
-        else f"{fg(*P['accent'])}» accept edits on{_RESET} {dim('[shift+tab]')}"
-    )
+    if apply_mode:
+        mode = f"{fg(*P['apply'])}apply mode approved{_RESET} {dim('[/review to inspect]')}"
+    elif plan_mode:
+        mode = f"{fg(250, 204, 21)}plan mode{_RESET} {dim('[shift+tab]')}"
+    else:
+        mode = f"{fg(*P['accent'])}» accept edits on{_RESET} {dim('[shift+tab]')}"
+    if task_summary:
+        mode = f"{mode}\n{dim(task_summary)}"
     return (
         f"{dim(line)}\n"
         f"{fg(*P['prompt'])}> {_RESET}{dim('Ask your question...')}\n"

@@ -50,9 +50,14 @@ _STATUS_VERBS = ("Drafting", "Conjuring", "Choreographing",
 _verb_cycle = itertools.cycle(_STATUS_VERBS)
 
 
-def badge_for_tool(tool: str) -> tuple[str, str]:
-    """Map a tool name to (LABEL, rich-style) for the badge."""
+def badge_for_tool(tool: str, args: dict | None = None) -> tuple[str, str]:
+    """Map a tool name and optional action to (LABEL, rich-style) for the badge."""
     t = tool.lower()
+    if t in ("file_system", "file"):
+        action = str((args or {}).get("action", "read")).lower()
+        return ("EDIT" if action in ("edit", "write", "append", "replace", "patch") else "READ"), BADGE_STYLE
+    if t == "task" or "subagent" in t or "delegate" in t:
+        return "TASK", BADGE_STYLE
     if "read" in t:
         return "READ", BADGE_STYLE
     if any(k in t for k in ("write", "edit", "replace")):
@@ -137,7 +142,7 @@ def tool_header_line(tool: str, args: dict | None = None) -> str:
     derived from :func:`badge_for_tool`; the argument from
     :func:`_primary_arg`.
     """
-    label, _style = badge_for_tool(tool)
+    label, _style = badge_for_tool(tool, args)
     primary = _primary_arg(args)
     if primary:
         return f"{label}  {primary}"

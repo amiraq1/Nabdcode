@@ -61,6 +61,7 @@ from engine.ui_theme import (
     fg,
     P,
     tree_prefix,
+    status_chip,
 )
 from ui.design.primitives.personality import style_of
 from ui.design.state import UIState
@@ -238,6 +239,10 @@ class Renderer:
             self._token_count += n
         self._status_draw()
 
+    def status_snapshot(self, verb: str, tokens: str | float | int | None = None) -> None:
+        """Append a read-only terminal status chip to scrollback."""
+        self._lines_append(status_chip(verb, tokens))
+
     def status_end(self) -> None:
         """Clear the status chip from the internal buffer. Never writes to stdout."""
         with self._lock:
@@ -325,8 +330,6 @@ class Renderer:
         # Summary path (e.g. "382 lines", "10 results")
         if summary:
             self._lines_append(f"{tree_prefix()}{dim(summary)}")
-            if not lines:
-                self._lines_append(collapsed(0, ""))
             return
 
         # Collapsed output path
@@ -425,6 +428,14 @@ def _format_args(kind: str, tool: str, args: dict) -> tuple[str, str]:
         item_id = args.get("item_id", "")
         label = f"update #{item_id}" if action == "update" and item_id else action
         return f"[{label}]", ""
+    if kind == "TASK":
+        role = str(args.get("role", "research")).strip().lower() or "research"
+        task_id = str(args.get("task_id", "")).strip()
+        prompt = str(args.get("prompt", "")).replace("\n", " ").strip()
+        if len(prompt) > 52:
+            prompt = prompt[:49] + "..."
+        extra = f"node={task_id}" if task_id else "delegated"
+        return f"[{role}] {prompt or 'delegated work'}", extra
     if kind in ("SEARCH", "MEMORY", "RAG"):
         query = args.get("query", "")
         return f'["{query[:40]}"]', ""
