@@ -61,6 +61,32 @@ def _candidate_tests(root: Path, files: list[str]) -> list[str]:
     return unique[:8]
 
 
+def _risk_assessment(
+    risk_text: str,
+    files: list[str],
+    additions: int,
+    removals: int,
+) -> tuple[str, list[str]]:
+    """Return a conservative risk level and human-readable signals."""
+    reasons: list[str] = []
+    if _HIGH_RISK_RE.search(risk_text):
+        reasons.append("sensitive operation or credential keyword detected")
+    if additions > 100 or removals > 100:
+        reasons.append("large change volume exceeds 100 lines")
+    if reasons:
+        return "high", reasons
+
+    if _MEDIUM_RISK_RE.search(risk_text):
+        reasons.append("configuration, dependency, permission, or refactor keyword detected")
+    if len(files) > 3:
+        reasons.append("more than three files are affected")
+    if additions > 30 or removals > 30:
+        reasons.append("change volume exceeds 30 lines")
+    if reasons:
+        return "medium", reasons
+    return "low", ["no high- or medium-risk signals detected"]
+
+
 def build_review(state: Any, workspace_root: str | Path | None = None) -> dict[str, Any]:
     root = _workspace(workspace_root)
     plan_items = [str(item) for item in (getattr(state, "plan_items", ()) or ())]
@@ -70,12 +96,7 @@ def build_review(state: Any, workspace_root: str | Path | None = None) -> dict[s
     risk_text = "\n".join(plan_items + files + [diff_text])
     additions = sum(int(getattr(edit, "additions", 0) or 0) for edit in pending)
     removals = sum(int(getattr(edit, "removals", 0) or 0) for edit in pending)
-    if _HIGH_RISK_RE.search(risk_text) or additions > 100 or removals > 100:
-        risk = "high"
-    elif _MEDIUM_RISK_RE.search(risk_text) or len(files) > 3 or additions > 30 or removals > 30:
-        risk = "medium"
-    else:
-        risk = "low"
+    risk, risk_reasons = _risk_assessment(risk_text, files, additions, removals)
 
     edit_previews = []
     for edit in pending:
@@ -91,6 +112,7 @@ def build_review(state: Any, workspace_root: str | Path | None = None) -> dict[s
     return {
         "revision": int(getattr(state, "plan_revision", 0) or 0),
         "risk": risk,
+        "risk_reasons": risk_reasons,
         "plan_items": plan_items,
         "files": files,
         "pending_edits": edit_previews,
@@ -162,19 +184,44 @@ def approve_review(state: Any) -> tuple[bool, str]:
 
 
 def format_review(report: dict[str, Any]) -> str:
+    """Render a stable, terminal-friendly review report for human approval."""
+    risk = str(report.get("risk", "unknown")).upper()
     lines = [
-        f"[Review] revision={report.get('revision', 0)} risk={report.get('risk', 'unknown')} ",
-        f"files={len(report.get('files', []))} +{report.get('additions', 0)}/-{report.get('removals', 0)}",
-        "Plan:",
+        "=" * 72,
+        f"DIFF REVIEW | PLAN REVISION {report.get('revision', 0)} | RISK: {risk}",
+        "=" * 72,
+        (
+            f"Summary: {len(report.get('files', []))} file(s), "
+            f"+{report.get('additions', 0)}/-{report.get('removals', 0)} line(s)"
+        ),
+        "Risk signals:",
     ]
+    lines.extend(f"  - {reason}" for reason in report.get("risk_reasons", []))
+    lines.append("")
+    lines.append("Plan:")
     lines.extend(f"  {i}. {item}" for i, item in enumerate(report.get("plan_items", []), 1))
     if not report.get("plan_items"):
         lines.append("  (no recorded plan)")
-    lines.append(f"Tests: {report.get('test_status', 'not_run')} — {', '.join(report.get('test_candidates', [])) or 'none'}")
-    for edit in report.get("pending_edits", []):
-        lines.append(f"Diff: {edit['path']} (+{edit['additions']}/-{edit['removals']})")
-        if edit.get("diff_preview"):
-            lines.append(edit["diff_preview"])
+
+    lines.append("")
+    lines.append("Candidate tests:")
+    tests = report.get("test_candidates", [])
+    lines.extend(f"  - {test}" for test in tests)
+    if not tests:
+        lines.append("  (none; review status may be not_applicable)")
+    lines.append(f"Test status: {report.get('test_status', 'not_run')}")
+
+    lines.append("")
+    lines.append("Changed files and redacted previews:")
+    edits = report.get("pending_edits", [])
+    if not edits:
+        lines.append("  (no pending edits)")
+    for edit in edits:
+        lines.append(f"  {edit['path']} (+{edit['additions']}/-{edit['removals']})")
+        preview = str(edit.get("diff_preview", "") or "").strip()
+        if preview:
+            lines.append("    " + "\n    ".join(preview.splitlines()))
     if report.get("test_output"):
-        lines.append(f"Test output:\n{report['test_output']}")
+        lines.extend(["", "Test output:", str(report["test_output"])])
+    lines.extend(["", "Decision: inspect this report before /review approve.", "=" * 72])
     return "\n".join(lines)

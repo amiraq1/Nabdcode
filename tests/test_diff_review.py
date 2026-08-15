@@ -6,6 +6,7 @@ from core.diff_review import (
     build_review,
     review_is_approved,
     run_review_tests,
+    format_review,
     store_review,
 )
 from core.kernel.state import RuntimeState
@@ -72,6 +73,30 @@ def test_new_plan_invalidates_previous_review_and_apply():
     ok, message = authorize_apply(state)
     assert ok is False
     assert "review" in message.lower()
+
+
+def test_format_review_is_structured_and_human_readable():
+    output = format_review(
+        {
+            "revision": 4,
+            "risk": "high",
+            "risk_reasons": ["sensitive operation or credential keyword detected"],
+            "files": ["config.py"],
+            "additions": 2,
+            "removals": 1,
+            "plan_items": ["Review config"],
+            "test_candidates": ["tests/test_config.py"],
+            "test_status": "passed",
+            "pending_edits": [
+                {"path": "config.py", "additions": 2, "removals": 1, "diff_preview": "+token=<redacted>"}
+            ],
+        }
+    )
+    assert "DIFF REVIEW | PLAN REVISION 4 | RISK: HIGH" in output
+    assert "Risk signals:" in output
+    assert "Candidate tests:" in output
+    assert "config.py (+2/-1)" in output
+    assert "Decision: inspect this report before /review approve." in output
 
 
 def test_apply_gate_requires_review_approval():
