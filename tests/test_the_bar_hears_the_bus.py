@@ -133,14 +133,47 @@ def test_the_bar_hears_tool_started(monkeypatch):
 
 
 def test_the_bar_hears_show_final_answer(monkeypatch):
-    """Contract 3: show_final_answer must drive the real bar to complete (all done)."""
+    """Contract 3: show_final_answer must drive the real bar to complete.
+
+    Stage 2: a *direct* answer (no tool_started) must complete Thinking
+    and Generating but leave Running Tools as ``pending``.
+    """
     ctx = _make_ctx(monkeypatch)
-    _emit_and_check(
-        ctx,
-        monkeypatch,
-        _FINAL_ANSWER,
-        {"final_answer": "done"},
-        "Generating",
-        "done",
-        "show_final_answer -> all phases done",
-    )
+
+    subscribers_before = _snapshot_subscribers()
+    try:
+        main_mod.wire_events(ctx)
+
+        bar = main_mod.status_bar
+        # Simulate the real event sequence for a direct answer:
+        # llm_request_started → loop_completed → show_final_answer
+        bus.emit("llm_request_started", {"step": 1})
+        bus.emit("loop_completed", {"reason": "completed", "output": "Hello!"})
+        bus.emit("show_final_answer", {"final_answer": "Hello!"})
+
+        assert bar._phase_states["Thinking"] == "done"
+        assert bar._phase_states["Running Tools"] == "pending"  # no tool started
+        assert bar._phase_states["Generating"] == "done"
+    finally:
+        _restore_subscribers(subscribers_before)
+
+
+def test_the_bar_marks_tools_done_after_tool_started(monkeypatch):
+    """When a tool IS started, show_final_answer must mark Tools as done."""
+    ctx = _make_ctx(monkeypatch)
+
+    subscribers_before = _snapshot_subscribers()
+    try:
+        main_mod.wire_events(ctx)
+
+        bar = main_mod.status_bar
+        bus.emit("llm_request_started", {"step": 1})
+        bus.emit("tool_started", {"tool": "execute_shell", "args": {"command": "echo hi"}})
+        bus.emit("loop_completed", {"reason": "completed", "output": "done"})
+        bus.emit("show_final_answer", {"final_answer": "done"})
+
+        assert bar._phase_states["Thinking"] == "done"
+        assert bar._phase_states["Running Tools"] == "done"
+        assert bar._phase_states["Generating"] == "done"
+    finally:
+        _restore_subscribers(subscribers_before)

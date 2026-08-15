@@ -17,11 +17,19 @@ from ui.design.theme.semantic import SEMANTIC
 
 
 def _supports_ansi() -> bool:
-    """Best-effort: assume ANSI unless stdout is explicitly non-tty/plain."""
+    """Best-effort: assume ANSI unless stdout is explicitly non-tty/plain.
+
+    Honors ``NO_COLOR`` and ``TERM=dumb`` via the centralized
+    ``colors_enabled()`` gate.
+    """
     try:
-        return sys.stdout.isatty() and os_environ_get("TERM") != "dumb"
+        from ui.design.theme import colors_enabled
+        return colors_enabled()
     except Exception:
-        return False
+        try:
+            return sys.stdout.isatty() and os_environ_get("TERM") != "dumb"
+        except Exception:
+            return False
 
 
 def os_environ_get(key: str) -> str:
@@ -187,40 +195,40 @@ _w = SEMANTIC.text_bright.rgb
 _badge_open = f"\033[48;2;{_badge_rgb[0]};{_badge_rgb[1]};{_badge_rgb[2]};38;2;{_w[0]};{_w[1]};{_w[2]};1m"
 _thinking_rgb = SEMANTIC.thinking.rgb
 _thinking_open = f"\033[48;2;{_thinking_rgb[0]};{_thinking_rgb[1]};{_thinking_rgb[2]};38;2;{_w[0]};{_w[1]};{_w[2]};1m"
-_BENTO_COLORS = {
-    "READ": (_badge_open, "\033[0m"),
-    "SHELL": (_badge_open, "\033[0m"),
-    "WRITE": (_badge_open, "\033[0m"),
-    "SEARCH": (_badge_open, "\033[0m"),
-    "TODOS": (_badge_open, "\033[0m"),
-    "AGENT": (_thinking_open, "\033[0m"),
+_BENTO_COLORS: dict[str, tuple[str, str]] = {
+    # Unified with map_tool_to_badge labels (single source of truth).
+    "READ":    (_badge_open, "\033[0m"),
+    "EDIT":    (_badge_open, "\033[0m"),
+    "SHELL":   (_badge_open, "\033[0m"),
+    "SEARCH":  (_badge_open, "\033[0m"),
+    "TODOS":   (_badge_open, "\033[0m"),
+    "TASK":    (_thinking_open, "\033[0m"),
+    "RAG":     (_badge_open, "\033[0m"),
+    "MEMORY":  (_badge_open, "\033[0m"),
+    "KILL":    ("\033[48;2;224;62;74m\033[38;2;255;255;255m\033[1m", "\033[0m"),
     "DEFAULT": (_badge_open, "\033[0m"),
 }
 
 
-def _tool_badge_label(tool_name: str) -> str:
-    """Map a tool name to a short bento label."""
-    name = (tool_name or "").lower()
-    if "shell" in name:
-        return "SHELL"
-    if "todo" in name:
-        return "TODOS"
-    if "reader" in name or "read" in name or "workspace" in name:
-        return "READ"
-    if "file_system" in name or "write" in name or "edit" in name:
-        return "WRITE"
-    if "search" in name or "web" in name:
-        return "SEARCH"
-    if "agent" in name or "executor" in name:
-        return "AGENT"
-    return "DEFAULT"
+def _tool_badge_label(tool_name: str, args: dict | None = None) -> str:
+    """Map a tool name to a short bento label.
+
+    Delegates to ``map_tool_to_badge`` so that all three rendering paths
+    (Renderer, REPL, bento) share one classification source.
+    """
+    from engine.ui_theme import map_tool_to_badge
+    return map_tool_to_badge(tool_name, args)
 
 
 def render_bento_badge(tool_name: str, summary: str, ansi: bool = True) -> str:
     """Render a single-line high-contrast bento badge for a tool action.
 
     Example: ' SHELL  pip install requests' with a cyan background block.
+    Honors NO_COLOR / TERM=dumb: falls back to plain ``[LABEL] summary``
+    when the environment disables color.
     """
+    from ui.design.theme import colors_enabled
+    ansi = ansi and colors_enabled()
     label = _tool_badge_label(tool_name)
     condensed = _condense(summary)
     if ansi:

@@ -58,6 +58,34 @@ _SECRET_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 _REDACTED = "[REDACTED]"
 
+# ── Absolute-path scrubbing (privacy, not access control) ─────────────────
+# In normal display mode, absolute filesystem paths from untrusted tool
+# output are rewritten to a neutral marker so a ``pwd`` / ``find /home/...``
+# never reveals the host layout.  Only an explicit diagnostic mode reveals
+# them.  This is DISPLAY scrubbing — it never gates access.
+_PATH_SCRUB_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?<![\w/])(?:/"
+    r"(?:[^/\s]+)"
+    r"(?:/[^/\s]+)+)"
+    r"(?=[\s,\]\")]|$)"
+)
+_PATH_SCRUB_NEUTRAL: Final[str] = "<path>"
+
+# Patterns that must NOT be scrubbed: workspace-relative tokens like
+# ``src/app.py`` (no leading slash) are already safe.
+_RELATIVE_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?<![/\w])(?:\.{1,2}/)")
+
+
+def scrub_absolute_paths(text: str) -> str:
+    """Rewrite absolute filesystem paths in *text* to ``<path>``.
+
+    Only matches slash-anchored absolute paths (``/home/...``, ``/tmp/...``,
+    ``/data/...``); relative paths (``src/app.py``) are left untouched.
+    """
+    if not text:
+        return text
+    return _PATH_SCRUB_PATTERN.sub(_PATH_SCRUB_NEUTRAL, text)
+
 
 def strip_ansi_sequences(text: str, keep_color: bool = False) -> str:
     text = _OSC_PATTERN.sub("", text)

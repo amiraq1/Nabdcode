@@ -21,14 +21,115 @@ _WORKSPACE_ROOT: Path | None = None
 
 
 def pin_workspace_root(root: Path) -> None:
-    """Pin the workspace root for path validation."""
+    """Pin the workspace root for path validation.
+
+    Pass ``None`` to unpin (revert to cwd fallback).
+    """
     global _WORKSPACE_ROOT
-    _WORKSPACE_ROOT = root.resolve()
+    if root is None:
+        _WORKSPACE_ROOT = None
+    else:
+        _WORKSPACE_ROOT = root.resolve()
 
 
 def get_workspace_root() -> Path:
     """Return the pinned workspace root, or cwd as fallback."""
     return _WORKSPACE_ROOT.resolve() if _WORKSPACE_ROOT else Path.cwd().resolve()
+
+
+def is_workspace_pinned() -> bool:
+    """Return True if a workspace root has been explicitly pinned via
+    ``pin_workspace_root()``.
+
+    When False, ``get_workspace_root()`` falls back to ``Path.cwd()`` —
+    but callers that need an authoritative workspace (e.g. auto-scan)
+    should surface an explicit message instead of silently operating on
+    an unknown directory.
+    """
+    return _WORKSPACE_ROOT is not None
+
+
+# ── Display-path conversion (privacy) ───────────────────────────────────────
+# Separate from the jail decision (_validate_path).  The jail decides whether
+# access is ALLOWED; display_path decides how a path is RENDERED.  The rule:
+# in normal mode, show only the workspace-relative form (or a short project
+# name), never the full absolute path.
+
+def display_path(path: str | Path, *, workspace_root: Path | None = None,
+                 diagnostic: bool = False) -> str:
+    """Return a privacy-safe rendering of *path* for the terminal UI.
+
+    Resolution order (mirrors the jail decision, but for display only):
+      1. Resolve *path* against the (pinned) workspace root when possible.
+      2. If the resolved path is INSIDE the workspace → return the
+         workspace-relative form (e.g. ``src/app.py``).
+      3. If the path is the workspace root itself → return just its name
+         (e.g. ``project-a``).
+      4. If the path is OUTSIDE the workspace → return ``<outside-workspace>``
+         in normal mode; only *diagnostic=True* reveals the absolute form.
+      5. When no workspace is pinned → return a short basename, never the
+         full ``/home/...`` chain.
+
+    This function NEVER authorizes access; it only renders.
+    """
+    import re as _re
+
+    # Windows-style / UNC paths: on POSIX these parse as a single filename
+    # (backslashes are not separators), which would leak the full string via
+    # .name.  Detect them explicitly and never reveal them in normal mode.
+    _WIN_DRIVE = _re.compile(r"^[A-Za-z]:[\\/]")
+    _UNC = _re.compile(r"^\\\\")
+    if isinstance(path, str):
+        if _WIN_DRIVE.match(path) or _UNC.match(path) or "\\" in path:
+            if diagnostic:
+                return path
+            return "<path>"
+
+    try:
+        p = Path(path)
+    except (TypeError, ValueError):
+        return str(path)
+
+    if workspace_root is None:
+        if is_workspace_pinned():
+            workspace_root = get_workspace_root()
+        else:
+            # No workspace pinned: keep a relative path intact (the caller may
+            # be showing a project-relative path like "core/task_graph.py").
+            # An absolute path is privacy-sensitive → hide it entirely.
+            if not p.is_absolute():
+                return p.as_posix()
+            if not diagnostic:
+                return "<outside-workspace>"
+            return str(p.resolve())
+
+    try:
+        root = Path(workspace_root).resolve()
+    except Exception:
+        root = Path(workspace_root)
+
+    # A relative path is interpreted relative to the workspace root (not cwd).
+    candidate = p if p.is_absolute() else root / p
+
+    try:
+        resolved = candidate.resolve()
+    except Exception:
+        resolved = candidate
+
+    # Workspace root itself → bare name.
+    try:
+        rel = resolved.relative_to(root)
+        if rel == Path("."):
+            return root.name or str(root)
+        # Relative display: posix separators, no leading "./".
+        return rel.as_posix()
+    except ValueError:
+        pass
+
+    # Outside the workspace.
+    if diagnostic:
+        return str(resolved)
+    return "<outside-workspace>"
 
 
 def _validate_path(path: str) -> bool:

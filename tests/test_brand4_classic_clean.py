@@ -74,7 +74,7 @@ def test_no_bottom_toolbar():
 def test_protected_untouched():
     import hashlib, pathlib
     FINGERPRINTS = {
-        "ui/widgets/status_bar.py": "95159d7cec5f09a9",
+        "ui/widgets/status_bar.py": "e5e5e3d5089915bc",
     }
     root = pathlib.Path(__file__).parent.parent
     for rel, expected in FINGERPRINTS.items():

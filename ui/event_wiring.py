@@ -37,11 +37,13 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
 
     _token_buf: str = ""
     _held_buf: str = ""
+    _tool_was_used: bool = False
 
     def _on_llm_started(p: dict) -> None:
-        nonlocal _turn_index, _token_buf, _held_buf
+        nonlocal _turn_index, _token_buf, _held_buf, _tool_was_used
         _token_buf = ""
         _held_buf = ""
+        _tool_was_used = False  # Stage 2: reset per-turn tool tracking
         _turn_index += 1
         # UI-CC-7: inline compact status line replaces the live SectionPanel
         # box that was rendered by the status bar (protected file untouched).
@@ -75,24 +77,31 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
     def _on_llm_completed(p: dict) -> None:
         # UI-CC-7: all phases done — compact line marks completion.
         from rich.console import Console
+        from rich.text import Text
         elapsed = p.get("duration") or _elapsed_for(_turn_index)
+        # Stage 2: only mark Tools done if a tool was actually started this turn.
         Console().print(status_compact_line(
             step=_turn_index, elapsed=elapsed,
-            thinking=True, tools=True, generating=True,
+            thinking=True, tools=_tool_was_used, generating=True,
         ))
         # Surface duration only: reasoning content remains intentionally hidden.
-        Console().print(thought_summary(elapsed, expand_hint="activity summary"))
+        # Stage 1: wrap ANSI string in Text.from_ansi so Rich renders it as
+        # styled Text, not as raw escape codes passed through as a plain string.
+        Console().print(Text.from_ansi(
+            thought_summary(elapsed, expand_hint="activity summary")
+        ))
         renderer.flush()
         metrics.record_api_call(duration=p.get("duration", 1.0))
 
     def _on_tool_started(p: dict) -> None:
         if getattr(bus, "_on_tool_completed_active", False):
             return
-        nonlocal _last_tool_args, _last_tool_name
+        nonlocal _last_tool_args, _last_tool_name, _tool_was_used
         tool = p.get("tool") or p.get("name", "")
         args = p.get("args") or {}
         _last_tool_args = args
         _last_tool_name = tool
+        _tool_was_used = True  # Stage 2: mark Tools phase as entered
         renderer.tool_start(tool, args)
         renderer.flush()
 

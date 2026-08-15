@@ -307,11 +307,49 @@ class Renderer:
         If *diff* is provided (EDIT tools), renders a unified diff block.
         If *summary* is provided, emits one tree line.
         Otherwise collapses *output* lines with a folded indicator.
+
+        Privacy (Stage 4): tool OUTPUT is scrubbed of absolute filesystem
+        paths in normal mode — both in the collapsed preview AND the stored
+        expand block (Ctrl+O).  Only ``NABD_DIAGNOSTIC_PATHS=1`` reveals
+        them.  READ/EDIT diffs of workspace files are already relative.
         """
+        import os
+        from core.sanitize import scrub_absolute_paths
+        from engine.ui_theme import tool_secondary_info
+
+        _diag_paths = os.getenv("NABD_DIAGNOSTIC_PATHS", "").lower() in ("1", "true", "yes")
+        if not _diag_paths:
+            output = scrub_absolute_paths(output)
+            summary = scrub_absolute_paths(summary)
+            diff = scrub_absolute_paths(diff)
         output = sanitize(output or "", preserve_tabs=True)
         summary = sanitize(summary or "")
         lines = output.splitlines()
         n = len(lines)
+        kind = map_tool_to_badge(tool, {})
+
+        # Secondary info line (Stage 4): dimmed, honest summary under the
+        # header — line counts, diff stats, node id.
+        if not success:
+            self._lines_append(f"{tree_prefix()}{dim('failed')}")
+        else:
+            secondary = ""
+            if kind == "EDIT":
+                diff_lines = (diff or "").splitlines()
+                adds = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+                dels = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+                secondary = tool_secondary_info(kind, success=True, adds=adds, dels=dels)
+            elif kind == "READ":
+                secondary = tool_secondary_info(kind, success=True, lines=n)
+            elif kind == "SHELL":
+                secondary = tool_secondary_info(kind, success=True, lines=n)
+            elif kind == "TASK":
+                node_id = str(summary.split("node=")[-1].split()[0]) if "node=" in summary else ""
+                secondary = tool_secondary_info(kind, success=True, node=node_id)
+            else:
+                secondary = tool_secondary_info(kind, success=True, lines=n)
+            if secondary:
+                self._lines_append(f"{tree_prefix()}{dim(secondary)}")
 
         # Diff path
         if diff:
@@ -336,11 +374,11 @@ class Renderer:
         if not lines:
             return
         self.store_collapsed(lines)
-        show = lines[:6]
+        show = lines[:5]
         for l in show:
             self._lines_append(f"{tree_prefix()}{dim(l)}")
-        if n > 6:
-            self._lines_append(collapsed(n - 6))
+        if n > 5:
+            self._lines_append(collapsed(n - 5, key_hint="ctrl+o to expand"))
 
     def todos(self, items: list[dict[str, Any]]) -> None:
         """Emit a TODOS checklist block (Cursor style)."""
@@ -403,13 +441,17 @@ def _format_args(kind: str, tool: str, args: dict) -> tuple[str, str]:
 
     e.g. kind=READ  → detail="[core/llm.py]", extra=""
          kind=SHELL → detail="[ls -la]", extra=""
+
+    Privacy: file paths are rendered relative to the pinned workspace via
+    ``display_path`` — an absolute path in args never leaks to the header.
     """
+    from core.kernel.security import display_path
     if kind == "READ":
         path = (
             args.get("path") or args.get("file") or args.get("filename") or tool
         )
         # Extra filled on tool_end with line count
-        return f"[{path}]", ""
+        return f"[{display_path(str(path))}]", ""
     if kind == "SHELL":
         cmd = (
             args.get("command") or args.get("cmd") or ""
@@ -422,7 +464,7 @@ def _format_args(kind: str, tool: str, args: dict) -> tuple[str, str]:
         path = (
             args.get("path") or args.get("file") or tool
         )
-        return f"[{path}]", ""
+        return f"[{display_path(str(path))}]", ""
     if kind == "TODOS":
         action = args.get("action", "plan")
         item_id = args.get("item_id", "")

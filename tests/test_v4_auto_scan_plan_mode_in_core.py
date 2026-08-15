@@ -33,6 +33,7 @@ def test_auto_scan_returns_dict_structure():
     assert "triggered" in result
     assert "success" in result
     assert "entry_count" in result
+    assert "workspace_root" in result  # Stage 4: explicit workspace root
     assert result["triggered"] is False
 
 

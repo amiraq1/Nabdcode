@@ -19,13 +19,32 @@ from ui.design.state import UIState
 _STYLE = style_of(UIState.THINKING)
 
 # ── ANSI shortcuts ──────────────────────────────────────────────────────────
+# Stage 7: when colors are disabled (NO_COLOR / TERM=dumb), every ANSI
+# helper returns a no-op so the output is plain text.  The gate is consulted
+# at call time so runtime env changes (e.g. tests) are honored.
+try:
+    from ui.design.theme import colors_enabled as _colors_enabled
+except Exception:  # pragma: no cover — fallback keeps helpers functional
+    _colors_enabled = None
+
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
 _STRIKE = "\033[9m"
 
 
+def _color_active() -> bool:
+    if _colors_enabled is not None:
+        try:
+            return _colors_enabled()
+        except Exception:
+            return True
+    return True
+
+
 def _ansi(r: int, g: int, b: int, fg: bool = True) -> str:
+    if not _color_active():
+        return ""
     return f"\033[{38 if fg else 48};2;{r};{g};{b}m"
 
 
@@ -92,15 +111,21 @@ _BADGE_COLORS: dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]] = {
 def badge(label: str, *, color: str = "default") -> str:
     """Rounded pill like ` SHELL ` with background + bold."""
     b, f = _BADGE_COLORS.get(color, _BADGE_COLORS["default"])
+    if not _color_active():
+        return f" {label} "
     return f"{bg(*b)}{fg(*f)}{_BOLD} {label} {_RESET}"
 
 
 # ── Dim / reset shortcuts ──────────────────────────────────────────────────
 def dim(s: str) -> str:
+    if not _color_active():
+        return str(s)
     return f"{_DIM}{s}{_RESET}"
 
 
 def strike(s: str) -> str:
+    if not _color_active():
+        return str(s)
     return f"{_STRIKE}{s}{_RESET}"
 
 
@@ -109,6 +134,8 @@ def thought_summary(seconds: float | int, *, expand_hint: str = "ctrl+o to expan
     """Render a collapsed, privacy-safe thought-duration line."""
     whole_seconds = max(0, int(round(float(seconds))))
     unit = "second" if whole_seconds == 1 else "seconds"
+    if not _color_active():
+        return f"✳ Thought for {whole_seconds} {unit} [{expand_hint}]"
     return (
         f"{fg(*P['thought'])}✳ Thought for {whole_seconds} {unit}{_RESET} "
         f"{dim(f'[{expand_hint}]')}"
@@ -126,20 +153,50 @@ def status_chip(verb: str, tokens: str | float | int | None = None) -> str:
         else:
             tail = f" {tokens}"
     inner = f" {verb}... "
+    if not _color_active():
+        return f"{inner.strip()}{tail}"
     return f"{badge(inner.strip(), color='status')}{fg(*P['meta'])}{tail}{_RESET}"
 
 
 # ── Tool header ────────────────────────────────────────────────────────────
 def tool_header(kind: str, detail: str, extra: str = "") -> str:
     """READ  [core/llm.py] 382 lines"""
+    if not _color_active():
+        return f"{kind}  {detail}{f' {extra}' if extra else ''}"
     parts = [badge(kind), f" {fg(*P['path'])}{detail}{_RESET}"]
     if extra:
         parts.append(f" {fg(*P['meta'])}{extra}{_RESET}")
     return "".join(parts)
 
 
+def tool_secondary_info(kind: str, *, success: bool, lines: int = 0,
+                        adds: int = 0, dels: int = 0, node: str = "",
+                        results: int = 0) -> str:
+    """Build the dimmed secondary info line shown under a tool header.
+
+    Returns a plain string like ``382 lines``, ``Updated with +15 −2``,
+    ``node=review-1`` or an empty string when there is nothing to show.
+    The text is honest — computed from real counts passed in.
+    """
+    if not success:
+        return "failed"
+    if kind == "READ" and lines > 0:
+        return f"{lines} lines"
+    if kind == "EDIT":
+        return f"Updated with +{adds} −{dels}"
+    if kind == "SHELL" and lines > 0:
+        return f"{lines} lines"
+    if kind == "TASK":
+        return f"node={node}" if node else "delegated"
+    if kind in ("SEARCH", "MEMORY", "RAG") and results > 0:
+        return f"{results} results"
+    return ""
+
+
 # ── Tree helpers ────────────────────────────────────────────────────────────
 def tree_prefix() -> str:
+    if not _color_active():
+        return "└ "
     return f"{fg(*P['tree'])}└{_RESET} "
 
 
@@ -180,25 +237,61 @@ def map_tool_to_badge(tool_name: str, args: Optional[dict[str, Any]] = None) -> 
 
 # ── Stage-aware status verbs ──────────────────────────────────────────────
 def select_status_verb(stage: str = "", last_tool: str = "", turn_index: int = 0) -> str:
-    """Select stage-aware dynamic status verbs matching Phase UI-3 spec."""
+    """Select a stage-aware verb that reflects what is actually happening.
+
+    No fabricated or alternating verbs — each verb maps to a real action
+    category.  ``turn_index`` is accepted for backward-compat callers but
+    does not produce a different verb (no alternation).
+    """
     s = (stage or "").lower()
     t = (last_tool or "").lower()
 
+    # Plan phase
     if "plan" in s or "choreograph" in s:
-        return "Choreographing" if turn_index % 2 == 1 else "Planning"
-    if s == "edit" or "write" in t or "edit" in t or "replace" in t or "patch" in t:
-        return "Crafting" if turn_index % 2 == 1 else "Sculpting"
-    if s == "shell" or "shell" in t or "exec" in t or "test" in t or "build" in t:
-        return "Verifying" if turn_index % 2 == 1 else "Tuning"
-    if s == "read" or "read" in t or "search" in t or "memory" in t:
-        return "Inspecting" if "memory" in t or "search" in t else "Examining"
+        return "Planning"
+
+    # Generating final answer
+    if s == "generating" or "answer" in s:
+        return "Writing"
+
+    # Tool-specific verbs (checked before stage, as stage may be stale
+    # for task/search/rag/memory tools whose _last_stage is never updated).
+    if t == "task" or "subagent" in t or "delegate" in t:
+        return "Delegating"
+    if "search" in t or "web" in t:
+        return "Searching"
+    if "rag" in t or "knowledge" in t:
+        return "Searching"
+    if "memory" in t:
+        return "Examining"
+
+    # Stage-based verbs for file_system and shell — _last_stage tracks the
+    # action type, so stage == "edit" means a write happened.
+    if s in ("edit", "write", "replace"):
+        return "Editing"
+    if s in ("shell", "execute"):
+        return "Executing"
+    if s in ("read", "inspect"):
+        return "Examining"
+
+    # Tool-name fallback for generic detection
+    if "shell" in t or "exec" in t or "bash" in t:
+        return "Executing"
+    if "read" in t or "file" in t:
+        return "Examining"
+
+    # First-turn
     if s in ("init", "user_input", "first_turn"):
-        return "Reading" if turn_index % 2 == 1 else "Examining"
-    return "Planning" if turn_index % 2 == 1 else "Thinking"
+        return "Reading"
+
+    # No specific stage or tool known
+    return "Reasoning"
 
 
 # ── Diff rendering ──────────────────────────────────────────────────────────
 def _diff_line(line: str) -> str:
+    if not _color_active():
+        return line
     if line.startswith("+") and not line.startswith("+++"):
         return f"{fg(*P['add'])}{line}{_RESET}"
     if line.startswith("-") and not line.startswith("---"):

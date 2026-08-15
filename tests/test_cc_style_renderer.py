@@ -23,8 +23,9 @@ def test_badge_for_tool_maps_correctly() -> None:
     assert badge_for_tool("file_system.read")[0] == "READ"
     assert badge_for_tool("execute_shell")[0] == "SHELL"
     assert badge_for_tool("file_system.write")[0] == "EDIT"
-    assert badge_for_tool("list_dir")[0] == "LIST"
     assert badge_for_tool("web_search")[0] == "SEARCH"
+    # list_dir is not a registered tool → falls back to uppercase-truncated name
+    assert badge_for_tool("list_dir")[0] == "LIST_DIR"
 
 
 # ── ع2: collapse_lines_shows_footer ──────────────────────────────────────────
@@ -73,8 +74,8 @@ def test_format_tokens_human_readable() -> None:
 
 def test_status_verb_from_known_set() -> None:
     known = {
-        "Drafting", "Conjuring", "Choreographing",
-        "Abracadabraing", "Crafting",
+        "Examining", "Editing", "Executing", "Searching",
+        "Delegating", "Reasoning", "Writing",
     }
     for _ in range(10):
         assert next_status_verb() in known

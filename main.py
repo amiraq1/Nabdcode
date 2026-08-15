@@ -343,6 +343,22 @@ def _run_interactive_turn(
         if hasattr(state, "append_message"):
             state.append_message({"role": "system", "content": _exact_inst})
 
+    # ── Stage 3: Temporal / current-information intent detection ────────────
+    # If the user asks for "latest", "today", "news", or similar time-bound
+    # info, inject a system message that forces web_search instead of relying
+    # on the LLM's static training-data memory.
+    from core.temporal_intent import detect_temporal_intent, build_temporal_system_message
+    _intent = detect_temporal_intent(user_input)
+    if _intent is not None and hasattr(state, "append_message"):
+        _search_available = (
+            ctx.tool_registry is not None
+            and "web_search" in ctx.tool_registry
+        )
+        _temporal_msg = build_temporal_system_message(
+            _intent, has_search_tool=_search_available
+        )
+        state.append_message({"role": "system", "content": _temporal_msg})
+
     if hasattr(visualizer, "_final_answer_rendered"):
         visualizer._final_answer_rendered = False
 
@@ -504,8 +520,35 @@ def _run_repl(
         hint_html = html.escape(hint).replace("\n", "<br/>")
         color = "ansigreen" if mode == APPLY_MODE else ("ansiyellow" if mode == PLAN_MODE else "ansimagenta")
         rule = "─" * 48
+
+        # Stage 3 (UI plan): a compact context bar above the prompt with
+        # workspace root + mode + graph status — from real state only.
+        # Stage 4 (privacy): show the project NAME (or short form), never the
+        # full absolute workspace path, unless an explicit diagnostic flag is
+        # set (e.g. NABD_DIAGNOSTIC_PATHS=1).
+        from core.kernel.security import is_workspace_pinned, display_path
+        if is_workspace_pinned():
+            _diag = os.getenv("NABD_DIAGNOSTIC_PATHS", "").lower() in ("1", "true", "yes")
+            ws_label = display_path(get_workspace_root(), diagnostic=_diag)
+            if len(ws_label) > 48:
+                ws_label = ws_label[:45] + "..."
+        else:
+            ws_label = "no workspace selected"
+        ws_html = html.escape(ws_label)
+        mode_label = "normal" if mode not in (APPLY_MODE, PLAN_MODE) else mode
+        graph_part = ""
+        if task_summary:
+            # task_summary already contains "TaskGraph rX ..." — show only
+            # the mode + ready/active portion to keep the line compact.
+            graph_part = f"  ·  {html.escape(task_summary)}"
+        ctx_line = (
+            f"<style fg='grey'>workspace: {ws_html}  ·  mode: {mode_label}</style>"
+            f"<style fg='grey'>{graph_part}</style>"
+        )
+
         return HTML(
             f"<style fg='grey'>{rule}</style><br/>"
+            f"{ctx_line}<br/>"
             f"<style fg='{color}'>{hint_html}</style><br/>"
             f"{PROMPT_HTML_SUFFIX}"
         )
