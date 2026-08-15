@@ -174,6 +174,37 @@ def start_task(state: Any, task_id: str, *, role: str) -> Any:
     )
 
 
+def complete_task(
+    state: Any,
+    task_id: str,
+    *,
+    evidence_ids: Iterable[str],
+    reason: str = "task completed",
+) -> Any:
+    """Complete a running graph task through the current plan authority seam."""
+    graph = getattr(state, "task_graph", None)
+    revision = int(getattr(state, "plan_revision", 0) or 0)
+    if current_mode(state) not in {PLAN_MODE, APPLY_MODE}:
+        raise ValueError("Task completion requires PLAN or APPLY mode.")
+    if graph is None or int(getattr(graph, "plan_revision", -1)) != revision:
+        raise ValueError("No current Task Graph exists for this plan revision.")
+    node = graph.get_task(task_id)
+    if node.role == "implement" and not apply_is_authorized(state):
+        raise ValueError("Implement task completion requires current Plan/Apply authorization.")
+    return graph.mark_completed(task_id, evidence_ids=evidence_ids, reason=reason)
+
+
+def fail_task(state: Any, task_id: str, *, reason: str) -> Any:
+    """Record a failure against the current graph and block its dependents."""
+    graph = getattr(state, "task_graph", None)
+    revision = int(getattr(state, "plan_revision", 0) or 0)
+    if current_mode(state) not in {PLAN_MODE, APPLY_MODE}:
+        raise ValueError("Task failure requires PLAN or APPLY mode.")
+    if graph is None or int(getattr(graph, "plan_revision", -1)) != revision:
+        raise ValueError("No current Task Graph exists for this plan revision.")
+    return graph.mark_failed(task_id, reason=reason)
+
+
 def plan_status(state: Any) -> dict[str, object]:
     """Return a JSON-friendly snapshot suitable for commands and UI surfaces."""
     return {
