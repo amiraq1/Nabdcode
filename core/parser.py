@@ -311,10 +311,6 @@ def _parse_bash(text: str, registry: Any) -> ToolCall | None:
 # ---------------------------------------------------------------------
 
 _FORGIVING_JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
-_LEGACY_SHELL_PATTERN = re.compile(
-    r"""(?:shell|execute_shell)\s*\(\s*(?:cmd|command)\s*=\s*["'](.+?)["']\s*\)""",
-    re.IGNORECASE | re.DOTALL,
-)
 
 
 def extract_first_json_object(text: str) -> str | None:
@@ -340,13 +336,6 @@ def extract_first_json_object(text: str) -> str | None:
     return None
 
 
-def extract_legacy_shell(text: str) -> dict[str, Any] | None:
-    m = _LEGACY_SHELL_PATTERN.search(text)
-    if not m:
-        return None
-    return {"tool": "execute_shell", "args": {"command": safe_strip(m.group(1))}}
-
-
 def _forgiving_json_tool_call(text: str, registry: Any) -> ToolCall | None:
     raw = extract_first_json_object(text)
     if not raw:
@@ -354,13 +343,6 @@ def _forgiving_json_tool_call(text: str, registry: Any) -> ToolCall | None:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        return None
-    return _validate_payload(payload, registry)
-
-
-def _forgiving_legacy_shell(text: str, registry: Any) -> ToolCall | None:
-    payload = extract_legacy_shell(text)
-    if not payload:
         return None
     return _validate_payload(payload, registry)
 
@@ -558,10 +540,16 @@ def extract_command(text: str, registry: Any = None) -> ToolCall | None:
 
     Priority:
         1. JSON Tool Call (clean ```json fence)
-        2. Bash Code Block (with hallucinated Python guard)
-        3. Forgiving JSON scan (tool call buried in prose)
-        4. Forgiving legacy-shell scan (shell(cmd=...))
-        5. None
+        2. Action: {JSON} (simulated ReAct / hallucination interception)
+        3. Bash Code Block (with hallucinated Python guard)
+        4. Forgiving JSON scan (tool call buried in prose)
+        5. ReAct-style output (SEARCH / FINAL_ANSWER)
+        6. None
+
+    C1 (2026-08-16): python-style ``shell(cmd=...)`` / ``execute_shell(command=...)``
+    written as visible text is intentionally NOT parsed into a tool call — it
+    passes through as plain prose. A model must emit a proper tool call (JSON)
+    or act directly; visible text must never trigger a shell execution.
 
     *registry* defaults to the global ``engine.tool_registry.registry`` singleton
     when not provided (backward-compatible).
@@ -584,9 +572,6 @@ def extract_command(text: str, registry: Any = None) -> ToolCall | None:
     if result is not None:
         return result
     result = _forgiving_json_tool_call(text, registry)
-    if result is not None:
-        return result
-    result = _forgiving_legacy_shell(text, registry)
     if result is not None:
         return result
     # Last resort: loose ReAct-style output (SEARCH / FINAL_ANSWER) emitted by
