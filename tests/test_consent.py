@@ -230,3 +230,31 @@ def test_production_consent_path_passes_evidence_log():
     )
     assert consent_recs[0].success is True
     assert consent_recs[0].action == "consent_step_99"
+
+
+# ── C3: single prompt per command ─────────────────────────────────────
+
+def test_request_shell_approval_asks_without_second_prompt():
+    """C3: an ASK command defers to the ConsentManager — no [SECURITY] prompt.
+
+    ``_request_shell_approval`` is policy-only: for a command with no
+    allow/deny rule it returns True (proceed to dispatch) without touching the
+    interactive bridge. The single approval prompt per command is the
+    ConsentManager at the dispatcher boundary (covered by
+    ``test_production_consent_path_passes_evidence_log``), which fails closed
+    when unanswered.
+    """
+    from unittest.mock import patch as _patch
+
+    from engine._loop_types import _LoopCtx
+    from engine.loop import ExecutionLoop
+    from engine.state import RuntimeState
+
+    state = RuntimeState(session_id="test-c3-ask")
+    loop = ExecutionLoop(state, no_stream=True)
+    loop._ctx = _LoopCtx(user_prompt="run a command")
+
+    # If the legacy [SECURITY] bridge prompt were still shown, get_bridge
+    # would be called here — it must NOT be.
+    with _patch("engine.loop.get_bridge", side_effect=AssertionError("must not prompt")):
+        assert loop._request_shell_approval("echo c3") is True

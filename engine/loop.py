@@ -44,7 +44,7 @@ from core.constants import is_chitchat
 from core.storage import load_memory, write_lesson
 from core.workspace import load_workspace_context
 from core.sanitize import sanitize
-from core.ui_bridge import get_bridge, _TIMEOUT_REPLY
+from core.ui_bridge import get_bridge
 from core.prompts import BROWSER_FEWSHOT_EXAMPLES, FALLBACK_RESTRICTED_PROMPT, CRITICAL_RULES_FOR_TOOL_CALLING
 from core.context_compactor import ContextCompactor, CompactionConfig
 
@@ -1002,26 +1002,15 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 time.sleep(self.POLL_DELAY)
                 return _LoopSignal.CONTINUE
 
-            # Interactive permission gate (human-in-the-loop).
-            approved = self._request_shell_approval(command, timeout=60.0)
+            # Permission policy gate (C3: policy-only — the single interactive
+            # approval prompt is shown by the ConsentManager at dispatch).
+            approved = self._request_shell_approval(command)
             if approved is False:
                 bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count})
                 bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count})
                 self._flag_latest_evidence_critical()
-                warned = self._approval_timed_out
-                self.state.append_message(
-                    {
-                        "role": "system",
-                        "content": (
-                            "<security_warning>Execution auto-denied (Timeout after 60s)."
-                            "</security_warning>"
-                            if warned else
-                            "<security_warning>Execution denied by user.</security_warning>"
-                        ),
-                    }
-                )
-                self.state.increment_step()
-                time.sleep(self.POLL_DELAY)
+                # _request_shell_approval already appended the policy-denial
+                # <security_warning> and advanced the step.
                 return _LoopSignal.CONTINUE
 
         self._active_tool = tool_call
@@ -1060,26 +1049,26 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
                 return result
         return _LoopSignal.PROCEED
 
-    def _request_shell_approval(self, command: str, timeout: float | None = None) -> bool:
-        """Intercept shell execution and ask the operator to allow/deny.
+    def _request_shell_approval(self, command: str) -> bool:
+        """Evaluate the shell permission policy (C3: policy-only, no prompt).
 
-        Returns ``True`` if the command is approved (cached for the session),
-        ``False`` if denied, timed out, or if the input channel is
-        unavailable/fails. The bridge is fail-closed: any read error or
-        non-``y`` reply denies.
+        C3 deduplicates consent: the ONLY interactive approval prompt is the
+        ConsentManager at the dispatcher boundary (``_handle_consent_and_edit_gate``
+        in ``engine/_dispatch.py``). This method is policy-only — it returns
+        ``True`` for ALLOW / cached approval and ``False`` for DENY, and does NOT
+        prompt the operator for ASK (the ConsentManager handles the interactive
+        gate once, per command).
 
-        Phase2.1: ``timeout`` (seconds) is forwarded to the bridge, which
-        enforces it via a non-blocking ``select`` on stdin. A timeout yields
-        the ``_TIMEOUT_REPLY`` sentinel (still a deny) so the caller can
-        emit a distinct auto-deny warning instead of a user-deny one.
+        Returns:
+            True  -> command approved by policy (ALLOW or cached in session).
+            False -> denied by policy (DENY). ASK falls through to True here so
+                     the single interactive prompt happens exactly once at
+                     dispatch; the ConsentManager is fail-closed when unanswered.
 
-        Phase5 (Permissions): BEFORE showing the interactive prompt, the
-        PermissionEngine evaluates the cascading trust hierarchy against
-        ``state.shell_permissions``. An ALLOW skips the prompt entirely (silent
-        auto-approval log); a DENY auto-rejects. Only ASK falls through to the
-        60s interactive gate. The Phase 2.1 advanced heuristics inside the
-        engine ALWAYS run first, so ``/allow *`` can never weaken obfuscation
-        defenses.
+        Phase5 (Permissions): the PermissionEngine evaluates the cascading trust
+        hierarchy against ``state.shell_permissions``. An ALLOW auto-approves; a
+        DENY auto-rejects. The Phase 2.1 advanced heuristics inside the engine
+        ALWAYS run first, so ``/allow *`` can never weaken obfuscation defenses.
         """
         ctx = self._ctx
         assert ctx is not None
@@ -1102,7 +1091,6 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             bus.emit("security_log", {"level": "warn", "message": f"Auto-denied by policy: {command} ({reason})"})
             bus.emit("ui_security_blocked", {"command": command, "step": self.state.step_count})
             bus.emit("tool_security_blocked", {"command": command, "step": self.state.step_count})
-            self._approval_timed_out = False
             self.state.append_message(
                 {
                     "role": "system",
@@ -1113,27 +1101,10 @@ class ExecutionLoop(_ContextMixin, _BudgetMixin, _ConvergenceMixin, _ToolRunnerM
             time.sleep(self.POLL_DELAY)
             return False
 
-        # ASK — no rule matched → fall back to the existing interactive gate.
-        self._approval_timed_out = False
-        try:
-            bridge = get_bridge()
-            reply = bridge.request_user_input(
-                f"[SECURITY] Requesting shell execution: {command} -> Allow? (y/n): ",
-                timeout=timeout,
-            ).strip().lower()
-        except Exception:
-            # Bridge unreachable → fail closed.
-            return False
-
-        if reply == _TIMEOUT_REPLY:
-            # Distinct sentinel so the caller emits the timeout warning.
-            self._approval_timed_out = True
-            return False
-
-        if reply in ("y", "yes"):
-            ctx.approved_shell.add(command)
-            return True
-        return False
+        # ASK — no rule matched. C3: defer the single interactive prompt to the
+        # ConsentManager at dispatch (fail-closed there when unanswered). No
+        # prompt is shown here, so a command is never double-asked.
+        return True
 
     def _build_tool_feedback(
         self, result: Any, tool_name: str, tool_args: dict[str, Any], output: str
