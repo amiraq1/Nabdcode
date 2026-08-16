@@ -259,6 +259,10 @@ def _handle_one_shot_query(
                     sys.stdout.flush()
                     sys.exit(1)  # إنهاء فوري لمنع السقوط في REPL loop
 
+        # One event per logical user submission.  Internal retries remain
+        # inside engine.run and must not erase per-turn tool tracking.
+        from core.kernel.events import bus
+        bus.emit("user_turn_started", {})
         outcome = engine.run(one_shot_query)
         display_text = outcome.safe_message or outcome.final_answer or "(Session completed - no text returned)"
         if sys.stdout.isatty():
@@ -381,6 +385,10 @@ def _run_interactive_turn(
         new[3] = new[3] & ~termios.ECHO
         termios.tcsetattr(fd, termios.TCSANOW, new)
 
+        # Mark the outer user-turn boundary once before the engine may make
+        # multiple LLM requests and tool calls.
+        from core.kernel.events import bus
+        bus.emit("user_turn_started", {})
         outcome = engine.run(clean_prompt)
         display_text = outcome.safe_message or outcome.final_answer or "(Session completed - no text returned)"
         visualizer._on_loop_completed({"response": display_text})

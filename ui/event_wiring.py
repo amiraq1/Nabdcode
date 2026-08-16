@@ -8,6 +8,10 @@ from engine.ui_theme import thought_summary, select_status_verb
 _step_start_time: float | None = None
 _timed_step: object = None
 
+# Unsubscribe tokens for the singleton EventBus.  REPL/test re-entry must
+# replace prior handlers instead of stacking duplicate renderers.
+_wire_tokens: list = []
+
 def _mark_step(step: object) -> None:
     """UI-CC-9b: بدء التوقيت لكل خطوة جديدة (المسار الحي)."""
     global _step_start_time, _timed_step
@@ -26,6 +30,16 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
     from core.kernel.events import bus
     from engine.ui_theme import map_tool_to_badge
 
+    # Re-entering wire_events is supported by the test harness and by REPL
+    # reconstruction.  Detach all previous handlers before binding the new
+    # renderer so each event is rendered exactly once.
+    for _unsubscribe in _wire_tokens:
+        try:
+            _unsubscribe()
+        except Exception:
+            pass
+    _wire_tokens.clear()
+
     renderer = ctx.renderer
     metrics = ctx.metrics
     todo_manager = ctx.todo_manager
@@ -39,18 +53,22 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
     _held_buf: str = ""
     _tool_was_used: bool = False
 
+    def _on_user_turn_started(p: dict) -> None:
+        """Reset tool tracking once at the outer user-turn boundary."""
+        nonlocal _tool_was_used
+        _tool_was_used = False
+
     def _on_llm_started(p: dict) -> None:
-        nonlocal _turn_index, _token_buf, _held_buf, _tool_was_used
+        nonlocal _turn_index, _token_buf, _held_buf
         _token_buf = ""
         _held_buf = ""
-        _tool_was_used = False  # Stage 2: reset per-turn tool tracking
         _turn_index += 1
         # UI-CC-7: inline compact status line replaces the live SectionPanel
         # box that was rendered by the status bar (protected file untouched).
         from rich.console import Console
         Console().print(status_compact_line(
             step=_turn_index, elapsed=_elapsed_for(_turn_index),
-            thinking=True, tools=False, generating=False,
+            thinking=True, tools=_tool_was_used, generating=False,
         ))
 
     def _on_llm_token(p: dict) -> None:
@@ -125,6 +143,8 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
             _last_stage = "shell"
         elif kind == "READ":
             _last_stage = "read"
+        elif kind == "SCAN":
+            _last_stage = "scan"
 
         # Build summary line
         summary = ""
@@ -141,6 +161,8 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         elif kind in ("SEARCH", "MEMORY") and output:
             count = output.count("[")
             summary = f"{count} results"
+        elif kind == "SCAN" and output:
+            summary = f"{len(output.splitlines())} entries"
         elif kind == "TASK":
             metadata = getattr(result, "metadata", {}) or {}
             node_id = str(metadata.get("task_graph_task_id", "")).strip()
@@ -225,23 +247,27 @@ def wire_events(ctx: "AppContext") -> dict:  # noqa: F821 — forward ref
         renderer.badge_line("CLARIFY", f"Interactive steering required: {question}", "yellow")
         renderer.flush()
 
-    bus.subscribe("llm_request_started", _on_llm_started)
+    def _subscribe(event_name: str, handler) -> None:
+        _wire_tokens.append(bus.subscribe(event_name, handler))
+
+    _subscribe("user_turn_started", _on_user_turn_started)
+    _subscribe("llm_request_started", _on_llm_started)
     # UI-CC-7: keep the bar listening on the bus (protected contract) but
     # do NOT start() it — the inline compact line replaces the live box.
     status_bar.wire()
-    bus.subscribe("llm_token", _on_llm_token)
-    bus.subscribe("llm_request_completed", _on_llm_completed)
-    bus.subscribe("tool_started", _on_tool_started)
-    bus.subscribe("tool_completed", _on_tool_completed)
-    bus.subscribe("loop_max_steps_reached", _on_max_steps)
-    bus.subscribe("loop_error", _on_loop_error)
-    bus.subscribe("loop_completed", _on_loop_completed)
-    bus.subscribe("llm_provider_failover", _on_provider_failover)
-    bus.subscribe("deep_plan", _on_deep_plan)
-    bus.subscribe("deep_exec", _on_deep_exec)
-    bus.subscribe("deep_review", _on_deep_review)
-    bus.subscribe("deep_replan", _on_deep_replan)
-    bus.subscribe("hitl_triggered", _on_hitl_triggered)
-    bus.subscribe("clarify_triggered", _on_clarify_triggered)
+    _subscribe("llm_token", _on_llm_token)
+    _subscribe("llm_request_completed", _on_llm_completed)
+    _subscribe("tool_started", _on_tool_started)
+    _subscribe("tool_completed", _on_tool_completed)
+    _subscribe("loop_max_steps_reached", _on_max_steps)
+    _subscribe("loop_error", _on_loop_error)
+    _subscribe("loop_completed", _on_loop_completed)
+    _subscribe("llm_provider_failover", _on_provider_failover)
+    _subscribe("deep_plan", _on_deep_plan)
+    _subscribe("deep_exec", _on_deep_exec)
+    _subscribe("deep_review", _on_deep_review)
+    _subscribe("deep_replan", _on_deep_replan)
+    _subscribe("hitl_triggered", _on_hitl_triggered)
+    _subscribe("clarify_triggered", _on_clarify_triggered)
 
 
