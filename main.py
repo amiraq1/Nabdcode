@@ -515,10 +515,11 @@ def _run_repl(
 
     def _prompt_chrome() -> HTML:
         from engine.ui_theme import term_width
+        from ui.design.theme import colors_enabled
+        use_color = colors_enabled()
         mode = current_mode(state)
         task_summary = task_graph_live_status(state) or ""
         hint = workflow_prompt_hint(mode, task_summary)
-        hint_html = html.escape(hint).replace("\n", "<br/>")
         color = "ansigreen" if mode == APPLY_MODE else ("ansiyellow" if mode == PLAN_MODE else "ansimagenta")
         # Dynamic rule: fit the terminal width so a 50-column Termux screen
         # never tears mid-glyph.  Clamp to a sane maximum.
@@ -533,32 +534,49 @@ def _run_repl(
         from core.kernel.security import is_workspace_pinned, display_path
         if is_workspace_pinned():
             _diag = os.getenv("NABD_DIAGNOSTIC_PATHS", "").lower() in ("1", "true", "yes")
-            ws_label = display_path(get_workspace_root(), diagnostic=_diag)
-            if len(ws_label) > 48:
-                ws_label = ws_label[:45] + "..."
+            ws_label_raw = display_path(get_workspace_root(), diagnostic=_diag)
         else:
-            ws_label = "no workspace selected"
-        ws_html = html.escape(ws_label)
+            ws_label_raw = "no workspace selected"
+        ws_label = html.escape(ws_label_raw)
+
         mode_label = "normal" if mode not in (APPLY_MODE, PLAN_MODE) else mode
+        # Guarantee the context line fits the terminal: cap the workspace
+        # label so `workspace: <label>  ·  mode: <mode>` never wraps mid-word.
+        ctx_overhead = len("workspace: ") + len("  ·  mode: ") + len(mode_label)
+        ws_cap = min(48, max(3, width - ctx_overhead - 1))
+        if len(ws_label) > ws_cap:
+            ws_label = ws_label[: ws_cap - 3] + "..."
 
-        # Context line: on narrow screens the graph summary is the first
-        # thing dropped so the workspace + mode never tear mid-word.
-        graph_part = ""
-        if task_summary and width >= 70:
-            # task_summary already contains "TaskGraph rX ..." — keep only
-            # a bounded fragment to avoid wrapping on narrow terminals.
-            graph_part = f"  ·  {html.escape(task_summary[:60])}"
-        ctx_line = (
-            f"<style fg='grey'>workspace: {ws_html}  ·  mode: {mode_label}</style>"
-            f"<style fg='grey'>{graph_part}</style>"
-        )
+        # prompt_toolkit's HTML renderer (xml minidom) silently drops
+        # self-closing break tags (empty childNodes -> no text node), which
+        # glued the rule / context / hint / chevron together and made narrow
+        # Termux screens tear mid-word. Real newlines between style spans are
+        # honored reliably. When color is disabled (NO_COLOR / TERM=dumb) the
+        # spans are emitted plain (no <style>) so no SGR escapes — not even a
+        # reset — are produced, satisfying the plain-text fallback.
+        def _span(style_attr: str, text: str) -> str:
+            if not use_color:
+                return text
+            return f"<style {style_attr}>{text}</style>"
 
-        return HTML(
-            f"<style fg='grey'>{rule}</style><br/>"
-            f"{ctx_line}<br/>"
-            f"<style fg='{color}'>{hint_html}</style><br/>"
-            f"{PROMPT_HTML_SUFFIX}"
-        )
+        lines: list[str] = [
+            _span("fg='grey'", rule),
+            _span("fg='grey'", f"workspace: {ws_label}  ·  mode: {mode_label}"),
+        ]
+        # Task-graph summary: its own line, only when it fits within `width`
+        # so narrow screens drop it first (it is a summary, not identity).
+        if task_summary:
+            graph_clean = html.escape(task_summary)
+            if len(graph_clean) + 4 <= width:
+                lines.append(_span("fg='grey'", f"  ·  {graph_clean}"))
+        # Hint: use its first line only — the summary above is rendered
+        # separately and only when it fits the terminal width.
+        hint_first = html.escape(hint.splitlines()[0]) if task_summary else html.escape(hint)
+        lines.append(_span(f"fg='{color}'", hint_first))
+        # Chevron with no trailing newline: user input follows on this line.
+        lines.append(PROMPT_HTML_SUFFIX if use_color else "❯ ")
+
+        return HTML("\n".join(lines))
 
     bindings = KeyBindings()
 

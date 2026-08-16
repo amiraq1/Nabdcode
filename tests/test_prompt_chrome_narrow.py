@@ -64,14 +64,18 @@ def test_rule_fits_120_column_terminal():
 
 # ── Context line: graph dropped on narrow screens ──────────────────────────
 
-def test_graph_dropped_below_70_columns():
+def test_graph_dropped_when_too_wide_for_terminal():
     src = _prompt_chrome_source()
-    assert "width >= 70" in src, "graph must only show on wide enough terminals"
+    assert "if task_summary:" in src, "graph must only render when a summary exists"
+    assert "<= width" in src, "graph line must be budget-guarded to terminal width"
 
 
 def test_graph_truncated_on_wide_but_not_huge():
     src = _prompt_chrome_source()
-    assert "task_summary[:60]" in src, "graph fragment must be bounded"
+    assert "hint.splitlines()[0]" in src, (
+        "hint must use first line only; summary rendered separately on its own "
+        "width-guarded line so narrow terminals never tear it"
+    )
 
 
 def test_workspace_and_mode_always_present():
@@ -89,6 +93,43 @@ def test_prompt_chrome_honors_no_color(monkeypatch):
     src = _prompt_chrome_source()
     # The chrome uses prompt_toolkit HTML styles, not raw ANSI.
     assert "\\x1b[" not in src
+
+
+# ── <br/> must NOT be used for line separation (minidom drops it) ────────────
+
+def test_prompt_chrome_uses_real_newlines_not_br():
+    """minidom's HTML renderer silently drops self-closing <br/>; the chrome
+    must separate visual lines with real newlines so narrow terminals don't
+    glue the rule / context / hint / chevron together."""
+    src = _prompt_chrome_source()
+    assert "<br/>" not in src, "chrome must not rely on <br/> (minidom drops it)"
+    assert '"\\n".join(lines)' in src, (
+        "chrome must join visual lines with real newlines, not <br/>"
+    )
+
+
+def test_prompt_chrome_keeps_ctx_line_within_width():
+    """workspace + mode line must be width-guarded so it never wraps."""
+    src = _prompt_chrome_source()
+    assert "ctx_overhead" in src
+    assert "ws_cap" in src
+
+
+# ── NO_COLOR / TERM=dumb keep the prompt chrome plain ────────────────────────
+
+def test_prompt_chrome_gates_styling_on_colors_enabled():
+    """Under NO_COLOR / TERM=dumb the chrome must emit plain spans (no <style>),
+    so no SGR — not even a reset — reaches the terminal."""
+    import os
+    import main
+    import inspect
+
+    src = inspect.getsource(main._run_repl)
+    # The chrome consults the central color gate.
+    assert "colors_enabled()" in src
+    assert "use_color" in src
+    # Plain fallback chevron is emitted when color is off.
+    assert "PROMPT_HTML_SUFFIX if use_color else" in src
 
 
 if __name__ == "__main__":
