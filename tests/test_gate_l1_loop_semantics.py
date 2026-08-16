@@ -11,26 +11,26 @@ class TestGateL1TruthTableSemantics(TestCase):
         ('engine/_convergence.py', 297, 'TERMINATE'),
         ('engine/_convergence.py', 310, 'CONTINUE'),
         ('engine/_convergence.py', 311, 'TERMINATE'),
-        ('engine/_tool_runner.py', 62, 'FINAL_ANSWER'),
-        ('engine/_tool_runner.py', 132, 'CONTINUE'),
-        ('engine/_tool_runner.py', 144, 'PROCEED'),
-        ('engine/loop.py', 391, 'TERMINATE'),
-        ('engine/loop.py', 392, 'CONTINUE'),
-        ('engine/loop.py', 814, 'TERMINATE'),
-        ('engine/loop.py', 835, 'TERMINATE'),
-        ('engine/loop.py', 839, 'PROCEED'),
-        ('engine/loop.py', 921, 'CONTINUE'),
+        ('engine/_tool_runner.py', 67, 'FINAL_ANSWER'),
+        ('engine/_tool_runner.py', 137, 'CONTINUE'),
+        ('engine/_tool_runner.py', 149, 'PROCEED'),
+        ('engine/loop.py', 396, 'TERMINATE'),
+        ('engine/loop.py', 397, 'CONTINUE'),
+        ('engine/loop.py', 819, 'TERMINATE'),
+        ('engine/loop.py', 840, 'TERMINATE'),
+        ('engine/loop.py', 844, 'PROCEED'),
         ('engine/loop.py', 926, 'CONTINUE'),
-        ('engine/loop.py', 928, 'PROCEED'),
-        ('engine/loop.py', 963, 'CONTINUE'),
-        ('engine/loop.py', 969, 'PROCEED'),
-        ('engine/loop.py', 1003, 'CONTINUE'),
-        ('engine/loop.py', 1025, 'CONTINUE'),
-        ('engine/loop.py', 1028, 'PROCEED'),
-        ('engine/loop.py', 1061, 'PROCEED'),
-        ('engine/loop.py', 1683, 'TERMINATE'),
-        ('engine/loop.py', 1686, 'TERMINATE'),
-        ('engine/loop.py', 1704, 'CONTINUE'),
+        ('engine/loop.py', 931, 'CONTINUE'),
+        ('engine/loop.py', 933, 'PROCEED'),
+        ('engine/loop.py', 968, 'CONTINUE'),
+        ('engine/loop.py', 974, 'PROCEED'),
+        ('engine/loop.py', 1008, 'CONTINUE'),
+        ('engine/loop.py', 1019, 'CONTINUE'),
+        ('engine/loop.py', 1022, 'PROCEED'),
+        ('engine/loop.py', 1055, 'PROCEED'),
+        ('engine/loop.py', 1659, 'TERMINATE'),
+        ('engine/loop.py', 1662, 'TERMINATE'),
+        ('engine/loop.py', 1680, 'CONTINUE'),
     ]
 
     def test_truth_table_every_return_site_enumerated(self):
@@ -87,9 +87,9 @@ class TestGateL1TruthTableSemantics(TestCase):
         """Retry decrements happen strictly around CONTINUE paths like _note_provider_failure."""
         with open("engine/loop.py") as f:
             lines = f.read().splitlines()
-        line_term = lines[390]  # loop.py line 391 returns TERMINATE
+        line_term = lines[395]  # loop.py line 396 returns TERMINATE
         self.assertIn("TERMINATE", line_term)
-        line_cont = lines[391]  # loop.py line 392 returns CONTINUE
+        line_cont = lines[396]  # loop.py line 397 returns CONTINUE
         self.assertIn("CONTINUE", line_cont)
     
     def test_no_dual_terminal_outcome(self):
