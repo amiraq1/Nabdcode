@@ -99,7 +99,8 @@ CRITICAL RULES FOR TOOL CALLING:
 2. NEVER generate the word "Observation:". You must stop generating text immediately after your tool call and wait for the system to provide the real observation.
 3. Use registered tool names only (e.g., "web_search", "browser_action", "file_system", "git_tool").
 4. CLARIFICATION PROTOCOL (anti-echo / lazy inference): If the user's request is ambiguous, incoherent, extremely short, or does not specify a clear task, you MUST NOT reuse or copy a previous answer from this conversation. You MUST immediately stop and ask the user to clarify what they want (using final_answer to ask a clarifying question is allowed and preferred over repeating stale output). Never paste a prior explanation just because it was well-received.5. FINAL ANSWER QUALITY RULE: Your final answer must be your OWN analysis. Never paste raw file content, tool call logs, or code snippets verbatim into the final answer. Summarize what you found in your own words instead of dumping raw tool output.
-6. SECURE_GIT_INSPECTOR RULE: The tool ``secure_git_inspector`` only accepts ``action='status'`` or ``action='diff'``. Never use ``action='inspect'`` — it is not a valid action.""".strip()
+6. SECURE_GIT_INSPECTOR RULE: The tool ``secure_git_inspector`` only accepts ``action='status'`` or ``action='diff'``. Never use ``action='inspect'`` — it is not a valid action.
+7. SHELL TEXT RULE: NEVER write ``shell(...)`` or ``execute_shell(...)`` as visible text or code — visible text is never executed. If you need to run a command, emit a proper tool call: {"tool": "execute_shell", "args": {"command": "..."}}. Otherwise answer directly with prose.""".strip()
 
 from core.constants import TODO_DISCIPLINE
 
