@@ -362,6 +362,36 @@ def test_display_path_safe_fallback_contract(tmp_path):
         pin_workspace_root(previous)
 
 
+def test_parser_debug_never_leaks_to_stdout(capsys):
+    """D1: [VALIDATE] parser-debug lines must never reach the interactive UI.
+
+    The parser_debug logger writes to logs/parser_debug.log only. A tool turn
+    that triggers the validation path (which emits a [VALIDATE] debug line)
+    must leave captured stdout/stderr free of "[VALIDATE]" debug text.
+    """
+    from engine import _tool_runner as _tr
+    from engine.loop import ExecutionLoop
+    from engine.state import RuntimeState
+    from engine.tool_registry import registry
+    from tools.shell import ShellTool
+
+    # Unconditional guard: even if the FileHandler setup ever fails, records
+    # must never propagate to the root logger / stdout.
+    assert _tr._parser_debug_logger.propagate is False
+
+    registry.register(ShellTool())
+    loop = ExecutionLoop(
+        state=RuntimeState(session_id="d1-leak"), llm_provider=lambda msgs: "x"
+    )
+    tool_call, _signal = loop._parse_and_validate_tool(
+        '```json\n{"tool": "execute_shell", "args": {"command": "echo b"}}\n```'
+    )
+    assert tool_call is not None, "the [VALIDATE] emission path must have run"
+
+    captured = capsys.readouterr()
+    assert "[VALIDATE]" not in (captured.out + captured.err)
+
+
 def test_one_shot_emits_user_turn_started_once(monkeypatch):
     import main
     import core.kernel.events as events_mod

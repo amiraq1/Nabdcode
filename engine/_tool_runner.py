@@ -23,16 +23,21 @@ from engine._loop_types import _LoopSignal
 # engine.loop) keeps this file free of a module-level import of engine.loop,
 # which would reintroduce the very import cycle this refactor dissolves.
 _parser_debug_logger = logging.getLogger("nabd.parser_debug")
+# D1 (2026-08-16): parser-debug tracing must NEVER reach the root logger /
+# interactive UI. propagate=False is set UNCONDITIONALLY (before handler setup)
+# so a FileHandler failure can never leak "[VALIDATE]"/"RAW" lines to stdout.
+_parser_debug_logger.propagate = False
 if not _parser_debug_logger.handlers:
     try:
         from pathlib import Path as _PD
 
-        _PD("logs").mkdir(exist_ok=True)
-        _pd_handler = logging.FileHandler("logs/parser_debug.log", encoding="utf-8")
+        # Anchor the log file to the repo root so the handler survives CWD drift.
+        _log_dir = _PD(__file__).resolve().parent.parent / "logs"
+        _log_dir.mkdir(exist_ok=True)
+        _pd_handler = logging.FileHandler(str(_log_dir / "parser_debug.log"), encoding="utf-8")
         _pd_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
         _parser_debug_logger.addHandler(_pd_handler)
         _parser_debug_logger.setLevel(logging.DEBUG)
-        _parser_debug_logger.propagate = False
     except Exception:
         pass
 
