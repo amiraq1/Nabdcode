@@ -478,6 +478,9 @@ def _format_args(kind: str, tool: str, args: dict) -> tuple[str, str]:
             prompt = prompt[:49] + "..."
         extra = f"node={task_id}" if task_id else "delegated"
         return f"[{role}] {prompt or 'delegated work'}", extra
+    if kind == "SCAN":
+        path = args.get("path") or args.get("target") or ""
+        return f"[{display_path(path)}]", ""
     if kind in ("SEARCH", "MEMORY", "RAG"):
         query = args.get("query", "")
         return f'["{query[:40]}"]', ""

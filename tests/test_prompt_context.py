@@ -81,12 +81,15 @@ def test_prompt_chrome_truncates_long_workspace_path():
 
 
 def test_prompt_chrome_hides_graph_when_absent():
-    """When there is no task graph, graph_part must be empty (no zeros)."""
+    """When there is no task graph, no graph line is emitted."""
     import main
     import inspect
     src = inspect.getsource(main._run_repl)
-    # graph_part is only filled when task_summary is truthy.
+    # graph is rendered only when task_summary is truthy, and only when it
+    # fits the terminal width (narrow Termux screens drop it first).
     assert "if task_summary:" in src
+    assert "<= width" in src  # budget guard keeps the graph line within bounds
+    assert "PROMPT_HTML_SUFFIX" in src  # chevron suffix still used on the final line
 
 
 if __name__ == "__main__":

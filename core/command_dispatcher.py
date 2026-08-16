@@ -50,19 +50,59 @@ def _cmd_undo(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
     return True
 
 def _cmd_scan(user_input: str, state: Any, ctx: Any, base_inst: str) -> bool:
+    """Run an explicit deep scan and emit one complete SCAN event pair."""
+    from types import SimpleNamespace
+
+    from core.kernel.events import bus
+    from core.kernel.security import display_path, get_workspace_root
     from core.repo_scanner import SECURE_REPO_SCANNER
-    from core.kernel.security import get_workspace_root
     from core.ui_bridge import get_bridge
+
+    workspace_root = get_workspace_root()
+    step = getattr(state, "step_count", 0) if state is not None else 0
+    session_id = getattr(state, "session_id", None) if state is not None else None
+    result = SimpleNamespace(stdout="", stderr="", success=False)
+    success = False
+
     try:
-        scan_data = SECURE_REPO_SCANNER()._deep_scan(get_workspace_root())
+        bus.emit(
+            "tool_started",
+            {
+                "tool": "repo_scan",
+                "args": {"action": "deep", "path": display_path(str(workspace_root))},
+                "step": step,
+                "session_id": session_id,
+            },
+        )
+        scan_data = SECURE_REPO_SCANNER()._deep_scan(workspace_root)
+        total_files = scan_data.get("total_files", len(scan_data.get("files", [])))
+        result = SimpleNamespace(stdout="", stderr="", success=True)
+        success = True
+
         bridge = get_bridge()
         if bridge and hasattr(bridge, "render_scan_result"):
             bridge.render_scan_result(scan_data)
         else:
-            total_f = scan_data.get("total_files", len(scan_data.get("files", [])))
-            sys.stdout.write(f"\n[Scan] Found {total_f} files in workspace.\n\n")
-    except Exception as _scan_exc:
-        sys.stdout.write(f"\n\033[91m⚠ deep scan failed: {_scan_exc}\033[0m\n\n")
+            sys.stdout.write(f"\n[Scan] Found {total_files} files in workspace.\n\n")
+    except Exception as scan_exc:
+        result = SimpleNamespace(stdout="", stderr=str(scan_exc), success=False)
+        sys.stdout.write("\n\033[91m⚠ deep scan failed\033[0m\n\n")
+    finally:
+        try:
+            bus.emit(
+                "tool_completed",
+                {
+                    "tool": "repo_scan",
+                    "result": result,
+                    "success": success,
+                    "returncode": 0 if success else -1,
+                    "diff": "",
+                    "step": step,
+                    "session_id": session_id,
+                },
+            )
+        except Exception:
+            pass
     sys.stdout.flush()
     return True
 

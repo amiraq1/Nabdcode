@@ -190,6 +190,8 @@ def tool_secondary_info(kind: str, *, success: bool, lines: int = 0,
         return f"node={node}" if node else "delegated"
     if kind in ("SEARCH", "MEMORY", "RAG") and results > 0:
         return f"{results} results"
+    if kind == "SCAN" and results > 0:
+        return f"{results} entries"
     return ""
 
 
@@ -228,6 +230,8 @@ def map_tool_to_badge(tool_name: str, args: Optional[dict[str, Any]] = None) -> 
         return "SEARCH"
     if "memory" in t:
         return "MEMORY"
+    if t in {"repo_scan", "scan"}:
+        return "SCAN"
     if t == "task" or "subagent" in t or "delegate" in t:
         return "TASK"
     if "kill" in t:
