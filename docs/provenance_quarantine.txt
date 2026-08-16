@@ -39,3 +39,9 @@ e9c447e  # Am+8 Protocol Debt Batch 1: استبدال 5 ألوان خام بثو
 # through the preserved pre-sync branch and carries the legacy wrapper trailer.
 # It is recorded as declared debt rather than rewriting published history.
 5b743e8  # fix(main): remove local import sys that shadowed module-level sys
+
+# 2026-08-16 — HUMAN DECISION: historical commit d0e28f8 is reachable
+# through preserved pre-sync history and carries the legacy CommandCodeBot
+# Co-authored-by trailer. It is recorded as declared debt rather than
+# rewriting published history.
+d0e28f8  # fix(app_context): add missing bus import from core.kernel.events

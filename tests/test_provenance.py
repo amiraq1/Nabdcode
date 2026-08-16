@@ -14,9 +14,10 @@ QUARANTINE = REPO / "docs" / "provenance_quarantine.txt"
 # explicit written decision recorded in the quarantine file itself.
 # 2026-08-07: 24 → 26 — human decision (Am+8): recorded 478766d + e9c447e,
 # 2026-08-15: 26 → 27 — human decision: recorded historical commit 5b743e8
+# 2026-08-16: 27 → 28 — human decision: recorded historical commit d0e28f8
 # assistant commits that carried the wrapper trailer before repo policy was
 # enforced. Quarantine file documents the decision.
-QUARANTINE_SIZE = 27
+QUARANTINE_SIZE = 28
 
 ATTRIBUTION_CORRECTIONS = REPO / "docs" / "attribution_corrections.txt"
 _ATTRIBUTION_RECORD_RE = re.compile(r"^[0-9a-f]{7,40}\s*->\s*[0-9a-f]{7,40}")
