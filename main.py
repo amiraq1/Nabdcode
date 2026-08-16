@@ -259,6 +259,10 @@ def _handle_one_shot_query(
                     sys.stdout.flush()
                     sys.exit(1)  # إنهاء فوري لمنع السقوط في REPL loop
 
+        # One event per logical user submission.  Internal retries remain
+        # inside engine.run and must not erase per-turn tool tracking.
+        from core.kernel.events import bus
+        bus.emit("user_turn_started", {})
         outcome = engine.run(one_shot_query)
         display_text = outcome.safe_message or outcome.final_answer or "(Session completed - no text returned)"
         if sys.stdout.isatty():
@@ -381,6 +385,10 @@ def _run_interactive_turn(
         new[3] = new[3] & ~termios.ECHO
         termios.tcsetattr(fd, termios.TCSANOW, new)
 
+        # Mark the outer user-turn boundary once before the engine may make
+        # multiple LLM requests and tool calls.
+        from core.kernel.events import bus
+        bus.emit("user_turn_started", {})
         outcome = engine.run(clean_prompt)
         display_text = outcome.safe_message or outcome.final_answer or "(Session completed - no text returned)"
         visualizer._on_loop_completed({"response": display_text})
@@ -514,12 +522,17 @@ def _run_repl(
     from core.plan_apply import APPLY_MODE, PLAN_MODE, current_mode, task_graph_live_status
 
     def _prompt_chrome() -> HTML:
+        from engine.ui_theme import term_width
+        from ui.design.theme import colors_enabled
+        use_color = colors_enabled()
         mode = current_mode(state)
         task_summary = task_graph_live_status(state) or ""
         hint = workflow_prompt_hint(mode, task_summary)
-        hint_html = html.escape(hint).replace("\n", "<br/>")
         color = "ansigreen" if mode == APPLY_MODE else ("ansiyellow" if mode == PLAN_MODE else "ansimagenta")
-        rule = "─" * 48
+        # Dynamic rule: fit the terminal width so a 50-column Termux screen
+        # never tears mid-glyph.  Clamp to a sane maximum.
+        width = max(20, min(term_width(), 120))
+        rule = "─" * width
 
         # Stage 3 (UI plan): a compact context bar above the prompt with
         # workspace root + mode + graph status — from real state only.
@@ -529,29 +542,49 @@ def _run_repl(
         from core.kernel.security import is_workspace_pinned, display_path
         if is_workspace_pinned():
             _diag = os.getenv("NABD_DIAGNOSTIC_PATHS", "").lower() in ("1", "true", "yes")
-            ws_label = display_path(get_workspace_root(), diagnostic=_diag)
-            if len(ws_label) > 48:
-                ws_label = ws_label[:45] + "..."
+            ws_label_raw = display_path(get_workspace_root(), diagnostic=_diag)
         else:
-            ws_label = "no workspace selected"
-        ws_html = html.escape(ws_label)
-        mode_label = "normal" if mode not in (APPLY_MODE, PLAN_MODE) else mode
-        graph_part = ""
-        if task_summary:
-            # task_summary already contains "TaskGraph rX ..." — show only
-            # the mode + ready/active portion to keep the line compact.
-            graph_part = f"  ·  {html.escape(task_summary)}"
-        ctx_line = (
-            f"<style fg='grey'>workspace: {ws_html}  ·  mode: {mode_label}</style>"
-            f"<style fg='grey'>{graph_part}</style>"
-        )
+            ws_label_raw = "no workspace selected"
+        ws_label = html.escape(ws_label_raw)
 
-        return HTML(
-            f"<style fg='grey'>{rule}</style><br/>"
-            f"{ctx_line}<br/>"
-            f"<style fg='{color}'>{hint_html}</style><br/>"
-            f"{PROMPT_HTML_SUFFIX}"
-        )
+        mode_label = "normal" if mode not in (APPLY_MODE, PLAN_MODE) else mode
+        # Guarantee the context line fits the terminal: cap the workspace
+        # label so `workspace: <label>  ·  mode: <mode>` never wraps mid-word.
+        ctx_overhead = len("workspace: ") + len("  ·  mode: ") + len(mode_label)
+        ws_cap = min(48, max(3, width - ctx_overhead - 1))
+        if len(ws_label) > ws_cap:
+            ws_label = ws_label[: ws_cap - 3] + "..."
+
+        # prompt_toolkit's HTML renderer (xml minidom) silently drops
+        # self-closing break tags (empty childNodes -> no text node), which
+        # glued the rule / context / hint / chevron together and made narrow
+        # Termux screens tear mid-word. Real newlines between style spans are
+        # honored reliably. When color is disabled (NO_COLOR / TERM=dumb) the
+        # spans are emitted plain (no <style>) so no SGR escapes — not even a
+        # reset — are produced, satisfying the plain-text fallback.
+        def _span(style_attr: str, text: str) -> str:
+            if not use_color:
+                return text
+            return f"<style {style_attr}>{text}</style>"
+
+        lines: list[str] = [
+            _span("fg='grey'", rule),
+            _span("fg='grey'", f"workspace: {ws_label}  ·  mode: {mode_label}"),
+        ]
+        # Task-graph summary: its own line, only when it fits within `width`
+        # so narrow screens drop it first (it is a summary, not identity).
+        if task_summary:
+            graph_clean = html.escape(task_summary)
+            if len(graph_clean) + 4 <= width:
+                lines.append(_span("fg='grey'", f"  ·  {graph_clean}"))
+        # Hint: use its first line only — the summary above is rendered
+        # separately and only when it fits the terminal width.
+        hint_first = html.escape(hint.splitlines()[0]) if task_summary else html.escape(hint)
+        lines.append(_span(f"fg='{color}'", hint_first))
+        # Chevron with no trailing newline: user input follows on this line.
+        lines.append(PROMPT_HTML_SUFFIX if use_color else "❯ ")
+
+        return HTML("\n".join(lines))
 
     bindings = KeyBindings()
 
