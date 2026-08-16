@@ -306,14 +306,61 @@ class BaseTool(ABC):
                 raw_args = {"args": args} if not kwargs else {**dict(zip(range(len(args)), args))}
         raw_args.update(kwargs)
 
-        # ── 1. UI bridge: tool start ─────────────────────────────────
+        # ── 1. Direct-call events ────────────────────────────────────
+        # Dispatcher is the sole event owner for dispatched tools. Direct
+        # calls remain visible through the bridge and EventBus, but never
+        # duplicate Dispatcher events.
         try:
             from engine.dispatcher import is_dispatching
-            if not is_dispatching():
+            _outside_dispatcher = not is_dispatching()
+        except Exception:
+            _outside_dispatcher = True
+
+        if _outside_dispatcher:
+            try:
                 from core.ui_bridge import get_bridge
                 get_bridge().emit_tool_start_sync(self.name, raw_args)
-        except Exception:
-            pass  # bridge must never break the tool
+            except Exception:
+                pass
+            try:
+                from engine.dispatcher import bus as event_bus
+                event_bus.emit(
+                    "tool_started",
+                    {
+                        "tool": self.name,
+                        "args": raw_args,
+                        "step": None,
+                        "session_id": None,
+                    },
+                )
+            except Exception:
+                pass
+
+        def _emit_direct_completion(result: ToolResult) -> None:
+            if not _outside_dispatcher:
+                return
+            try:
+                summary = str(result)[:150]
+                from core.ui_bridge import get_bridge
+                get_bridge().emit_tool_end_sync(self.name, summary)
+            except Exception:
+                pass
+            try:
+                from engine.dispatcher import bus as event_bus
+                event_bus.emit(
+                    "tool_completed",
+                    {
+                        "tool": self.name,
+                        "result": result,
+                        "success": bool(getattr(result, "success", False)),
+                        "returncode": int(getattr(result, "returncode", -1)),
+                        "diff": str(getattr(result, "diff", "") or ""),
+                        "step": None,
+                        "session_id": None,
+                    },
+                )
+            except Exception:
+                pass
 
         try:
             # ── 2. Validate ──────────────────────────────────────────
@@ -322,16 +369,8 @@ class BaseTool(ABC):
             # ── 3. Execute ───────────────────────────────────────────
             result = self.execute_with_args(validated)
 
-            # ── 4. UI bridge: tool end ───────────────────────────────
-            try:
-                from engine.dispatcher import is_dispatching
-                if not is_dispatching():
-                    summary = str(result)[:150]
-                    from core.ui_bridge import get_bridge
-                    get_bridge().emit_tool_end_sync(self.name, summary)
-            except Exception:
-                pass
-
+            # ── 4. Direct-call completion ────────────────────────────
+            _emit_direct_completion(result)
             return result
 
         except ValueError as exc:
@@ -341,15 +380,7 @@ class BaseTool(ABC):
                 returncode=-1,
                 status="error",
             )
-            try:
-                from engine.dispatcher import is_dispatching
-                if not is_dispatching():
-                    from core.ui_bridge import get_bridge
-                    get_bridge().emit_tool_end_sync(
-                        self.name, f"❌ Error: {str(exc)[:120]}"
-                    )
-            except Exception:
-                pass
+            _emit_direct_completion(result)
             return result
 
         except Exception as exc:
@@ -359,15 +390,7 @@ class BaseTool(ABC):
                 returncode=-1,
                 status="error",
             )
-            try:
-                from engine.dispatcher import is_dispatching
-                if not is_dispatching():
-                    from core.ui_bridge import get_bridge
-                    get_bridge().emit_tool_end_sync(
-                        self.name, f"❌ Error: {str(exc)[:120]}"
-                    )
-            except Exception:
-                pass
+            _emit_direct_completion(result)
             return result
 
     # ------------------------------------------------------------------

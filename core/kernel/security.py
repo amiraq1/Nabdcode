@@ -74,6 +74,12 @@ def display_path(path: str | Path, *, workspace_root: Path | None = None,
     """
     import re as _re
 
+    # Empty values must never render as a cwd fragment, workspace name, or
+    # Python's literal "None".  This is a display-only fallback; it does not
+    # affect the path jail or authorize access.
+    if path is None or (isinstance(path, str) and not path.strip()):
+        return "<path>"
+
     # Windows-style / UNC paths: on POSIX these parse as a single filename
     # (backslashes are not separators), which would leak the full string via
     # .name.  Detect them explicitly and never reveal them in normal mode.
